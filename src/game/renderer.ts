@@ -1017,28 +1017,30 @@ export class GameRenderer {
   ) {
     // Determine ambient darkness (0.0 at noon, 0.78 at midnight)
     const isNight = this.isNightMode;
-    const ambientDarkness = isNight ? 0.78 : 0.15;
+    const ambientDarkness = isNight ? 0.78 : 0.05;
 
-    if (ambientDarkness <= 0.05) return;
+    if (ambientDarkness > 0) {
+      ctx.save();
+      // Overlay dark night tint. Day remains bright, while headlights still
+      // render as a subtle effect instead of washing the whole scene out.
+      ctx.fillStyle = `rgba(5, 10, 20, ${ambientDarkness})`;
+      ctx.fillRect(this.cameraX - canvasWidth, this.cameraY - canvasHeight, canvasWidth * 2, canvasHeight * 2);
+    }
 
-    ctx.save();
-    // Overlay dark night tint
-    ctx.fillStyle = `rgba(5, 10, 20, ${ambientDarkness})`;
-    ctx.fillRect(this.cameraX - canvasWidth, this.cameraY - canvasHeight, canvasWidth * 2, canvasHeight * 2);
-
-    // Use "destination-out" or "lighter" composite mode to punch luminous light cones onto the dark ground
-    ctx.globalCompositeOperation = 'lighter';
+    // Screen blending avoids additive white-out when many NPC headlights
+    // overlap at one junction.
+    ctx.globalCompositeOperation = 'screen';
 
     // 1. Vehicles Headlights Cones
     vehicles.forEach((v) => {
-      if (v.headlights > 0) {
+      if (isNight && v.headlights > 0) {
         this.drawHeadlightCones(ctx, v.x, v.y, v.angle, v.type, v.headlights);
       }
     });
 
     // Remote Players headlights
     remotePlayers.forEach((rp) => {
-      if (rp.inVehicle && rp.headlights > 0) {
+      if (isNight && rp.inVehicle && rp.headlights > 0) {
         this.drawHeadlightCones(ctx, rp.x, rp.y, rp.angle, rp.vehicleType, rp.headlights);
       }
     });
@@ -1047,8 +1049,8 @@ export class GameRenderer {
     destructibles.forEach((obj) => {
       if (obj.type === 'lamp_pole' && !obj.isDestroyed) {
         const rad = ctx.createRadialGradient(obj.x, obj.y, 5, obj.x, obj.y, 90);
-        rad.addColorStop(0, 'rgba(254, 240, 138, 0.45)');
-        rad.addColorStop(0.5, 'rgba(254, 240, 138, 0.18)');
+        rad.addColorStop(0, 'rgba(254, 240, 138, 0.22)');
+        rad.addColorStop(0.5, 'rgba(254, 240, 138, 0.07)');
         rad.addColorStop(1, 'rgba(254, 240, 138, 0)');
         ctx.fillStyle = rad;
         ctx.beginPath();
@@ -1057,7 +1059,7 @@ export class GameRenderer {
       }
     });
 
-    ctx.restore();
+    if (ambientDarkness > 0) ctx.restore();
   }
 
   // Draw Smooth Volumetric Dual Headlight Cones (Matching the screenshots!)
@@ -1076,7 +1078,7 @@ export class GameRenderer {
     const config = VEHICLE_CONFIGS[vehicleType as keyof typeof VEHICLE_CONFIGS] || VEHICLE_CONFIGS.sedan;
     const halfL = config.length / 2;
     const halfW = config.width / 2;
-    const beamDistance = lightMode === 2 ? 320 : 220;
+    const beamDistance = lightMode === 2 ? 270 : 190;
     const beamSpread = lightMode === 2 ? 0.38 : 0.28;
 
     const leftOriginX = halfL;
@@ -1087,9 +1089,9 @@ export class GameRenderer {
     // Dual conical light gradient
     const drawCone = (ox: number, oy: number) => {
       const grad = ctx.createRadialGradient(ox, oy, 10, ox + beamDistance * 0.7, oy, beamDistance);
-      grad.addColorStop(0, 'rgba(254, 243, 199, 0.65)');
-      grad.addColorStop(0.3, 'rgba(254, 240, 138, 0.35)');
-      grad.addColorStop(0.7, 'rgba(253, 230, 138, 0.12)');
+      grad.addColorStop(0, 'rgba(254, 243, 199, 0.20)');
+      grad.addColorStop(0.3, 'rgba(254, 240, 138, 0.11)');
+      grad.addColorStop(0.7, 'rgba(253, 230, 138, 0.035)');
       grad.addColorStop(1, 'rgba(253, 230, 138, 0)');
 
       ctx.fillStyle = grad;

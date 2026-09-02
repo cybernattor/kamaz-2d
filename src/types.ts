@@ -87,6 +87,13 @@ export interface Pedestrian {
   isDriver?: boolean;
   vehicleId?: string;
   vehicleHitCooldown?: number;
+  panicTimer?: number;
+  panicCooldown?: number;
+  panicTargetX?: number;
+  panicTargetY?: number;
+  walkRoadType?: 'vertical' | 'horizontal';
+  walkRoadCoord?: number;
+  walkSide?: number;
 }
 
 export type DestructibleType =

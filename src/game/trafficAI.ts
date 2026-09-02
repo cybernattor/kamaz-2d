@@ -36,6 +36,7 @@ export class TrafficAI {
   private aiData: Map<string, NPCAIExtra> = new Map();
   private intersectionReservations: Map<string, string> = new Map();
   private intersectionReservationAge: Map<string, number> = new Map();
+  private wasPlayerHonking = false;
 
   private cityMap: CityMap;
   private maxCars = 40;
@@ -63,6 +64,46 @@ export class TrafficAI {
         angle: direction === 'east' ? 0 : Math.PI,
       };
     }
+  }
+
+  private choosePedestrianWaypoint(ped: Pedestrian) {
+    const roadType = ped.walkRoadType || 'vertical';
+    const roadCoord = ped.walkRoadCoord ?? this.gridX[0];
+    const side = ped.walkSide ?? 108;
+    if (roadType === 'vertical') {
+      const bounds = this.getPedestrianAxisBounds(ped.y, this.gridY);
+      ped.targetX = roadCoord + side;
+      ped.targetY = bounds.lower + Math.random() * Math.max(0, bounds.upper - bounds.lower);
+    } else {
+      const bounds = this.getPedestrianAxisBounds(ped.x, this.gridX);
+      ped.targetX = bounds.lower + Math.random() * Math.max(0, bounds.upper - bounds.lower);
+      ped.targetY = roadCoord + side;
+    }
+  }
+
+  private getPedestrianAxisBounds(value: number, crossingRoads: number[]) {
+    let lower = 100;
+    let upper = WORLD_SIZE - 100;
+    for (const road of crossingRoads) {
+      if (value < road) {
+        upper = Math.min(upper, road - 110);
+        break;
+      }
+      lower = Math.max(lower, road + 110);
+    }
+
+    // If a legacy save placed a pedestrian in the 220px crossing buffer,
+    // return a safe side of that road instead of allowing a new target to
+    // perpetuate the invalid position.
+    if (lower > upper) {
+      const road = crossingRoads.reduce((nearest, candidate) =>
+        Math.abs(candidate - value) < Math.abs(nearest - value) ? candidate : nearest
+      );
+      return value < road
+        ? { lower: Math.max(100, road - 170), upper: road - 110 }
+        : { lower: road + 110, upper: Math.min(WORLD_SIZE - 100, road + 170) };
+    }
+    return { lower, upper };
   }
 
   private getIntersectionApproachDistance(
@@ -101,7 +142,16 @@ export class TrafficAI {
   }
 
   private startGroundBypass(car: VehicleInstance, ai: NPCAIExtra, inter: Intersection) {
-    if (ai.groundBypass || ai.isTurning) return;
+    if (ai.groundBypass || ai.isTurning) return false;
+
+    // The ground detour is a narrow temporary lane. Serializing it per
+    // junction prevents two queues from entering the same corridor and being
+    // pushed around by the spacing solver.
+    const anotherBypass = this.npcVehicles.some((candidate) => {
+      if (candidate.id === car.id || candidate.health <= 0 || candidate.isCrashed) return false;
+      return this.aiData.get(candidate.id)?.groundBypass?.intersectionId === inter.id;
+    });
+    if (anotherBypass) return false;
 
     const forwardX = Math.cos(car.angle);
     const forwardY = Math.sin(car.angle);
@@ -132,6 +182,7 @@ export class TrafficAI {
     ai.stuckTimer = 0;
     car.isBraking = false;
     car.turnSignal = 'hazard';
+    return true;
   }
 
   private updateGroundBypass(car: VehicleInstance, ai: NPCAIExtra, delta: number, cruiseSpeed: number) {
@@ -161,8 +212,14 @@ export class TrafficAI {
       Math.sin(desiredAngle - car.angle),
       Math.cos(desiredAngle - car.angle)
     );
-    car.angle += angleDelta * Math.min(1, 8 * delta);
-    car.speed = Math.min(bypassSpeed, distance / Math.max(delta * 60, 1));
+    const maxTurnPerFrame = Math.min(0.26, Math.max(0.08, 15 * delta));
+    car.angle += Math.max(-maxTurnPerFrame, Math.min(maxTurnPerFrame, angleDelta));
+    const alignment = Math.max(0.18, Math.cos(angleDelta));
+    const steeringSpeedFactor = Math.min(1, alignment * 1.6);
+    car.speed = Math.min(
+      bypassSpeed * steeringSpeedFactor,
+      distance / Math.max(delta * 60, 1)
+    );
     car.isBraking = false;
     car.turnSignal = 'hazard';
     car.x += Math.cos(car.angle) * car.speed * 60 * delta;
@@ -475,7 +532,7 @@ export class TrafficAI {
     for (let i = 0; i < this.maxPedestrians; i++) {
       const isVert = i % 2 === 0;
       const roadCoord = isVert ? this.gridX[i % this.gridX.length] : this.gridY[i % this.gridY.length];
-      const side = (i % 4 < 2 ? 1 : -1) * 82; // Sidewalk position
+      const side = (i % 4 < 2 ? 1 : -1) * 108; // Outside the road + sidewalk edge
       const spread = 280 + (i * 240) % (WORLD_SIZE - 560);
 
       const px = isVert ? roadCoord + side : spread;
@@ -487,8 +544,8 @@ export class TrafficAI {
         y: py,
         angle: Math.random() * Math.PI * 2,
         speed: 1.1 + Math.random() * 0.8,
-        targetX: px + (Math.random() * 200 - 100),
-        targetY: py + (Math.random() * 200 - 100),
+        targetX: px,
+        targetY: py,
         state: 'walking',
         health: 100,
         skinColor: skinColors[i % skinColors.length],
@@ -498,7 +555,11 @@ export class TrafficAI {
         ragdollTimer: 0,
         vx: 0,
         vy: 0,
+        walkRoadType: isVert ? 'vertical' : 'horizontal',
+        walkRoadCoord: roadCoord,
+        walkSide: side,
       });
+      this.choosePedestrianWaypoint(this.pedestrians[this.pedestrians.length - 1]);
     }
   }
 
@@ -756,6 +817,7 @@ export class TrafficAI {
 
       // 5. Obstacle / Vehicle Distance Safe Braking
       let blockedBySameLaneTraffic = false;
+      let blockedByTraffic = false;
       let blockedByPlayer = false;
       const activeIntersection = this.getActiveIntersection(car, ai);
       if (!ai.isTurning) {
@@ -768,27 +830,63 @@ export class TrafficAI {
           // system. Treating them as a same-lane obstacle here made a car at
           // the stop line brake for a vehicle crossing in front of it, which
           // could freeze both approaches for an entire light cycle.
-          if (!other.isPlayer) {
-            const otherAi = this.aiData.get(other.id);
-            if (!otherAi || !this.areSameTrafficLane(ai, otherAi)) continue;
+          const otherAi = other.isPlayer ? undefined : this.aiData.get(other.id);
+          const sameTrafficLane = other.isPlayer || Boolean(otherAi && this.areSameTrafficLane(ai, otherAi));
+          if (!sameTrafficLane) {
+            const otherInConflictZone = Boolean(
+              activeIntersection &&
+              otherAi &&
+              activeIntersection.approachDistance > -20 &&
+              Math.hypot(other.x - activeIntersection.inter.x, other.y - activeIntersection.inter.y) < 105 &&
+              Math.hypot(other.x - car.x, other.y - car.y) < 145 &&
+              Math.abs(other.speed) < 1.0
+            );
+            if (otherInConflictZone) {
+              blockedByTraffic = true;
+              shouldStop = true;
+              stopLineIntersection = activeIntersection!.inter;
+            }
+            continue;
           }
 
             const dx = other.x - car.x;
             const dy = other.y - car.y;
             const dist = Math.hypot(dx, dy);
 
-          if (dist < 80 && dist > 1) {
+          if (dist < 180 && dist > 1) {
             const forwardX = Math.cos(car.angle);
             const forwardY = Math.sin(car.angle);
             const dot = (dx * forwardX + dy * forwardY) / dist;
+            const targetLane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction);
+            const playerInSameLane = !other.isPlayer || (
+              ai.roadType === 'vertical'
+                ? Math.abs(other.x - targetLane.x!) < 58
+                : Math.abs(other.y - targetLane.y!) < 58
+            );
 
-            if (dot > 0.82) {
+            if (dot > 0.82 && playerInSameLane) {
               const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
-              const safeFollowingDistance = (config.length + otherConfig.length) * 0.38 + 6;
+              const safeFollowingDistance = other.isPlayer
+                ? (config.length + otherConfig.length) * 0.5 + 24
+                : (config.length + otherConfig.length) * 0.38 + 6;
               if (dist < safeFollowingDistance) {
                 shouldStop = true;
                 blockedBySameLaneTraffic = true;
                 if (other.isPlayer) blockedByPlayer = true;
+                // Put the follower at a deterministic bumper gap immediately
+                // instead of letting braking integrate through the obstacle
+                // and oscillate around it for several frames.
+                car.x = other.x - forwardX * safeFollowingDistance;
+                car.y = other.y - forwardY * safeFollowingDistance;
+                car.speed = 0;
+                if (
+                  activeIntersection &&
+                  activeIntersection.approachDistance > -20 &&
+                  Math.hypot(other.x - activeIntersection.inter.x, other.y - activeIntersection.inter.y) < 105 &&
+                  Math.abs(other.speed) < 1.0
+                ) {
+                  blockedByTraffic = true;
+                }
                 if (dist < 26 && !car.isHonking && Math.random() < 0.04) {
                   car.isHonking = true;
                   setTimeout(() => {
@@ -796,7 +894,10 @@ export class TrafficAI {
                   }, 500);
                 }
               } else {
-                targetSpeed = Math.min(targetSpeed, Math.max(0, (other.speed || 0) * 0.85));
+                const followingSpeed = other.isPlayer
+                  ? Math.max(0, (other.speed || 0) * 0.92)
+                  : Math.max(0, (other.speed || 0) * 0.85);
+                targetSpeed = Math.min(targetSpeed, followingSpeed);
               }
               break;
             }
@@ -821,9 +922,40 @@ export class TrafficAI {
         shouldStop = true;
         stopLineIntersection = activeIntersection!.inter;
       }
+
+      // Dedicated player following controller. It works independently of the
+      // short-radius obstacle scan, so a stopped player is caught early enough
+      // for the NPC to settle behind the bumper rather than tap it first.
+      if (playerVehicle && !ai.isTurning) {
+        const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction);
+        const playerDx = playerVehicle.x - car.x;
+        const playerDy = playerVehicle.y - car.y;
+        const forwardX = Math.cos(car.angle);
+        const forwardY = Math.sin(car.angle);
+        const aheadDistance = playerDx * forwardX + playerDy * forwardY;
+        const lateralDistance = Math.abs(playerDx * -forwardY + playerDy * forwardX);
+        const sameLane = ai.roadType === 'vertical'
+          ? Math.abs(playerVehicle.x - lane.x!) < 58
+          : Math.abs(playerVehicle.y - lane.y!) < 58;
+        if (sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58) {
+          const playerConfig = VEHICLE_CONFIGS[playerVehicle.type] || VEHICLE_CONFIGS.sedan;
+          const safeGap = (config.length + playerConfig.length) * 0.5 + 24;
+          blockedByPlayer = true;
+          shouldStop = true;
+          if (aheadDistance <= safeGap + 30) {
+            car.x = playerVehicle.x - forwardX * safeGap;
+            car.y = playerVehicle.y - forwardY * safeGap;
+            car.speed = 0;
+          } else {
+            targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92));
+          }
+        }
+      }
       if (blockedByPlayer && activeIntersection && ai.progressTimer > 2.5) {
-        this.startGroundBypass(car, ai, activeIntersection.inter);
-        continue;
+        if (this.startGroundBypass(car, ai, activeIntersection.inter)) continue;
+      }
+      if (blockedByTraffic && activeIntersection && ai.progressTimer > 3.5) {
+        if (this.startGroundBypass(car, ai, activeIntersection.inter)) continue;
       }
 
       // Braking alone is not enough when a car reaches a stop line at the
@@ -1197,7 +1329,11 @@ export class TrafficAI {
       'Привет!',
     ];
 
+    const hornStarted = playerHonking && !this.wasPlayerHonking;
+    this.wasPlayerHonking = playerHonking;
+
     for (const ped of this.pedestrians) {
+      ped.panicCooldown = Math.max(0, (ped.panicCooldown || 0) - delta);
       // Speech timer
       if (ped.speechTimer > 0) {
         ped.speechTimer -= delta;
@@ -1216,8 +1352,7 @@ export class TrafficAI {
           ped.vehicleId = undefined;
           ped.state = 'walking';
           ped.speed = 1.1;
-          ped.targetX = Math.max(90, Math.min(WORLD_SIZE - 90, ped.x + Math.cos(ped.angle) * 120));
-          ped.targetY = Math.max(90, Math.min(WORLD_SIZE - 90, ped.y + Math.sin(ped.angle) * 120));
+          this.choosePedestrianWaypoint(ped);
         } else {
           // The driver has left the wreck and stays beside it while the
           // complaint bubble is visible. No teleporting back into the car.
@@ -1252,18 +1387,51 @@ export class TrafficAI {
 
       const distToPlayer = Math.hypot(playerX - ped.x, playerY - ped.y);
 
+      // A horn is an edge-triggered event. While the key is held, the
+      // pedestrian follows one stable escape target instead of recalculating
+      // a new direction every frame and visibly vibrating in place.
+      if ((ped.panicTimer || 0) > 0) {
+        const panicTargetX = ped.panicTargetX ?? ped.x;
+        const panicTargetY = ped.panicTargetY ?? ped.y;
+        const panicDistance = Math.hypot(panicTargetX - ped.x, panicTargetY - ped.y);
+        if (panicDistance > 18) {
+          const panicAngle = Math.atan2(panicTargetY - ped.y, panicTargetX - ped.x);
+          ped.state = 'fleeing';
+          ped.angle = panicAngle;
+          ped.speed = 2.0;
+          ped.x += Math.cos(panicAngle) * ped.speed * 60 * delta;
+          ped.y += Math.sin(panicAngle) * ped.speed * 60 * delta;
+        } else {
+          ped.panicTimer = 0;
+          ped.state = 'walking';
+          ped.speed = 1.1;
+        }
+        ped.panicTimer = Math.max(0, (ped.panicTimer || 0) - delta);
+        continue;
+      }
+
       // Reaction to player honk or close presence
-      if (distToPlayer < 110 && (playerHonking || Math.random() < 0.0015)) {
+      if (distToPlayer < 110 && (hornStarted || Math.random() < 0.0015) && (ped.panicCooldown || 0) <= 0) {
         if (ped.speechTimer <= 0) {
           ped.speechText = dialogPhrases[Math.floor(Math.random() * dialogPhrases.length)];
           ped.speechTimer = 3.2;
         }
 
-        // Sidestep away
+        // Choose one stable escape point along the pedestrian's sidewalk.
         const angleAway = Math.atan2(ped.y - playerY, ped.x - playerX);
+        if (ped.walkRoadType === 'vertical') {
+          const bounds = this.getPedestrianAxisBounds(ped.y, this.gridY);
+          ped.panicTargetX = (ped.walkRoadCoord ?? ped.x) + (ped.walkSide ?? 108);
+          ped.panicTargetY = ped.y >= playerY ? bounds.upper : bounds.lower;
+        } else {
+          const bounds = this.getPedestrianAxisBounds(ped.x, this.gridX);
+          ped.panicTargetX = ped.x >= playerX ? bounds.upper : bounds.lower;
+          ped.panicTargetY = (ped.walkRoadCoord ?? ped.y) + (ped.walkSide ?? 108);
+        }
+        ped.panicTimer = 0.9;
+        ped.panicCooldown = 1.5;
+        ped.state = 'fleeing';
         ped.angle = angleAway;
-        ped.x += Math.cos(angleAway) * (ped.speed * 1.6) * 60 * delta;
-        ped.y += Math.sin(angleAway) * (ped.speed * 1.6) * 60 * delta;
         continue;
       }
 
@@ -1271,13 +1439,21 @@ export class TrafficAI {
       const distToTarget = Math.hypot(ped.targetX - ped.x, ped.targetY - ped.y);
       if (distToTarget < 25) {
         // Pick new waypoint along sidewalks
-        ped.targetX = Math.max(90, Math.min(WORLD_SIZE - 90, ped.x + (Math.random() * 320 - 160)));
-        ped.targetY = Math.max(90, Math.min(WORLD_SIZE - 90, ped.y + (Math.random() * 320 - 160)));
+        this.choosePedestrianWaypoint(ped);
       } else {
         const moveAngle = Math.atan2(ped.targetY - ped.y, ped.targetX - ped.x);
         ped.angle = moveAngle;
         ped.x += Math.cos(moveAngle) * ped.speed * 60 * delta;
         ped.y += Math.sin(moveAngle) * ped.speed * 60 * delta;
+        if (ped.walkRoadType === 'vertical') {
+          const bounds = this.getPedestrianAxisBounds(ped.y, this.gridY);
+          ped.x = (ped.walkRoadCoord ?? ped.x) + (ped.walkSide ?? 108);
+          ped.y = Math.max(bounds.lower, Math.min(bounds.upper, ped.y));
+        } else {
+          const bounds = this.getPedestrianAxisBounds(ped.x, this.gridX);
+          ped.y = (ped.walkRoadCoord ?? ped.y) + (ped.walkSide ?? 108);
+          ped.x = Math.max(bounds.lower, Math.min(bounds.upper, ped.x));
+        }
       }
     }
   }

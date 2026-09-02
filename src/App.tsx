@@ -85,6 +85,7 @@ export default function App() {
   // UI Reactive States (for HUD & Modals)
   const [streetName, setStreetName] = useState<string>('Главная Автобаза КАМАЗ');
   const [fps, setFps] = useState<number>(60);
+  const [, setHudTick] = useState(0);
   const [carCount, setCarCount] = useState<number>(45);
   const [pedCount, setPedCount] = useState<number>(40);
   const [isNight, setIsNight] = useState<boolean>(false);
@@ -338,6 +339,7 @@ export default function App() {
     let lastTime = performance.now();
     let frameCount = 0;
     let lastFpsUpdate = performance.now();
+    let lastHudUpdate = performance.now();
     const handleVehicleCrash = (
       firstVehicle: VehicleInstance,
       secondVehicle: VehicleInstance | undefined,
@@ -363,6 +365,13 @@ export default function App() {
         setFps(Math.round((frameCount * 1000) / (now - lastFpsUpdate)));
         frameCount = 0;
         lastFpsUpdate = now;
+      }
+      // The simulation lives in refs for 60 FPS performance, so refresh only
+      // the HUD-facing React tree at a steady 20 FPS. This keeps the speed
+      // readout responsive without rerendering the whole app every frame.
+      if (now - lastHudUpdate > 50) {
+        setHudTick((tick) => tick + 1);
+        lastHudUpdate = now;
       }
 
       // 1. Update Traffic Lights Cycles
@@ -516,7 +525,7 @@ export default function App() {
           canvas.width,
           canvas.height,
           cityMapRef.current,
-          isCar ? v : null,
+          v,
           char,
           isCar,
           trafficRef.current.npcVehicles,

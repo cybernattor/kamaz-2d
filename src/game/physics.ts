@@ -329,15 +329,28 @@ export class PhysicsEngine {
           const nx = dx / dist;
           const ny = dy / dist;
           const totalMass = cfg1.mass + cfg2.mass;
+          const firstPlayerAnchored = v1.isPlayer && Math.abs(v1.speed) < 0.5;
+          const secondPlayerAnchored = v2.isPlayer && Math.abs(v2.speed) < 0.5;
 
           // Heavier vehicle barely moves; lighter vehicle yields and moves away
           const ratio1 = cfg2.mass / totalMass; // v1 displacement ratio
           const ratio2 = cfg1.mass / totalMass; // v2 displacement ratio
 
-          v1.x -= nx * overlap * ratio1;
-          v1.y -= ny * overlap * ratio1;
-          v2.x += nx * overlap * ratio2;
-          v2.y += ny * overlap * ratio2;
+          // A stopped player is an anchored obstacle. Do not make the player
+          // oscillate backward/forward as the following NPC repeatedly
+          // collides with the same bumper; move the NPC fully clear instead.
+          if (firstPlayerAnchored) {
+            v2.x += nx * overlap;
+            v2.y += ny * overlap;
+          } else if (secondPlayerAnchored) {
+            v1.x -= nx * overlap;
+            v1.y -= ny * overlap;
+          } else {
+            v1.x -= nx * overlap * ratio1;
+            v1.y -= ny * overlap * ratio1;
+            v2.x += nx * overlap * ratio2;
+            v2.y += ny * overlap * ratio2;
+          }
 
           // Compute velocities in Cartesian plane
           const vx1 = Math.cos(v1.angle) * v1.speed;
@@ -383,7 +396,7 @@ export class PhysicsEngine {
 
           // B) Gentle Touch & Smooth Heavy Pushing Mechanics
           // If v1 (e.g. Kamaz) is moving into v2:
-          if (normalClosingSpeed > 0.05) {
+          if (normalClosingSpeed > 0.05 && !secondPlayerAnchored) {
             const pushForce = normalClosingSpeed * ratio2;
 
             // Push v2 smoothly in contact normal direction
@@ -409,7 +422,7 @@ export class PhysicsEngine {
             // Pushing vehicle experiences minor resistance proportional to pushed vehicle mass
             const resistance = (cfg2.mass / totalMass) * 0.12;
             v1.speed *= Math.max(0.7, 1 - resistance * delta * 4);
-          } else if (normalClosingSpeed < -0.05) {
+          } else if (normalClosingSpeed < -0.05 && !firstPlayerAnchored) {
             // v2 is moving into v1
             const pushForce = -normalClosingSpeed * ratio1;
             v1.x -= nx * pushForce * 25 * delta;
