@@ -23,6 +23,11 @@ interface NPCAIExtra {
   progressTimer: number;
   lastX: number;
   lastY: number;
+  groundBypass?: {
+    intersectionId: string;
+    waypoints: Array<{ x: number; y: number }>;
+    waypointIndex: number;
+  };
 }
 
 export class TrafficAI {
@@ -93,6 +98,76 @@ export class TrafficAI {
       }
     }
     return active;
+  }
+
+  private startGroundBypass(car: VehicleInstance, ai: NPCAIExtra, inter: Intersection) {
+    if (ai.groundBypass || ai.isTurning) return;
+
+    const forwardX = Math.cos(car.angle);
+    const forwardY = Math.sin(car.angle);
+    const lateralX = -forwardY;
+    const lateralY = forwardX;
+    const side = car.id.charCodeAt(car.id.length - 1) % 2 === 0 ? 1 : -1;
+    const detourOffset = 112;
+    const pastIntersection = inter.size / 2 + 112;
+    const sidePoint = {
+      x: car.x + lateralX * side * detourOffset + forwardX * 18,
+      y: car.y + lateralY * side * detourOffset + forwardY * 18,
+    };
+    const pastPoint = {
+      x: inter.x + forwardX * pastIntersection + lateralX * side * detourOffset,
+      y: inter.y + forwardY * pastIntersection + lateralY * side * detourOffset,
+    };
+    const targetLane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction);
+    const rejoinPoint = ai.roadType === 'vertical'
+      ? { x: targetLane.x!, y: pastPoint.y }
+      : { x: pastPoint.x, y: targetLane.y! };
+
+    ai.groundBypass = {
+      intersectionId: inter.id,
+      waypoints: [sidePoint, pastPoint, rejoinPoint],
+      waypointIndex: 0,
+    };
+    ai.progressTimer = 0;
+    ai.stuckTimer = 0;
+    car.isBraking = false;
+    car.turnSignal = 'hazard';
+  }
+
+  private updateGroundBypass(car: VehicleInstance, ai: NPCAIExtra, delta: number, cruiseSpeed: number) {
+    const bypass = ai.groundBypass;
+    if (!bypass) return false;
+
+    const waypoint = bypass.waypoints[bypass.waypointIndex];
+    if (!waypoint) {
+      ai.groundBypass = undefined;
+      car.turnSignal = 'none';
+      car.angle = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction).angle;
+      car.speed = cruiseSpeed * 0.7;
+      return false;
+    }
+
+    const dx = waypoint.x - car.x;
+    const dy = waypoint.y - car.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 14) {
+      bypass.waypointIndex += 1;
+      return true;
+    }
+
+    const bypassSpeed = Math.min(7.5, Math.max(5.5, cruiseSpeed * 0.55));
+    const desiredAngle = Math.atan2(dy, dx);
+    const angleDelta = Math.atan2(
+      Math.sin(desiredAngle - car.angle),
+      Math.cos(desiredAngle - car.angle)
+    );
+    car.angle += angleDelta * Math.min(1, 8 * delta);
+    car.speed = Math.min(bypassSpeed, distance / Math.max(delta * 60, 1));
+    car.isBraking = false;
+    car.turnSignal = 'hazard';
+    car.x += Math.cos(car.angle) * car.speed * 60 * delta;
+    car.y += Math.sin(car.angle) * car.speed * 60 * delta;
+    return true;
   }
 
   private getStopLineCoordinate(car: VehicleInstance, ai: NPCAIExtra, inter: Intersection) {
@@ -542,6 +617,12 @@ export class TrafficAI {
       }
 
       const config = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+      const cruiseSpeed = Math.min(15, Math.max(8, config.maxSpeed * KMH_TO_WORLD_SPEED * 0.58));
+      if (this.updateGroundBypass(car, ai, delta, cruiseSpeed)) {
+        ai.lastX = car.x;
+        ai.lastY = car.y;
+        continue;
+      }
       const movementSinceLastTick = Math.hypot(car.x - ai.lastX, car.y - ai.lastY);
       ai.progressTimer = movementSinceLastTick < 0.2 ? ai.progressTimer + delta : 0;
       ai.lastX = car.x;
@@ -549,7 +630,6 @@ export class TrafficAI {
       // Traffic uses the same world-unit scale as the player physics. Keeping
       // NPCs below 16 px/frame leaves enough distance to react to a light and
       // prevents the first frame burst from turning into a traffic pile-up.
-      const cruiseSpeed = Math.min(15, Math.max(8, config.maxSpeed * KMH_TO_WORLD_SPEED * 0.58));
       let targetSpeed = cruiseSpeed;
       let shouldStop = false;
       let waitingForTrafficLight = false;
@@ -577,7 +657,7 @@ export class TrafficAI {
         }
       }
 
-      if (nearestRoadDist > 110) {
+      if (nearestRoadDist > 110 && !ai.groundBypass) {
         ai.offroadTimer += delta;
         if (ai.offroadTimer > 2.0) {
           // Clean respawn back onto nearest road lane
@@ -676,10 +756,13 @@ export class TrafficAI {
 
       // 5. Obstacle / Vehicle Distance Safe Braking
       let blockedBySameLaneTraffic = false;
+      let blockedByPlayer = false;
+      const activeIntersection = this.getActiveIntersection(car, ai);
       if (!ai.isTurning) {
         const allObstacles = playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles;
         for (const other of allObstacles) {
           if (other.id === car.id) continue;
+          if (!other.isPlayer && (other.health <= 0 || other.isCrashed)) continue;
 
           // Perpendicular cars are governed by the intersection reservation
           // system. Treating them as a same-lane obstacle here made a car at
@@ -705,6 +788,7 @@ export class TrafficAI {
               if (dist < safeFollowingDistance) {
                 shouldStop = true;
                 blockedBySameLaneTraffic = true;
+                if (other.isPlayer) blockedByPlayer = true;
                 if (dist < 26 && !car.isHonking && Math.random() < 0.04) {
                   car.isHonking = true;
                   setTimeout(() => {
@@ -718,6 +802,28 @@ export class TrafficAI {
             }
           }
         }
+      }
+
+      // The player can stop inside the conflict zone and is not required to
+      // follow NPC lane rules. After a short wait, use a safe low-speed ground
+      // detour instead of making the whole approach queue forever.
+      const playerBlocksActiveIntersection = Boolean(
+        !ai.isTurning &&
+        activeIntersection &&
+        playerVehicle &&
+        !playerVehicle.isCrashed &&
+        Math.abs(playerVehicle.speed) < 0.8 &&
+        activeIntersection.approachDistance > -20 &&
+        Math.hypot(playerVehicle.x - activeIntersection.inter.x, playerVehicle.y - activeIntersection.inter.y) < 120
+      );
+      if (playerBlocksActiveIntersection) {
+        blockedByPlayer = true;
+        shouldStop = true;
+        stopLineIntersection = activeIntersection!.inter;
+      }
+      if (blockedByPlayer && activeIntersection && ai.progressTimer > 2.5) {
+        this.startGroundBypass(car, ai, activeIntersection.inter);
+        continue;
       }
 
       // Braking alone is not enough when a car reaches a stop line at the

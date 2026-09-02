@@ -100,6 +100,27 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
         ctx.strokeRect(x, y, width, height);
       }
 
+      // Scenic dirt routes break up the avenue grid and show where a vehicle
+      // can make a controlled ground detour around a blocked junction.
+      for (const route of map.scenicRoutes) {
+        if (route.points.length < 2) continue;
+        ctx.save();
+        ctx.strokeStyle = '#a16207';
+        ctx.lineWidth = 5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(toMapCoord(route.points[0].x), toMapCoord(route.points[0].y));
+        route.points.slice(1).forEach((point) => ctx.lineTo(toMapCoord(point.x), toMapCoord(point.y)));
+        ctx.stroke();
+        ctx.strokeStyle = '#f1d39b';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+
       // Buildings and POIs.
       for (const building of map.buildings) {
         ctx.fillStyle = 'rgba(30, 41, 59, 0.88)';

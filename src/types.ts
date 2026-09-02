@@ -161,6 +161,12 @@ export interface MapDecoration {
   label: string;
 }
 
+export interface MapTrail {
+  id: string;
+  label: string;
+  points: Array<{ x: number; y: number }>;
+}
+
 export interface PointOfInterest {
   id: string;
   name: string;

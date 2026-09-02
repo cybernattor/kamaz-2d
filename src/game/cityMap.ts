@@ -1,4 +1,4 @@
-import { DestructibleObject, MapDecoration, PointOfInterest, TrafficLight } from '../types';
+import { DestructibleObject, MapDecoration, MapTrail, PointOfInterest, TrafficLight } from '../types';
 
 export interface RoadSegment {
   id: string;
@@ -44,6 +44,7 @@ export class CityMap {
   public trafficLights: TrafficLight[] = [];
   public buildings: Building[] = [];
   public decorations: MapDecoration[] = [];
+  public scenicRoutes: MapTrail[] = [];
   public pois: PointOfInterest[] = [];
   public destructibles: DestructibleObject[] = [];
 
@@ -288,6 +289,7 @@ export class CityMap {
     // 4. Parks, water and industrial yards keep the city from becoming a
     // uniform grid of identical crossroads.
     this.generateMapDecorations();
+    this.generateScenicRoutes();
 
     // 5. Destructibles (Crates, cones, lamps, hydrants, fences, trash cans)
     this.generateDestructibles();
@@ -407,6 +409,57 @@ export class CityMap {
         width: 250,
         height: 230,
         label: 'Транспортная площадь',
+      },
+    ];
+  }
+
+  private generateScenicRoutes() {
+    this.scenicRoutes = [
+      {
+        id: 'trail-lake-loop',
+        label: 'Озёрная грунтовка',
+        points: [
+          { x: 150, y: 590 },
+          { x: 250, y: 575 },
+          { x: 500, y: 590 },
+          { x: 545, y: 720 },
+          { x: 500, y: 820 },
+        ],
+      },
+      {
+        id: 'trail-park-loop',
+        label: 'Парковая дорожка',
+        points: [
+          { x: 2420, y: 900 },
+          { x: 2560, y: 820 },
+          { x: 2920, y: 870 },
+          { x: 3070, y: 1040 },
+          { x: 2910, y: 1260 },
+          { x: 2580, y: 1300 },
+        ],
+      },
+      {
+        id: 'trail-forest-promenade',
+        label: 'Лесная дорожка',
+        points: [
+          { x: 170, y: 2450 },
+          { x: 280, y: 2380 },
+          { x: 500, y: 2440 },
+          { x: 520, y: 2720 },
+          { x: 360, y: 2980 },
+          { x: 180, y: 2900 },
+        ],
+      },
+      {
+        id: 'trail-industrial-access',
+        label: 'Служебный проезд',
+        points: [
+          { x: 1510, y: 3220 },
+          { x: 1700, y: 3150 },
+          { x: 2150, y: 3160 },
+          { x: 2310, y: 3300 },
+          { x: 2180, y: 3450 },
+        ],
       },
     ];
   }

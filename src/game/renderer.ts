@@ -10,7 +10,7 @@ import {
   VehicleInstance,
 } from '../types';
 import { Building, CityMap, RoadSegment, WORLD_SIZE } from './cityMap';
-import { MapDecoration } from '../types';
+import { MapDecoration, MapTrail } from '../types';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
 
 export class GameRenderer {
@@ -66,6 +66,7 @@ export class GameRenderer {
 
     // 2a. Render distinct districts before roads and buildings.
     this.renderMapDecorations(ctx, cityMap.decorations);
+    this.renderScenicRoutes(ctx, cityMap.scenicRoutes);
 
     // 3. Render Roads, Lane Markings & Crosswalks
     this.renderRoads(ctx, cityMap.roads);
@@ -238,6 +239,34 @@ export class GameRenderer {
       ctx.font = 'bold 11px "JetBrains Mono", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(zone.label, zone.x, bottom - 10);
+      ctx.restore();
+    });
+  }
+
+  private renderScenicRoutes(ctx: CanvasRenderingContext2D, routes: MapTrail[]) {
+    routes.forEach((route) => {
+      if (route.points.length < 2) return;
+      ctx.save();
+      ctx.strokeStyle = '#a16207';
+      ctx.lineWidth = 24;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(route.points[0].x, route.points[0].y);
+      route.points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
+      ctx.stroke();
+      ctx.strokeStyle = '#d6b37a';
+      ctx.lineWidth = 10;
+      ctx.setLineDash([18, 16]);
+      ctx.beginPath();
+      ctx.moveTo(route.points[0].x, route.points[0].y);
+      route.points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(254, 243, 199, 0.78)';
+      ctx.font = 'bold 12px "JetBrains Mono", sans-serif';
+      const labelPoint = route.points[Math.floor(route.points.length / 2)];
+      ctx.fillText(route.label, labelPoint.x + 12, labelPoint.y - 14);
       ctx.restore();
     });
   }

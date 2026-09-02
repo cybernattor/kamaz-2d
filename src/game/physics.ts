@@ -1,5 +1,6 @@
 import {
   DestructibleObject,
+  DestructibleType,
   Particle,
   Pedestrian,
   PlayerCharacter,
@@ -605,6 +606,54 @@ export class PhysicsEngine {
         type: 'spark',
       });
     }
+  }
+
+  // Public compatibility helpers used by multiplayer events and the workshop
+  // HUD. Keep the effect creation inside PhysicsEngine so remote and local
+  // destruction use the same particle budget and rendering path.
+  public spawnSparks(x: number, y: number) {
+    this.emitSparks(x, y, 6);
+  }
+
+  public spawnExplosionParticles(x: number, y: number, type: DestructibleType) {
+    if (type === 'hydrant') {
+      this.emitWaterFountain(x, y);
+      return;
+    }
+    if (type === 'crate' || type === 'fence') {
+      this.emitWoodSplinters(x, y, 16);
+      return;
+    }
+    if (type === 'lamp_pole') {
+      this.emitSparks(x, y, 18);
+      return;
+    }
+    if (type === 'barrel') {
+      this.emitDamageSmoke({
+        id: 'remote-destruction',
+        type: 'sedan',
+        x,
+        y,
+        angle: 0,
+        speed: 0,
+        steeringAngle: 0,
+        angularVelocity: 0,
+        color: '#64748b',
+        health: 1,
+        maxHealth: 1,
+        headlights: 0,
+        turnSignal: 'none',
+        isBraking: false,
+        isReversing: false,
+        isHonking: false,
+        isSiren: false,
+        isPlayer: false,
+        smokeTimer: 0,
+      }, true);
+      this.emitDebris(x, y, '#0284c7', 12);
+      return;
+    }
+    this.emitDebris(x, y, type === 'cone' || type === 'trash_can' ? '#f97316' : '#94a3b8', 10);
   }
 
   public emitWoodSplinters(x: number, y: number, count: number) {

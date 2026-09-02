@@ -128,6 +128,23 @@ export const Minimap: React.FC<MinimapProps> = ({
         ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
       }
 
+      for (const route of map.scenicRoutes) {
+        if (route.points.length < 2) continue;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(214, 179, 122, 0.8)';
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        const first = toRadar(route.points[0].x, route.points[0].y);
+        ctx.moveTo(first.x, first.y);
+        route.points.slice(1).forEach((point) => {
+          const pos = toRadar(point.x, point.y);
+          ctx.lineTo(pos.x, pos.y);
+        });
+        ctx.stroke();
+        ctx.restore();
+      }
+
       // Traffic dots.
       for (const car of trafficCarsRef.current) {
         if (car.health <= 0) continue;
