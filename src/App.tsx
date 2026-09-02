@@ -28,14 +28,26 @@ import { VirtualControls } from './components/VirtualControls';
 import { VEHICLE_CONFIGS } from './game/vehicleConfigs';
 import { FixedStepAccumulator } from './game/fixedStep';
 
+/**
+ * A ref argument is evaluated on every render even though React keeps only the
+ * first value. Building the city that way cost ~195ms per render and, with the
+ * HUD ticking five times a second, saturated the main thread. The factory here
+ * runs exactly once.
+ */
+function useLazyRef<T>(create: () => T) {
+  const ref = useRef<T | null>(null);
+  if (ref.current === null) ref.current = create();
+  return ref as React.MutableRefObject<T>;
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Core Engine instances in refs to prevent React state re-render bottlenecks during 60 FPS loop
-  const cityMapRef = useRef<CityMap>(new CityMap());
-  const physicsRef = useRef<PhysicsEngine>(new PhysicsEngine());
-  const trafficRef = useRef<TrafficAI>(new TrafficAI(cityMapRef.current));
-  const missionsRef = useRef<MissionManager>(new MissionManager());
+  const cityMapRef = useLazyRef<CityMap>(() => new CityMap());
+  const physicsRef = useLazyRef<PhysicsEngine>(() => new PhysicsEngine());
+  const trafficRef = useLazyRef<TrafficAI>(() => new TrafficAI(cityMapRef.current));
+  const missionsRef = useLazyRef<MissionManager>(() => new MissionManager());
   const rendererRef = useRef<GameRenderer | PixiGameRenderer | null>(null);
   const multiplayerRef = useRef<MultiplayerClient | null>(null);
 
