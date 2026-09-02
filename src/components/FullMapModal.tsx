@@ -80,6 +80,26 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
         }
       }
 
+      // Districts make the overview readable: the city is not only a grid
+      // of roads, it also has water, parks, a plaza and an industrial yard.
+      for (const zone of map.decorations) {
+        const x = toMapCoord(zone.x - zone.width / 2);
+        const y = toMapCoord(zone.y - zone.height / 2);
+        const width = toMapCoord(zone.width);
+        const height = toMapCoord(zone.height);
+        ctx.fillStyle = zone.type === 'water'
+          ? 'rgba(14, 116, 144, 0.9)'
+          : zone.type === 'industrial'
+          ? 'rgba(82, 82, 91, 0.9)'
+          : zone.type === 'plaza'
+          ? 'rgba(100, 116, 139, 0.9)'
+          : 'rgba(22, 101, 52, 0.9)';
+        ctx.fillRect(x, y, width, height);
+        ctx.strokeStyle = zone.type === 'water' ? '#38bdf8' : '#4ade80';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x, y, width, height);
+      }
+
       // Buildings and POIs.
       for (const building of map.buildings) {
         ctx.fillStyle = 'rgba(30, 41, 59, 0.88)';

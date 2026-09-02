@@ -1,4 +1,4 @@
-import { DestructibleObject, PointOfInterest, TrafficLight } from '../types';
+import { DestructibleObject, MapDecoration, PointOfInterest, TrafficLight } from '../types';
 
 export interface RoadSegment {
   id: string;
@@ -43,6 +43,7 @@ export class CityMap {
   public intersections: Intersection[] = [];
   public trafficLights: TrafficLight[] = [];
   public buildings: Building[] = [];
+  public decorations: MapDecoration[] = [];
   public pois: PointOfInterest[] = [];
   public destructibles: DestructibleObject[] = [];
 
@@ -284,7 +285,11 @@ export class CityMap {
     // 3. City Blocks & Buildings (Filling blocks between roads)
     this.generateCityBlocks();
 
-    // 4. Destructibles (Crates, cones, lamps, hydrants, fences, trash cans)
+    // 4. Parks, water and industrial yards keep the city from becoming a
+    // uniform grid of identical crossroads.
+    this.generateMapDecorations();
+
+    // 5. Destructibles (Crates, cones, lamps, hydrants, fences, trash cans)
     this.generateDestructibles();
   }
 
@@ -292,26 +297,26 @@ export class CityMap {
     // Generate styled buildings and structures in non-POI city block areas
     const blockRegions = [
       // Top row
-      { minX: 160, maxX: 460, minY: 160, maxY: 460 },
+      // Reserved for the lake district.
       { minX: 760, maxX: 1240, minY: 160, maxY: 460 },
       { minX: 1560, maxX: 2040, minY: 160, maxY: 460 },
       { minX: 2360, maxX: 2840, minY: 160, maxY: 460 },
-      { minX: 3140, maxX: 3440, minY: 160, maxY: 460 },
+      // Reserved for the transport plaza.
 
       // Row 2
       { minX: 160, maxX: 460, minY: 760, maxY: 1240 },
-      { minX: 2360, maxX: 2840, minY: 760, maxY: 1240 },
+      // Reserved for Central Park.
       { minX: 3140, maxX: 3440, minY: 760, maxY: 1240 },
 
       // Row 3
       { minX: 3140, maxX: 3440, minY: 2360, maxY: 2840 },
-      { minX: 160, maxX: 460, minY: 2360, maxY: 2840 },
+      // Reserved for the forest promenade.
       { minX: 760, maxX: 1240, minY: 2360, maxY: 2840 },
 
       // Bottom Row
       { minX: 160, maxX: 460, minY: 3140, maxY: 3440 },
       { minX: 760, maxX: 1240, minY: 3140, maxY: 3440 },
-      { minX: 1560, maxX: 2040, minY: 3140, maxY: 3440 },
+      // Reserved for the industrial yard.
       { minX: 2360, maxX: 2840, minY: 3140, maxY: 3440 },
       { minX: 3140, maxX: 3440, minY: 3140, maxY: 3440 },
     ];
@@ -354,6 +359,56 @@ export class CityMap {
         }
       }
     });
+  }
+
+  private generateMapDecorations() {
+    this.decorations = [
+      {
+        id: 'zone_lake_district',
+        type: 'water',
+        x: 310,
+        y: 310,
+        width: 270,
+        height: 240,
+        label: 'Озёрный район',
+      },
+      {
+        id: 'zone_central_park',
+        type: 'park',
+        x: 2600,
+        y: 1000,
+        width: 430,
+        height: 350,
+        label: 'Центральный парк',
+      },
+      {
+        id: 'zone_forest_promenade',
+        type: 'forest',
+        x: 310,
+        y: 2600,
+        width: 270,
+        height: 380,
+        label: 'Лесная аллея',
+      },
+      {
+        id: 'zone_industrial_yard',
+        type: 'industrial',
+        x: 1800,
+        y: 3300,
+        width: 430,
+        height: 260,
+        label: 'Промышленный двор',
+      },
+      {
+        id: 'zone_logistics_plaza',
+        type: 'plaza',
+        x: 3290,
+        y: 310,
+        width: 250,
+        height: 230,
+        label: 'Транспортная площадь',
+      },
+    ];
   }
 
   private generateDestructibles() {

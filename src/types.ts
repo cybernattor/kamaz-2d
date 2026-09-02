@@ -86,6 +86,7 @@ export interface Pedestrian {
   vy: number;
   isDriver?: boolean;
   vehicleId?: string;
+  vehicleHitCooldown?: number;
 }
 
 export type DestructibleType =
@@ -146,6 +147,18 @@ export interface TrafficLight {
   direction: 'north' | 'south' | 'east' | 'west';
   state: 'green' | 'yellow' | 'red';
   pedestrianState: 'walk' | 'dont_walk';
+}
+
+export type MapDecorationType = 'water' | 'park' | 'forest' | 'plaza' | 'industrial';
+
+export interface MapDecoration {
+  id: string;
+  type: MapDecorationType;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  label: string;
 }
 
 export interface PointOfInterest {

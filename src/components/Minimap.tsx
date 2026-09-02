@@ -113,6 +113,21 @@ export const Minimap: React.FC<MinimapProps> = ({
         }
       }
 
+      // Show the district shapes behind traffic dots so the radar has more
+      // landmarks than identical perpendicular roads.
+      for (const zone of map.decorations) {
+        const topLeft = toRadar(zone.x - zone.width / 2, zone.y - zone.height / 2);
+        const bottomRight = toRadar(zone.x + zone.width / 2, zone.y + zone.height / 2);
+        ctx.fillStyle = zone.type === 'water'
+          ? 'rgba(14, 116, 144, 0.5)'
+          : zone.type === 'industrial'
+          ? 'rgba(82, 82, 91, 0.45)'
+          : zone.type === 'plaza'
+          ? 'rgba(100, 116, 139, 0.45)'
+          : 'rgba(22, 101, 52, 0.5)';
+        ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+      }
+
       // Traffic dots.
       for (const car of trafficCarsRef.current) {
         if (car.health <= 0) continue;

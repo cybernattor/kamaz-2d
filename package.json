@@ -9,6 +9,7 @@
     "test:traffic": "tsx repros/traffic-flow.repro.ts",
     "test:traffic:stop-line": "tsx repros/traffic-stop-line.repro.ts",
     "test:traffic:accident": "tsx repros/traffic-accident.repro.ts",
+    "test:pedestrian-contact": "tsx repros/pedestrian-contact.repro.ts",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

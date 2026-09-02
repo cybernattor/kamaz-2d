@@ -294,6 +294,12 @@ export class PhysicsEngine {
   ) {
     const now = performance.now();
 
+    // Prevent one physical contact from being reported again on every frame
+    // while a ragdoll is still close to the bumper.
+    pedestrians.forEach((ped) => {
+      ped.vehicleHitCooldown = Math.max(0, (ped.vehicleHitCooldown || 0) - delta);
+    });
+
     // 1. Vehicle vs Vehicle Collisions (Smooth Pushing & Mass Momentum Exchange)
     for (let i = 0; i < vehicles.length; i++) {
       const v1 = vehicles[i];
@@ -508,11 +514,23 @@ export class PhysicsEngine {
 
       // 4. Vehicle vs Pedestrians ("человечки")
       for (const ped of pedestrians) {
+        if ((ped.vehicleHitCooldown || 0) > 0) continue;
         const pedDx = ped.x - v1.x;
         const pedDy = ped.y - v1.y;
-        const pedDist = Math.hypot(pedDx, pedDy);
+        // Test the pedestrian against the vehicle's oriented rectangle, not
+        // a large circle around its centre. The old circle reached far beyond
+        // the visible body, so people shouted even when the vehicle passed
+        // beside them without touching.
+        const forward = pedDx * Math.cos(v1.angle) + pedDy * Math.sin(v1.angle);
+        const lateral = -pedDx * Math.sin(v1.angle) + pedDy * Math.cos(v1.angle);
+        const frontReach = cfg1.length / 2 + 5;
+        const sideReach = cfg1.width / 2 + 5;
 
-        if (pedDist < cfg1.length * 0.45 && Math.abs(v1.speed) > 1.0) {
+        if (
+          Math.abs(forward) < frontReach &&
+          Math.abs(lateral) < sideReach &&
+          Math.abs(v1.speed) > 1.0
+        ) {
           // Knockback Pedestrian into Ragdoll
           ped.state = 'ragdoll';
           ped.ragdollTimer = 3.5;
@@ -525,6 +543,7 @@ export class PhysicsEngine {
             Math.floor(Math.random() * 5)
           ];
           ped.speechTimer = 2.8;
+          ped.vehicleHitCooldown = 1.0;
 
           this.emitDebris(ped.x, ped.y, ped.shirtColor, 8);
           sound.playCrash(0.35);

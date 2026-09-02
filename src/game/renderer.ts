@@ -10,6 +10,7 @@ import {
   VehicleInstance,
 } from '../types';
 import { Building, CityMap, RoadSegment, WORLD_SIZE } from './cityMap';
+import { MapDecoration } from '../types';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
 
 export class GameRenderer {
@@ -62,6 +63,9 @@ export class GameRenderer {
 
     // 2. Render Ground Base (Grass & Suburbs)
     this.renderGround(ctx);
+
+    // 2a. Render distinct districts before roads and buildings.
+    this.renderMapDecorations(ctx, cityMap.decorations);
 
     // 3. Render Roads, Lane Markings & Crosswalks
     this.renderRoads(ctx, cityMap.roads);
@@ -136,6 +140,106 @@ export class GameRenderer {
       ctx.lineTo(WORLD_SIZE, y);
       ctx.stroke();
     }
+  }
+
+  private renderMapDecorations(ctx: CanvasRenderingContext2D, decorations: MapDecoration[]) {
+    decorations.forEach((zone) => {
+      const left = zone.x - zone.width / 2;
+      const top = zone.y - zone.height / 2;
+      const right = zone.x + zone.width / 2;
+      const bottom = zone.y + zone.height / 2;
+
+      ctx.save();
+      ctx.fillStyle = zone.type === 'water'
+        ? '#075985'
+        : zone.type === 'industrial'
+        ? '#3f3f46'
+        : zone.type === 'plaza'
+        ? '#475569'
+        : '#166534';
+      ctx.fillRect(left, top, zone.width, zone.height);
+
+      ctx.strokeStyle = zone.type === 'water' ? '#38bdf8' : '#4ade80';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(left + 3, top + 3, zone.width - 6, zone.height - 6);
+
+      if (zone.type === 'water') {
+        ctx.strokeStyle = 'rgba(125, 211, 252, 0.55)';
+        ctx.lineWidth = 2;
+        for (let y = top + 28; y < bottom - 12; y += 34) {
+          ctx.beginPath();
+          ctx.moveTo(left + 20, y);
+          ctx.quadraticCurveTo(zone.x - 18, y - 8, zone.x + 8, y);
+          ctx.quadraticCurveTo(zone.x + 36, y + 8, right - 20, y);
+          ctx.stroke();
+        }
+      } else if (zone.type === 'park' || zone.type === 'forest') {
+        const columns = Math.max(3, Math.floor(zone.width / 72));
+        const rows = Math.max(3, Math.floor(zone.height / 72));
+        for (let column = 0; column < columns; column += 1) {
+          for (let row = 0; row < rows; row += 1) {
+            const treeX = left + 32 + column * 68 + (row % 2) * 12;
+            const treeY = top + 34 + row * 64;
+            if (treeX > right - 22 || treeY > bottom - 22) continue;
+            ctx.fillStyle = zone.type === 'forest' ? '#14532d' : '#15803d';
+            ctx.beginPath();
+            ctx.arc(treeX, treeY, 17, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#854d0e';
+            ctx.fillRect(treeX - 2, treeY + 10, 4, 9);
+          }
+        }
+        ctx.strokeStyle = '#d9f99d';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(left + 16, zone.y);
+        ctx.lineTo(right - 16, zone.y);
+        ctx.stroke();
+      } else if (zone.type === 'plaza') {
+        ctx.strokeStyle = 'rgba(226, 232, 240, 0.22)';
+        ctx.lineWidth = 1;
+        for (let x = left + 20; x < right; x += 34) {
+          ctx.beginPath();
+          ctx.moveTo(x, top);
+          ctx.lineTo(x, bottom);
+          ctx.stroke();
+        }
+        for (let y = top + 20; y < bottom; y += 34) {
+          ctx.beginPath();
+          ctx.moveTo(left, y);
+          ctx.lineTo(right, y);
+          ctx.stroke();
+        }
+        ctx.fillStyle = '#22d3ee';
+        ctx.beginPath();
+        ctx.arc(zone.x, zone.y, 28, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#bae6fd';
+        ctx.beginPath();
+        ctx.arc(zone.x, zone.y, 10, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (zone.type === 'industrial') {
+        ctx.fillStyle = '#64748b';
+        for (let x = left + 24; x < right - 30; x += 82) {
+          ctx.fillRect(x, top + 34, 52, 28);
+          ctx.fillRect(x + 12, top + 92, 40, 24);
+        }
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 4;
+        ctx.setLineDash([14, 10]);
+        ctx.beginPath();
+        ctx.moveTo(left + 16, bottom - 38);
+        ctx.lineTo(right - 16, bottom - 38);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      ctx.fillStyle = 'rgba(226, 232, 240, 0.72)';
+      ctx.font = 'bold 11px "JetBrains Mono", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(zone.label, zone.x, bottom - 10);
+      ctx.restore();
+    });
   }
 
   private renderRoads(ctx: CanvasRenderingContext2D, roads: RoadSegment[]) {
