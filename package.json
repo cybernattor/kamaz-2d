@@ -17,6 +17,8 @@
     "test:map:geometry": "tsx repros/map-geometry-integrity.repro.ts",
     "test:map:placement": "tsx repros/map-static-placement.repro.ts",
     "test:traffic:route-planning": "tsx repros/traffic-route-planning.repro.ts",
+    "test:mp:protocol": "tsx repros/multiplayer-protocol.repro.ts",
+    "test:mp:interpolation": "tsx repros/multiplayer-interpolation.repro.ts",
     "test:pedestrian-contact": "tsx repros/pedestrian-contact.repro.ts",
     "test:pedestrian-horn": "tsx repros/pedestrian-horn.repro.ts",
     "test:pedestrian-sidewalk": "tsx repros/pedestrian-sidewalk.repro.ts",

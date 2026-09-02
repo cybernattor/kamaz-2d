@@ -4,10 +4,15 @@ import { WebSocket } from 'ws';
 type ServerMessage = {
   type: string;
   player?: { id?: string };
+  players?: Array<{ id?: string }>;
+  yourId?: string;
   playerId?: string;
   objectId?: string;
   text?: string;
 };
+
+/** A real prop id: the server rejects destroy requests for unknown objects. */
+const SHARED_PROP_ID = 'prop_cone_0';
 
 const projectRoot = new URL('..', import.meta.url).pathname.replace(/^\/(\w):/, '$1:');
 function delay(ms: number) {
@@ -47,8 +52,10 @@ async function connectToRoom(roomId: string, playerId: string, port: number) {
   );
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (messages.some((message) => message.type === 'init')) {
-      return { socket, messages };
+    const init = messages.find((message) => message.type === 'init');
+    if (init) {
+      // The server assigns the id; the client no longer picks its own.
+      return { socket, messages, assignedId: init.yourId ?? '' };
     }
     await delay(10);
   }
@@ -116,13 +123,15 @@ async function main() {
         isSiren: false,
       })
     );
-    alpha.send(JSON.stringify({ type: 'object_destroyed', objectId: 'alpha-only-prop' }));
+    alpha.send(JSON.stringify({ type: 'object_destroyed', objectId: SHARED_PROP_ID }));
     await delay(250);
 
+    const alphaId = alphaClient.assignedId;
     const leakedMessages = betaClient.messages.filter((message) =>
       (message.type === 'chat' && message.text === 'alpha-only') ||
-      (message.type === 'player_updated' && message.player?.id === 'alpha-player') ||
-      (message.type === 'object_destroyed' && message.objectId === 'alpha-only-prop')
+      (message.type === 'snapshot' && message.players?.some((p) => p.id === alphaId)) ||
+      (message.type === 'player_joined' && message.player?.id === alphaId) ||
+      (message.type === 'object_destroyed' && message.objectId === SHARED_PROP_ID)
     );
 
     if (leakedMessages.length > 0) {

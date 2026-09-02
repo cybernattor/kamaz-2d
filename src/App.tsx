@@ -122,10 +122,10 @@ export default function App() {
           });
         }
       },
+      // Only membership changes reach React. Position updates used to call
+      // setState ~22 times per second per remote player, re-rendering the whole
+      // app; the render loop reads positions straight off the client instead.
       onPlayerJoined: (player) => {
-        setRemotePlayers((prev) => [...prev.filter((p) => p.id !== player.id), player]);
-      },
-      onPlayerUpdated: (player) => {
         setRemotePlayers((prev) => [...prev.filter((p) => p.id !== player.id), player]);
       },
       onPlayerLeft: (playerId) => {
@@ -529,7 +529,8 @@ export default function App() {
           char,
           isCar,
           trafficRef.current.npcVehicles,
-          Array.from(multiplayerRef.current?.remotePlayers.values() || []),
+          // Interpolated: the network stream is 20Hz, the display is not.
+          multiplayerRef.current?.getInterpolatedPlayers() || [],
           trafficRef.current.pedestrians,
           cityMapRef.current.destructibles,
           physicsRef.current.particles,
