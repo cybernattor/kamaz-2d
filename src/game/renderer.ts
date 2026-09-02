@@ -9,7 +9,7 @@ import {
   TrafficLight,
   VehicleInstance,
 } from '../types';
-import { Building, CityMap, RoadSegment, WORLD_SIZE } from './cityMap';
+import { Building, CityDistrict, CityMap, RoadSegment, WORLD_SIZE } from './cityMap';
 import { MapDecoration, MapTrail } from '../types';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
 
@@ -65,6 +65,7 @@ export class GameRenderer {
     this.renderGround(ctx);
 
     // 2a. Render distinct districts before roads and buildings.
+    this.renderDistricts(ctx, cityMap.districts);
     this.renderMapDecorations(ctx, cityMap.decorations);
     this.renderScenicRoutes(ctx, cityMap.scenicRoutes);
 
@@ -141,6 +142,28 @@ export class GameRenderer {
       ctx.lineTo(WORLD_SIZE, y);
       ctx.stroke();
     }
+  }
+
+  /**
+   * Districts tint the ground so the city and the outskirts read differently
+   * while driving. The overview map already drew them; the world did not, even
+   * though the render order was written as if it did.
+   */
+  private renderDistricts(ctx: CanvasRenderingContext2D, districts: CityDistrict[]) {
+    districts.forEach((district) => {
+      const left = district.x - district.width / 2;
+      const top = district.y - district.height / 2;
+
+      ctx.save();
+      ctx.globalAlpha = 0.34;
+      ctx.fillStyle = district.color;
+      ctx.fillRect(left, top, district.width, district.height);
+      ctx.globalAlpha = 0.16;
+      ctx.strokeStyle = district.accent;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(left, top, district.width, district.height);
+      ctx.restore();
+    });
   }
 
   private renderMapDecorations(ctx: CanvasRenderingContext2D, decorations: MapDecoration[]) {

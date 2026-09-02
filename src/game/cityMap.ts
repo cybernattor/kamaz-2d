@@ -85,6 +85,88 @@ export interface Building {
 
 export const WORLD_SIZE = 3600;
 
+/** Axis-aligned box used by every placement check in this module. */
+export interface MapRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const pointToSegment = (px: number, py: number, ax: number, ay: number, bx: number, by: number) => {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return Math.hypot(px - ax, py - ay);
+  const projection = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSquared));
+  return Math.hypot(px - (ax + projection * dx), py - (ay + projection * dy));
+};
+
+const cross = (ax: number, ay: number, bx: number, by: number) => ax * by - ay * bx;
+
+const segmentsIntersect = (a: RoadPoint, b: RoadPoint, c: RoadPoint, d: RoadPoint) => {
+  const d1 = cross(d.x - c.x, d.y - c.y, a.x - c.x, a.y - c.y);
+  const d2 = cross(d.x - c.x, d.y - c.y, b.x - c.x, b.y - c.y);
+  const d3 = cross(b.x - a.x, b.y - a.y, c.x - a.x, c.y - a.y);
+  const d4 = cross(b.x - a.x, b.y - a.y, d.x - a.x, d.y - a.y);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+};
+
+const segmentToSegment = (a: RoadPoint, b: RoadPoint, c: RoadPoint, d: RoadPoint) => {
+  if (segmentsIntersect(a, b, c, d)) return 0;
+  return Math.min(
+    pointToSegment(a.x, a.y, c.x, c.y, d.x, d.y),
+    pointToSegment(b.x, b.y, c.x, c.y, d.x, d.y),
+    pointToSegment(c.x, c.y, a.x, a.y, b.x, b.y),
+    pointToSegment(d.x, d.y, a.x, a.y, b.x, b.y)
+  );
+};
+
+const rectContains = (rect: MapRect, x: number, y: number) =>
+  Math.abs(x - rect.x) <= rect.width / 2 && Math.abs(y - rect.y) <= rect.height / 2;
+
+/**
+ * Exact distance from an axis-aligned box to a polyline. Zero when they touch.
+ * Sampling the polyline was the old approach and it silently missed thin
+ * diagonal crossings, so this walks the four box edges instead.
+ */
+export const rectToPolylineDistance = (rect: MapRect, points: RoadPoint[]) => {
+  const left = rect.x - rect.width / 2;
+  const right = rect.x + rect.width / 2;
+  const top = rect.y - rect.height / 2;
+  const bottom = rect.y + rect.height / 2;
+  const corners: RoadPoint[] = [
+    { x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom },
+  ];
+
+  let best = Infinity;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    if (rectContains(rect, a.x, a.y) || rectContains(rect, b.x, b.y)) return 0;
+    for (let edge = 0; edge < 4; edge++) {
+      best = Math.min(best, segmentToSegment(a, b, corners[edge], corners[(edge + 1) % 4]));
+      if (best === 0) return 0;
+    }
+  }
+  return best;
+};
+
+/** Sidewalk gap kept between any static object and the drivable surface. */
+const SIDEWALK_APRON = 26;
+
+/**
+ * Deterministic generator. Prop layout has to be identical on every client
+ * because multiplayer only syncs destructibles by id, never by position.
+ */
+const createRng = (seed: number) => {
+  let state = seed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+};
+
 export class CityMap {
   public roads: RoadSegment[] = [];
   public intersections: Intersection[] = [];
@@ -98,8 +180,34 @@ export class CityMap {
   public roadNodes: RoadNetworkNode[] = [];
   public roadEdges: RoadNetworkEdge[] = [];
 
+  private rng = createRng(0x5eed1);
+
   constructor() {
     this.generateLayout();
+  }
+
+  /**
+   * Signed clearance from a box to a road's drivable surface. Negative means
+   * the box overlaps asphalt, which for a building is a solid wall on a lane
+   * and for a prop is an obstacle nobody placed on purpose.
+   */
+  public clearanceToRoad(rect: MapRect, road: RoadSegment) {
+    return rectToPolylineDistance(rect, road.points) - road.width / 2;
+  }
+
+  /** Smallest clearance to any road. */
+  public clearanceToRoads(rect: MapRect) {
+    return this.roads.reduce((best, road) => Math.min(best, this.clearanceToRoad(rect, road)), Infinity);
+  }
+
+  /** True when a point sits on the drivable surface of any road. */
+  public isOnRoad(x: number, y: number) {
+    return this.clearanceToRoads({ x, y, width: 0, height: 0 }) < 0;
+  }
+
+  private overlapsRect(a: MapRect, b: MapRect, margin = 0) {
+    return Math.abs(a.x - b.x) < (a.width + b.width) / 2 + margin
+      && Math.abs(a.y - b.y) < (a.height + b.height) / 2 + margin;
   }
 
   private generateLayout() {
@@ -111,13 +219,16 @@ export class CityMap {
     const gridX = [520, 1320, 2200, 3040];
     const gridY = [620, 1450, 2320, 3100];
 
+    // Districts tile the world without overlapping. They used to be six
+    // free-floating rectangles, so four pairs overlapped and the map overview
+    // double-painted the shared strips and stacked their labels.
     this.districts = [
-      { id: 'district-downtown', name: 'Центр', kind: 'downtown', x: 1510, y: 1130, width: 1060, height: 860, color: '#172554', accent: '#38bdf8' },
-      { id: 'district-residential', name: 'Жилые кварталы', kind: 'residential', x: 620, y: 1300, width: 1040, height: 1160, color: '#164e63', accent: '#67e8f9' },
-      { id: 'district-port', name: 'Порт и железная дорога', kind: 'port', x: 520, y: 520, width: 960, height: 720, color: '#164e63', accent: '#22d3ee' },
-      { id: 'district-industrial', name: 'Промзона и аэропорт', kind: 'industrial', x: 2670, y: 1330, width: 1320, height: 1120, color: '#3f3f46', accent: '#f59e0b' },
-      { id: 'district-desert', name: 'Карьерная окраина', kind: 'desert', x: 2680, y: 3000, width: 1320, height: 940, color: '#78350f', accent: '#fbbf24' },
-      { id: 'district-nature', name: 'Лес, холмы и озеро', kind: 'nature', x: 850, y: 3000, width: 1660, height: 940, color: '#14532d', accent: '#86efac' },
+      { id: 'district-port', name: 'Порт и железная дорога', kind: 'port', x: 645, y: 345, width: 1130, height: 530, color: '#164e63', accent: '#22d3ee' },
+      { id: 'district-residential', name: 'Жилые кварталы', kind: 'residential', x: 645, y: 1460, width: 1130, height: 1700, color: '#155e75', accent: '#67e8f9' },
+      { id: 'district-downtown', name: 'Центр', kind: 'downtown', x: 1650, y: 1460, width: 880, height: 1700, color: '#172554', accent: '#38bdf8' },
+      { id: 'district-industrial', name: 'Промзона и аэропорт', kind: 'industrial', x: 2805, y: 1195, width: 1430, height: 2230, color: '#3f3f46', accent: '#f59e0b' },
+      { id: 'district-nature', name: 'Лес, холмы и озеро', kind: 'nature', x: 1085, y: 2915, width: 2010, height: 1210, color: '#14532d', accent: '#86efac' },
+      { id: 'district-desert', name: 'Карьерная окраина', kind: 'desert', x: 2805, y: 2915, width: 1430, height: 1210, color: '#78350f', accent: '#fbbf24' },
     ];
 
     const avenueNamesX = [
@@ -170,11 +281,11 @@ export class CityMap {
       gridY.forEach((gy, crossingIndex) => {
         if (crossingIndex > 0) {
           const previousY = gridY[crossingIndex - 1];
-          points.push({ x: gx + (idx % 2 === 0 ? -24 : 24), y: (previousY + gy) / 2 });
+          points.push({ x: gx + (idx % 2 === 0 ? -14 : 14), y: (previousY + gy) / 2 });
         }
         points.push({ x: gx, y: gy });
       });
-      points.push({ x: gx + (idx % 2 === 0 ? -18 : 18), y: WORLD_SIZE - 130 });
+      points.push({ x: gx + (idx % 2 === 0 ? -12 : 12), y: WORLD_SIZE - 130 });
       this.roads.push({
         ...road(`road_v_${idx}`, avenueNamesX[idx], points, 'arterial', 2, idx === 0 ? 50 : 60, idx < 2 ? 'district-residential' : 'district-industrial', {
           isVertical: true,
@@ -188,11 +299,11 @@ export class CityMap {
       gridX.forEach((gx, crossingIndex) => {
         if (crossingIndex > 0) {
           const previousX = gridX[crossingIndex - 1];
-          points.push({ x: (previousX + gx) / 2, y: gy + (idy % 2 === 0 ? 20 : -20) });
+          points.push({ x: (previousX + gx) / 2, y: gy + (idy % 2 === 0 ? 14 : -14) });
         }
         points.push({ x: gx, y: gy });
       });
-      points.push({ x: WORLD_SIZE - 120, y: gy + (idy % 2 === 0 ? 18 : -18) });
+      points.push({ x: WORLD_SIZE - 120, y: gy + (idy % 2 === 0 ? 12 : -12) });
       this.roads.push({
         ...road(`road_h_${idy}`, avenueNamesY[idy], points, 'arterial', 2, idy === 0 ? 50 : 60, idy < 2 ? 'district-downtown' : 'district-desert', {
           isVertical: false,
@@ -223,8 +334,12 @@ export class CityMap {
         { x: 820, y: 3050 }, { x: 650, y: 3260 }, { x: 790, y: 3440 }, { x: 1180, y: 3510 },
         { x: 1480, y: 3370 }, { x: 1740, y: 3500 }, { x: 2120, y: 3380 }, { x: 2420, y: 3500 },
       ], 'dirt', 1, 28, 'district-nature', { isVertical: false, directionMode: 'two-way', feature: 'winding' }),
+      // Runs between Broadway and Ленинградский, in the gap north of the
+      // construction site. As a floating stub it could never appear in a
+      // route, because the graph only links roads whose endpoints touch the
+      // network, and its old line cut straight through two POI zones.
       road('road-market-one-way', 'Рыночный переулок', [
-        { x: 1120, y: 780 }, { x: 1500, y: 760 }, { x: 1780, y: 920 }, { x: 1780, y: 1260 },
+        { x: 1320, y: 800 }, { x: 1560, y: 790 }, { x: 1800, y: 800 }, { x: 2200, y: 820 },
       ], 'street', 1, 35, 'district-downtown', { isVertical: false, directionMode: 'one-way', feature: 'roundabout' }),
       road('road-quarry-service', 'Карьерная объездная', [
         { x: 2500, y: 3000 }, { x: 2800, y: 2860 }, { x: 3240, y: 2920 }, { x: 3480, y: 3180 },
@@ -242,7 +357,10 @@ export class CityMap {
           name: interName,
           x: gx,
           y: gy,
-          size: ix === 1 && iy === 1 ? 190 : 140,
+          // The box has to cover the carriageways that meet here; at 140 it
+          // was narrower than the 220px arterials and the painted junction
+          // stopped short of the asphalt it belongs to.
+          size: ix === 1 && iy === 1 ? 260 : 230,
           timer: (ix * 3 + iy * 2) % 12, // staggered timers
           phase: (ix + iy) % 4,
         });
@@ -293,9 +411,9 @@ export class CityMap {
     // existing light controller can ignore these while the map and graph use
     // them as proper routing nodes.
     this.intersections.push(
-      { id: 'inter_roundabout_market', name: 'Круговое движение у рынка', x: 1780, y: 920, size: 180, timer: 0, phase: 2, trafficControlled: false },
-      { id: 'inter_t_port', name: 'Т-перекрёсток у порта', x: 720, y: 820, size: 120, timer: 3, phase: 0, trafficControlled: false },
-      { id: 'inter_t_quarry', name: 'Т-перекрёсток у карьера', x: 2800, y: 2860, size: 120, timer: 6, phase: 2, trafficControlled: false },
+      { id: 'inter_roundabout_market', name: 'Круговое движение у рынка', x: 1800, y: 800, size: 130, timer: 0, phase: 2, trafficControlled: false },
+      { id: 'inter_t_port', name: 'Т-перекрёсток у порта', x: 720, y: 820, size: 110, timer: 3, phase: 0, trafficControlled: false },
+      { id: 'inter_t_quarry', name: 'Т-перекрёсток у карьера', x: 2800, y: 2860, size: 110, timer: 6, phase: 2, trafficControlled: false },
     );
 
     // 2. Points of Interest (POIs) with special functional zones
@@ -318,10 +436,10 @@ export class CityMap {
         name: 'Monolith Construction Site',
         nameRu: 'Стройплощадка «Монолит»',
         type: 'construction',
-        x: 1800,
-        y: 1000,
-        width: 340,
-        height: 260,
+        x: 1835,
+        y: 1166,
+        width: 306,
+        height: 234,
         color: '#eab308',
         icon: 'HardHat',
         description: 'Строящийся жилой комплекс. Требуются постоянные поставки бетона, кирпича и балок.',
@@ -331,7 +449,7 @@ export class CityMap {
         name: 'Commercial Cargo Harbor',
         nameRu: 'Грузовой Морской Порт',
         type: 'port',
-        x: 260,
+        x: 220,
         y: 1800,
         width: 300,
         height: 380,
@@ -383,10 +501,10 @@ export class CityMap {
         name: 'City Auto Workshop & Tuning',
         nameRu: 'Автосервис и Тюнинг Гараж',
         type: 'workshop',
-        x: 1800,
-        y: 2600,
-        width: 300,
-        height: 240,
+        x: 1775,
+        y: 2557,
+        width: 216,
+        height: 173,
         color: '#10b981',
         icon: 'Wrench',
         description: 'Бесплатный ремонт, покраска, замена колёс и выбор любого авто из автопарка!',
@@ -409,10 +527,10 @@ export class CityMap {
         name: 'Mega Logistics Center',
         nameRu: 'Логистический Склад Wildbox',
         type: 'warehouse',
-        x: 2600,
-        y: 2600,
-        width: 320,
-        height: 260,
+        x: 2546,
+        y: 2083,
+        width: 288,
+        height: 234,
         color: '#8b5cf6',
         icon: 'Package',
         description: 'Автоматизированный логистический хаб. Срочные экспресс-доставки товаров.',
@@ -422,8 +540,8 @@ export class CityMap {
         name: 'North Cargo Airport',
         nameRu: 'Грузовой аэропорт «Северный»',
         type: 'airport',
-        x: 3000,
-        y: 980,
+        x: 2712,
+        y: 950,
         width: 420,
         height: 250,
         color: '#38bdf8',
@@ -435,10 +553,10 @@ export class CityMap {
         name: 'East Rail Freight Terminal',
         nameRu: 'Железнодорожный грузовой терминал',
         type: 'rail_terminal',
-        x: 680,
-        y: 430,
-        width: 360,
-        height: 180,
+        x: 232,
+        y: 383,
+        width: 324,
+        height: 162,
         color: '#a78bfa',
         icon: 'TrainFront',
         description: 'Перегрузка контейнеров между вагонами и грузовиками.',
@@ -448,8 +566,8 @@ export class CityMap {
         name: 'Dusty Mile Truck Stop',
         nameRu: 'Придорожный мотель и стоянка',
         type: 'truck_stop',
-        x: 3180,
-        y: 3000,
+        x: 3340,
+        y: 2723,
         width: 300,
         height: 220,
         color: '#f59e0b',
@@ -461,10 +579,10 @@ export class CityMap {
         name: 'Central Freight Market',
         nameRu: 'Центральный грузовой рынок',
         type: 'market',
-        x: 1780,
-        y: 920,
-        width: 300,
-        height: 220,
+        x: 1792,
+        y: 947,
+        width: 216,
+        height: 158,
         color: '#facc15',
         icon: 'Store',
         description: 'Городской рынок с короткими маршрутами, погрузочными карманами и круговым движением.',
@@ -474,8 +592,8 @@ export class CityMap {
         name: 'Pine Ridge Lookout',
         nameRu: 'Смотровая площадка «Сосновый кряж»',
         type: 'lookout',
-        x: 820,
-        y: 3220,
+        x: 941,
+        y: 3308,
         width: 220,
         height: 180,
         color: '#86efac',
@@ -487,8 +605,8 @@ export class CityMap {
         name: 'Lakeside Camp',
         nameRu: 'Лесной лагерь у озера',
         type: 'camp',
-        x: 360,
-        y: 3000,
+        x: 240,
+        y: 2866,
         width: 260,
         height: 190,
         color: '#22c55e',
@@ -504,10 +622,25 @@ export class CityMap {
     // uniform grid of identical crossroads.
     this.generateMapDecorations();
     this.generateScenicRoutes();
+    this.assignRoadDistricts();
     this.buildRoadNetwork();
 
     // 5. Destructibles (Crates, cones, lamps, hydrants, fences, trash cans)
     this.generateDestructibles();
+  }
+
+  /**
+   * districtId was hand-written per road, so full-world spines were labelled
+   * with whatever district happened to be typed next to them. Deriving it from
+   * the centerline midpoint keeps the label meaningful as roads move.
+   */
+  private assignRoadDistricts() {
+    this.roads.forEach((road) => {
+      const mid = road.points[Math.floor(road.points.length / 2)];
+      const district = this.districts.find((candidate) =>
+        Math.abs(mid.x - candidate.x) <= candidate.width / 2 && Math.abs(mid.y - candidate.y) <= candidate.height / 2);
+      if (district) road.districtId = district.id;
+    });
   }
 
   /**
@@ -525,6 +658,20 @@ export class CityMap {
       kind: 'junction' as const,
     })));
     this.roadNodes.push({ id: 'node-airport', x: 3100, y: 1180, kind: 'terminal' });
+
+    // Junctions where the secondary roads meet the arterials. Without these the
+    // port access, the market street, the country route and the quarry bypass
+    // are drawn and driveable but invisible to missions and NPC routing.
+    this.roadNodes.push(
+      { id: 'node-port-west', x: 140, y: 620, kind: 'terminal' },
+      { id: 'node-port-east', x: 980, y: 700, kind: 'junction' },
+      { id: 'node-market-in', x: 1320, y: 800, kind: 'junction' },
+      { id: 'node-market-out', x: 2200, y: 820, kind: 'junction' },
+      { id: 'node-country-west', x: 820, y: 3050, kind: 'junction' },
+      { id: 'node-lookout', x: 2420, y: 3500, kind: 'terminal' },
+      { id: 'node-quarry-west', x: 2500, y: 3000, kind: 'junction' },
+      { id: 'node-quarry-east', x: 3480, y: 3180, kind: 'terminal' },
+    );
 
     const lengthBetween = (a: RoadNetworkNode, b: RoadNetworkNode) => Math.hypot(b.x - a.x, b.y - a.y);
     const nodes = new Map(this.roadNodes.map((node) => [node.id, node]));
@@ -552,6 +699,27 @@ export class CityMap {
     link('node-grid-0-2', 'node-grid-3-2', 'road-ring-south');
     link('node-grid-2-1', 'node-airport', 'road-airport-ramp');
     link('node-airport', 'node-grid-2-1', 'road-airport-exit');
+
+    // Port loop off the northern boulevard.
+    link('node-port-west', 'node-port-east', 'road-port-access');
+    link('node-port-west', 'node-grid-0-0', 'road_h_0');
+    link('node-grid-0-0', 'node-port-east', 'road_h_0');
+
+    // One-way market street from Broadway down to Grand Boulevard.
+    link('node-market-in', 'node-market-out', 'road-market-one-way');
+    link('node-grid-1-0', 'node-market-in', 'road_v_1');
+    link('node-market-in', 'node-grid-1-1', 'road_v_1');
+    link('node-grid-2-0', 'node-market-out', 'road_v_2');
+    link('node-market-out', 'node-grid-2-1', 'road_v_2');
+
+    // Country route to the lookout, and the quarry bypass loop.
+    link('node-country-west', 'node-lookout', 'road-winding-country');
+    link('node-grid-0-3', 'node-country-west', 'road_h_3');
+    link('node-country-west', 'node-grid-1-3', 'road_h_3');
+    link('node-grid-2-3', 'node-quarry-west', 'road_h_3');
+    link('node-quarry-west', 'node-quarry-east', 'road-quarry-service');
+    link('node-grid-3-3', 'node-quarry-east', 'road_h_3');
+
     this.roadEdges = edges;
   }
 
@@ -611,8 +779,14 @@ export class CityMap {
     return [];
   }
 
-  /** Lane centers for the straight driving spines; used by AI tests and tools. */
-  public getLaneCenters(roadId: string, direction: 'north' | 'south' | 'east' | 'west') {
+  /**
+   * Lane centers on a road, offset perpendicular to the local centerline.
+   * Passing `at` picks the nearest point on the polyline; without it the road
+   * start is used. The offsets used to be applied to road.x1/road.y1 alone, so
+   * a bend in the polyline was ignored and every lane center reported the same
+   * point at the road's first vertex.
+   */
+  public getLaneCenters(roadId: string, direction: 'north' | 'south' | 'east' | 'west', at?: RoadPoint) {
     const road = this.roads.find((candidate) => candidate.id === roadId);
     if (!road) return [];
     if (road.directionMode === 'one-way') {
@@ -623,39 +797,56 @@ export class CityMap {
         : (dy >= 0 ? 'south' : 'north');
       if (direction !== allowedDirection) return [];
     }
-    const centers = Array.from({ length: road.lanesPerDirection }, (_, lane) => {
-      const offset = 34 + lane * 54;
-      if (road.isVertical) return { x: direction === 'south' ? road.x1 + offset : road.x1 - offset, y: road.y1 };
-      return { x: road.x1, y: direction === 'east' ? road.y1 + offset : road.y1 - offset };
+
+    let anchor: RoadPoint = road.points[0];
+    let tangent: RoadPoint = { x: road.points[1].x - road.points[0].x, y: road.points[1].y - road.points[0].y };
+    if (at) {
+      let best = Infinity;
+      for (let i = 1; i < road.points.length; i++) {
+        const a = road.points[i - 1];
+        const b = road.points[i];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const lengthSquared = dx * dx + dy * dy || 1;
+        const t = Math.max(0, Math.min(1, ((at.x - a.x) * dx + (at.y - a.y) * dy) / lengthSquared));
+        const point = { x: a.x + t * dx, y: a.y + t * dy };
+        const distance = Math.hypot(at.x - point.x, at.y - point.y);
+        if (distance < best) {
+          best = distance;
+          anchor = point;
+          tangent = { x: dx, y: dy };
+        }
+      }
+    }
+
+    // Right-hand traffic: the driving side is to the right of the travel
+    // heading, so vertical roads offset in x and horizontal roads in y.
+    const length = Math.hypot(tangent.x, tangent.y) || 1;
+    const normalX = -tangent.y / length;
+    const normalY = tangent.x / length;
+    const sign = road.isVertical
+      ? (direction === 'south' ? 1 : -1) * (normalX >= 0 ? 1 : -1)
+      : (direction === 'east' ? 1 : -1) * (normalY >= 0 ? 1 : -1);
+
+    return Array.from({ length: road.lanesPerDirection }, (_, lane) => {
+      const offset = (34 + lane * 54) * sign;
+      return { x: anchor.x + normalX * offset, y: anchor.y + normalY * offset };
     });
-    return centers;
   }
 
   private generateCityBlocks() {
-    // Generate styled buildings and structures in non-POI city block areas
-    const blockRegions = [
-      // Port warehouses and older residential blocks.
-      { minX: 160, maxX: 430, minY: 180, maxY: 390 },
-      { minX: 930, maxX: 1260, minY: 180, maxY: 430 },
-      { minX: 1420, maxX: 1760, minY: 240, maxY: 520 },
-      { minX: 1920, maxX: 2240, minY: 220, maxY: 500 },
-      { minX: 2700, maxX: 2960, minY: 260, maxY: 500 },
-      // Downtown is deliberately denser and irregular.
-      { minX: 1080, maxX: 1270, minY: 850, maxY: 1190 },
-      { minX: 1360, maxX: 1580, minY: 820, maxY: 1210 },
-      { minX: 1880, maxX: 2180, minY: 1120, maxY: 1370 },
-      { minX: 940, maxX: 1180, minY: 1600, maxY: 1950 },
-      { minX: 2360, maxX: 2610, minY: 820, maxY: 1160 },
-      // Residential cul-de-sacs.
-      { minX: 170, maxX: 430, minY: 1680, maxY: 2050 },
-      { minX: 720, maxX: 1030, minY: 2050, maxY: 2220 },
-      { minX: 1100, maxX: 1260, minY: 2420, maxY: 2780 },
-      // Industrial hangars and quarry service compounds.
-      { minX: 2700, maxX: 2980, minY: 1650, maxY: 1960 },
-      { minX: 3160, maxX: 3440, minY: 1650, maxY: 2050 },
-      { minX: 2500, maxX: 2740, minY: 2450, maxY: 2700 },
-      { minX: 3160, maxX: 3480, minY: 2460, maxY: 2740 },
-    ];
+    // City blocks are derived from the road network instead of being listed by
+    // hand. Hand-placed rectangles drifted out of sync every time a road moved:
+    // most of them ended up centred on asphalt, so the placement filter culled
+    // them and whole districts came out empty.
+    const spineX = [520, 1320, 2200, 3040];
+    const spineY = [620, 1450, 2320, 3100];
+    const WORLD_MARGIN = 120;
+    const ARTERIAL_HALF = 110;
+    const BLOCK_INSET = ARTERIAL_HALF + SIDEWALK_APRON + 16;
+
+    const lanesX = [WORLD_MARGIN, ...spineX, WORLD_SIZE - WORLD_MARGIN];
+    const lanesY = [WORLD_MARGIN, ...spineY, WORLD_SIZE - WORLD_MARGIN];
 
     const buildingColors = [
       { base: '#0f172a', roof: '#1e293b', neon: '#38bdf8' },
@@ -665,45 +856,76 @@ export class CityMap {
       { base: '#141e33', roof: '#1e2942', neon: '#a855f7' },
     ];
 
+    const districtAt = (x: number, y: number) => this.districts.find((district) =>
+      Math.abs(x - district.x) <= district.width / 2 && Math.abs(y - district.y) <= district.height / 2);
+
     let bId = 0;
-    blockRegions.forEach((region, rIdx) => {
-      // Create 2 to 4 buildings per block
-      const countX = rIdx % 4 === 0 ? 3 : 2;
-      const countY = rIdx % 5 === 0 ? 1 : 2;
-      const stepW = (region.maxX - region.minX) / countX;
-      const stepH = (region.maxY - region.minY) / countY;
+    for (let cx = 0; cx < lanesX.length - 1; cx++) {
+      for (let cy = 0; cy < lanesY.length - 1; cy++) {
+        const insetLeft = cx === 0 ? 0 : BLOCK_INSET;
+        const insetRight = cx === lanesX.length - 2 ? 0 : BLOCK_INSET;
+        const insetTop = cy === 0 ? 0 : BLOCK_INSET;
+        const insetBottom = cy === lanesY.length - 2 ? 0 : BLOCK_INSET;
 
-      for (let bx = 0; bx < countX; bx++) {
-        for (let by = 0; by < countY; by++) {
-          const bw = stepW - 36;
-          const bh = stepH - 36;
-          const px = region.minX + bx * stepW + 18 + bw / 2;
-          const py = region.minY + by * stepH + 18 + bh / 2;
-          const theme = buildingColors[(rIdx + bx * 2 + by) % buildingColors.length];
+        const minX = lanesX[cx] + insetLeft;
+        const maxX = lanesX[cx + 1] - insetRight;
+        const minY = lanesY[cy] + insetTop;
+        const maxY = lanesY[cy + 1] - insetBottom;
+        const blockW = maxX - minX;
+        const blockH = maxY - minY;
+        if (blockW < 150 || blockH < 150) continue;
 
-          // Leave a broad safety apron beside every driveable corridor. The
-          // visual block can be close to a road, but a building must never
-          // become an invisible collision placed on an NPC lane.
-          const tooCloseToRoad = this.roads.some((road) => {
-            const distance = Math.min(...road.points.map((point) => road.isVertical ? Math.abs(px - point.x) : Math.abs(py - point.y)));
-            return distance < road.width / 2 + 58;
-          });
-          if (tooCloseToRoad) continue;
+        // Downtown gets a tighter, taller grain than the outskirts, which keeps
+        // the GTA-style contrast the districts are meant to communicate.
+        const kind = districtAt((minX + maxX) / 2, (minY + maxY) / 2)?.kind;
+        // Keep the grain fine enough that a single connector road crossing a
+        // block only costs the footprints it actually touches, not the block.
+        const grain = kind === 'downtown' ? 140 : kind === 'residential' ? 165 : kind === 'industrial' ? 205 : 185;
+        const gap = kind === 'downtown' ? 26 : 34;
+        const countX = Math.max(1, Math.min(6, Math.ceil(blockW / grain)));
+        const countY = Math.max(1, Math.min(6, Math.ceil(blockH / grain)));
+        const stepW = blockW / countX;
+        const stepH = blockH / countY;
 
-          this.buildings.push({
-            id: `b_${bId++}`,
-            x: px,
-            y: py,
-            width: bw,
-            height: bh,
-            color: theme.base,
-            roofColor: theme.roof,
-            hasLights: true,
-            neonBorderColor: theme.neon,
-          });
+        for (let bx = 0; bx < countX; bx++) {
+          for (let by = 0; by < countY; by++) {
+            const bw = stepW - gap;
+            const bh = stepH - gap;
+            if (bw < 46 || bh < 46) continue;
+
+            const px = minX + bx * stepW + stepW / 2;
+            const py = minY + by * stepH + stepH / 2;
+            const footprint: MapRect = { x: px, y: py, width: bw, height: bh };
+
+            // Leave a sidewalk apron beside every driveable corridor. A building
+            // must never become an invisible collision on an NPC lane, and the
+            // footprint has to be measured against the real polyline: comparing
+            // a single axis against isolated vertices treats every road as an
+            // infinite line and culls blocks that are far clear of any asphalt.
+            if (this.clearanceToRoads(footprint) < SIDEWALK_APRON) continue;
+
+            // Buildings are solid AABB colliders, so one inside a POI would wall
+            // off a loading zone the missions expect to be driveable.
+            if (this.pois.some((poi) => this.overlapsRect(footprint, poi, 24))) continue;
+            if (this.decorations.some((zone) => zone.type === 'water' && this.overlapsRect(footprint, zone))) continue;
+            if (this.buildings.some((other) => this.overlapsRect(footprint, other))) continue;
+
+            const theme = buildingColors[(cx * 3 + cy * 2 + bx + by) % buildingColors.length];
+            this.buildings.push({
+              id: `b_${bId++}`,
+              x: px,
+              y: py,
+              width: bw,
+              height: bh,
+              color: theme.base,
+              roofColor: theme.roof,
+              hasLights: true,
+              neonBorderColor: theme.neon,
+            });
+          }
         }
       }
-    });
+    }
   }
 
   private generateMapDecorations() {
@@ -784,7 +1006,7 @@ export class CityMap {
         id: 'zone_rail_corridor',
         type: 'rail',
         x: 800,
-        y: 500,
+        y: 383,
         width: 1250,
         height: 70,
         label: 'Железнодорожный коридор',
@@ -792,8 +1014,8 @@ export class CityMap {
       {
         id: 'zone_airport_runway',
         type: 'airport',
-        x: 3020,
-        y: 760,
+        x: 2760,
+        y: 700,
         width: 820,
         height: 230,
         label: 'ВПП грузового аэропорта',
@@ -852,87 +1074,87 @@ export class CityMap {
     ];
   }
 
+  /**
+   * True when a footprint is clear of asphalt, buildings and other props.
+   * Every prop goes through this: a barrel welded into a wall is unreachable
+   * and a cone on a lane is an obstacle nobody placed on purpose.
+   */
+  private isFreeGround(rect: MapRect, apron = SIDEWALK_APRON) {
+    if (rect.x < 40 || rect.y < 40 || rect.x > WORLD_SIZE - 40 || rect.y > WORLD_SIZE - 40) return false;
+    if (this.clearanceToRoads(rect) < apron) return false;
+    if (this.buildings.some((building) => this.overlapsRect(rect, building, 6))) return false;
+    return !this.destructibles.some((prop) => this.overlapsRect(rect, prop, 8));
+  }
+
+  /** Nearest free spot to an anchor, searched on a deterministic spiral. */
+  private findFreeGround(x: number, y: number, size: number, spread: number, apron = SIDEWALK_APRON) {
+    for (let attempt = 0; attempt < 48; attempt++) {
+      const radius = spread * (attempt / 48);
+      const angle = attempt * 2.399963; // golden angle keeps samples spread out
+      const candidate: MapRect = {
+        x: x + Math.cos(angle) * radius,
+        y: y + Math.sin(angle) * radius,
+        width: size,
+        height: size,
+      };
+      if (this.isFreeGround(candidate, apron)) return candidate;
+    }
+    return null;
+  }
+
   private generateDestructibles() {
     let dId = 0;
 
-    // Place traffic cones around intersections and construction site
-    this.intersections.forEach((inter) => {
-      // 4 cones around crosswalk corners
-      const sidewalkOffset = inter.size / 2 + 34;
-      const corners = [
-        { x: inter.x - sidewalkOffset, y: inter.y - sidewalkOffset },
-        { x: inter.x + sidewalkOffset, y: inter.y - sidewalkOffset },
-        { x: inter.x - sidewalkOffset, y: inter.y + sidewalkOffset },
-        { x: inter.x + sidewalkOffset, y: inter.y + sidewalkOffset },
-      ];
-
-      corners.forEach((c) => {
-        this.destructibles.push({
-          id: `prop_cone_${dId++}`,
-          type: 'cone',
-          x: c.x + (Math.random() * 10 - 5),
-          y: c.y + (Math.random() * 10 - 5),
-          angle: Math.random() * Math.PI * 2,
-          width: 10,
-          height: 10,
-          health: 15,
-          maxHealth: 15,
-          isDestroyed: false,
-          respawnTime: 0,
-        });
-      });
-
-      // Fire Hydrants near corners
+    const place = (
+      type: DestructibleObject['type'],
+      idPrefix: string,
+      x: number,
+      y: number,
+      size: number,
+      health: number,
+      spread: number,
+      angle = 0
+    ) => {
+      const spot = this.findFreeGround(x, y, size, spread);
+      if (!spot) return false;
       this.destructibles.push({
-        id: `prop_hydrant_${dId++}`,
-        type: 'hydrant',
-        x: inter.x + inter.size / 2 + 52,
-        y: inter.y - inter.size / 2 - 52,
-        angle: 0,
-        width: 14,
-        height: 14,
-        health: 40,
-        maxHealth: 40,
+        id: `${idPrefix}_${dId++}`,
+        type,
+        x: spot.x,
+        y: spot.y,
+        angle,
+        width: size,
+        height: size,
+        health,
+        maxHealth: health,
         isDestroyed: false,
         respawnTime: 0,
       });
+      return true;
+    };
 
-      // Street Lamps along corners
-      this.destructibles.push(
-        {
-          id: `prop_lamp_${dId++}`,
-          type: 'lamp_pole',
-          x: inter.x - inter.size / 2 - 52,
-          y: inter.y - inter.size / 2 - 52,
-          angle: 0,
-          width: 16,
-          height: 16,
-          health: 80,
-          maxHealth: 80,
-          isDestroyed: false,
-          respawnTime: 0,
-        },
-        {
-          id: `prop_lamp_${dId++}`,
-          type: 'lamp_pole',
-          x: inter.x + inter.size / 2 + 52,
-          y: inter.y + inter.size / 2 + 52,
-          angle: 0,
-          width: 16,
-          height: 16,
-          health: 80,
-          maxHealth: 80,
-          isDestroyed: false,
-          respawnTime: 0,
-        }
-      );
+    // Cones, hydrants and lamps sit on the sidewalk corners of an intersection.
+    // The old offset was derived from inter.size alone, which is narrower than
+    // the arterials that meet there, so every corner prop landed on asphalt.
+    this.intersections.forEach((inter) => {
+      const corner = inter.size / 2 + 46;
+      const corners = [
+        { x: inter.x - corner, y: inter.y - corner },
+        { x: inter.x + corner, y: inter.y - corner },
+        { x: inter.x - corner, y: inter.y + corner },
+        { x: inter.x + corner, y: inter.y + corner },
+      ];
+      corners.forEach((spot) => place('cone', 'prop_cone', spot.x, spot.y, 10, 15, 190, this.rng() * Math.PI * 2));
+      place('hydrant', 'prop_hydrant', inter.x + corner, inter.y - corner, 14, 40, 210);
+      place('lamp_pole', 'prop_lamp', inter.x - corner, inter.y - corner, 16, 80, 210);
+      place('lamp_pole', 'prop_lamp', inter.x + corner, inter.y + corner, 16, 80, 210);
     });
 
-    // Place Wooden Crates and Barrels at Construction Site & Warehouses & Harbor
+    // Crates and barrels around the loading yards.
     const crateAreas = [
-      { x: 1800, y: 1000, count: 18 }, // Construction
-      { x: 260, y: 1800, count: 20 },  // Harbor
-      { x: 2600, y: 2600, count: 16 }, // Warehouse
+      { x: 1835, y: 1166, count: 18 }, // Construction
+      { x: 220, y: 1800, count: 20 },  // Harbor
+      { x: 2546, y: 2083, count: 16 }, // Warehouse
       { x: 1000, y: 1000, count: 12 }, // KAMAZ Depot
       { x: 3340, y: 1800, count: 14 }, // Quarry
     ];
@@ -940,57 +1162,43 @@ export class CityMap {
     crateAreas.forEach((area) => {
       for (let i = 0; i < area.count; i++) {
         const isBarrel = i % 3 === 0;
-        this.destructibles.push({
-          id: `prop_${isBarrel ? 'barrel' : 'crate'}_${dId++}`,
-          type: isBarrel ? 'barrel' : 'crate',
-          x: area.x + (Math.random() * 200 - 100),
-          y: area.y + (Math.random() * 180 - 90),
-          angle: Math.random() * Math.PI * 2,
-          width: isBarrel ? 14 : 18,
-          height: isBarrel ? 14 : 18,
-          health: isBarrel ? 35 : 25,
-          maxHealth: isBarrel ? 35 : 25,
-          isDestroyed: false,
-          respawnTime: 0,
-        });
+        place(
+          isBarrel ? 'barrel' : 'crate',
+          `prop_${isBarrel ? 'barrel' : 'crate'}`,
+          area.x + (this.rng() * 200 - 100),
+          area.y + (this.rng() * 180 - 90),
+          isBarrel ? 14 : 18,
+          isBarrel ? 35 : 25,
+          150,
+          this.rng() * Math.PI * 2
+        );
       }
     });
 
-    // Fences and Road Barriers
-    for (let f = 0; f < 30; f++) {
-      const road = this.roads[f % this.roads.length];
-      const offset = road.width / 2 + 42;
-      const px = road.isVertical ? road.x1 + offset : 400 + f * 95;
-      const py = road.isVertical ? 400 + f * 95 : road.y1 + offset;
+    // Fences and trash cans follow the verge of a road. They used to be laid
+    // out on a straight line derived from the road's first point, which for a
+    // polyline has nothing to do with where the asphalt actually runs.
+    this.roads.forEach((road, roadIndex) => {
+      const verge = road.width / 2 + 40;
+      const steps = road.roadClass === 'arterial' ? 5 : 3;
+      for (let step = 0; step < steps; step++) {
+        const t = (step + 0.5) / steps;
+        const spanIndex = Math.min(road.points.length - 2, Math.floor(t * (road.points.length - 1)));
+        const from = road.points[spanIndex];
+        const to = road.points[spanIndex + 1];
+        const local = t * (road.points.length - 1) - spanIndex;
+        const cxOnRoad = from.x + (to.x - from.x) * local;
+        const cyOnRoad = from.y + (to.y - from.y) * local;
+        const tangentLength = Math.hypot(to.x - from.x, to.y - from.y) || 1;
+        const normalX = -(to.y - from.y) / tangentLength;
+        const normalY = (to.x - from.x) / tangentLength;
+        const side = (roadIndex + step) % 2 === 0 ? 1 : -1;
+        const heading = Math.atan2(to.y - from.y, to.x - from.x);
 
-      this.destructibles.push({
-        id: `prop_fence_${dId++}`,
-        type: 'fence',
-        x: px,
-        y: py,
-        angle: road.isVertical ? Math.PI / 2 : 0,
-        width: 36,
-        height: 10,
-        health: 50,
-        maxHealth: 50,
-        isDestroyed: false,
-        respawnTime: 0,
-      });
-
-      this.destructibles.push({
-        id: `prop_trash_${dId++}`,
-        type: 'trash_can',
-        x: px + 25,
-        y: py + (road.isVertical ? 15 : 25),
-        angle: Math.random(),
-        width: 14,
-        height: 14,
-        health: 30,
-        maxHealth: 30,
-        isDestroyed: false,
-        respawnTime: 0,
-      });
-    }
+        place('fence', 'prop_fence', cxOnRoad + normalX * verge * side, cyOnRoad + normalY * verge * side, 36, 50, 120, heading);
+        place('trash_can', 'prop_trash', cxOnRoad + normalX * (verge + 34) * side, cyOnRoad + normalY * (verge + 34) * side, 14, 30, 120, this.rng());
+      }
+    });
   }
 
   // Update Traffic Lights Cycles (Green -> Yellow -> Red -> Green)

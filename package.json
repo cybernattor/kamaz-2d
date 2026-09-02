@@ -14,6 +14,8 @@
     "test:traffic:adaptive-route": "tsx repros/traffic-adaptive-route.repro.ts",
     "test:map:lanes": "tsx repros/map-lane-direction.repro.ts",
     "test:map:network": "tsx repros/map-network.repro.ts",
+    "test:map:geometry": "tsx repros/map-geometry-integrity.repro.ts",
+    "test:map:placement": "tsx repros/map-static-placement.repro.ts",
     "test:traffic:route-planning": "tsx repros/traffic-route-planning.repro.ts",
     "test:pedestrian-contact": "tsx repros/pedestrian-contact.repro.ts",
     "test:pedestrian-horn": "tsx repros/pedestrian-horn.repro.ts",
