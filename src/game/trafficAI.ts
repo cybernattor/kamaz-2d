@@ -517,9 +517,9 @@ export class TrafficAI {
   }
 
   private resolveNpcSpacing() {
-    // Dense queues can form chains, so repeat the pair pass until each
-    // correction has propagated through the local group.
-    for (let pass = 0; pass < 24; pass += 1) {
+    // Sixteen passes keep dense queues stable while cutting the original
+    // twenty-four-pass O(passes * cars²) hotspot by one third.
+    for (let pass = 0; pass < 16; pass += 1) {
       for (let i = 0; i < this.npcVehicles.length; i += 1) {
         const first = this.npcVehicles[i];
         if (first.health <= 0 || first.isCrashed) continue;
@@ -584,6 +584,20 @@ export class TrafficAI {
             const headingY = Math.sin(yielding.angle);
             yielding.x -= headingX * separation;
             yielding.y -= headingY * separation;
+          } else if (firstAi?.isTurning || secondAi?.isTurning) {
+            // A turning car can be moving almost perpendicular to the other
+            // car, so backing it along its current heading may not increase
+            // the gap at all. Resolve this transient conflict on the contact
+            // normal; the next frame's lane/turn controller takes over.
+            const normalX = distance > 0.001 ? dx / distance : Math.cos(yielding.angle);
+            const normalY = distance > 0.001 ? dy / distance : Math.sin(yielding.angle);
+            if (yielding === first) {
+              yielding.x -= normalX * separation;
+              yielding.y -= normalY * separation;
+            } else {
+              yielding.x += normalX * separation;
+              yielding.y += normalY * separation;
+            }
           } else {
             // At a crossing, move the yielding car backwards along its own
             // lane. Separating along the contact normal can push it sideways

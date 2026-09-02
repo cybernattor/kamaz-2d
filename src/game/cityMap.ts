@@ -68,6 +68,7 @@ export interface Intersection {
   timer: number;
   phase: number; // 0: N-S Green, 1: N-S Yellow, 2: E-W Green, 3: E-W Yellow
   trafficControlled?: boolean;
+  kind?: 'signal' | 'roundabout' | 't-junction';
 }
 
 export interface Building {
@@ -273,19 +274,16 @@ export class CityMap {
       feature: options.feature,
     });
 
-    // Uneven arterial spines. They retain predictable cardinal portions for
-    // current traffic lights, but their endpoints and visual geometry vary by
-    // district instead of producing a 4x4 carpet of identical roads.
+    // Arterial spines stay on the same centerlines used by traffic AI, lane
+    // markers, stop lines and traffic lights. Decorative bends belong to the
+    // secondary roads; bending these four roads made the car lanes visibly
+    // drift away from the geometry that drives them.
     gridX.forEach((gx, idx) => {
       const points: RoadPoint[] = [{ x: gx, y: 160 }];
       gridY.forEach((gy, crossingIndex) => {
-        if (crossingIndex > 0) {
-          const previousY = gridY[crossingIndex - 1];
-          points.push({ x: gx + (idx % 2 === 0 ? -14 : 14), y: (previousY + gy) / 2 });
-        }
         points.push({ x: gx, y: gy });
       });
-      points.push({ x: gx + (idx % 2 === 0 ? -12 : 12), y: WORLD_SIZE - 130 });
+      points.push({ x: gx, y: WORLD_SIZE - 130 });
       this.roads.push({
         ...road(`road_v_${idx}`, avenueNamesX[idx], points, 'arterial', 2, idx === 0 ? 50 : 60, idx < 2 ? 'district-residential' : 'district-industrial', {
           isVertical: true,
@@ -297,13 +295,9 @@ export class CityMap {
     gridY.forEach((gy, idy) => {
       const points: RoadPoint[] = [{ x: 140, y: gy }];
       gridX.forEach((gx, crossingIndex) => {
-        if (crossingIndex > 0) {
-          const previousX = gridX[crossingIndex - 1];
-          points.push({ x: (previousX + gx) / 2, y: gy + (idy % 2 === 0 ? 14 : -14) });
-        }
         points.push({ x: gx, y: gy });
       });
-      points.push({ x: WORLD_SIZE - 120, y: gy + (idy % 2 === 0 ? 12 : -12) });
+      points.push({ x: WORLD_SIZE - 120, y: gy });
       this.roads.push({
         ...road(`road_h_${idy}`, avenueNamesY[idy], points, 'arterial', 2, idy === 0 ? 50 : 60, idy < 2 ? 'district-downtown' : 'district-desert', {
           isVertical: false,
@@ -1247,17 +1241,20 @@ export class CityMap {
     });
   }
 
-  // Find nearest street name by coordinate for the HUD header (e.g. "Grand Boulevard", "Broadway Avenue")
+  // Find the nearest street by the actual centerline, including bends and
+  // ramps. Comparing only x/y to the first point made the HUD name disagree
+  // with the road shown under the vehicle.
   public getStreetNameAt(x: number, y: number): string {
     let nearestDist = Infinity;
     let nearestName = 'Grand Boulevard';
 
     this.roads.forEach((road) => {
-      let dist = 0;
-      if (road.isVertical) {
-        dist = Math.abs(x - road.x1);
-      } else {
-        dist = Math.abs(y - road.y1);
+      let dist = Infinity;
+      for (let i = 1; i < road.points.length; i += 1) {
+        dist = Math.min(
+          dist,
+          pointToSegment(x, y, road.points[i - 1].x, road.points[i - 1].y, road.points[i].x, road.points[i].y)
+        );
       }
 
       if (dist < nearestDist) {

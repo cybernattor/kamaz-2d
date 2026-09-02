@@ -85,31 +85,6 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
         ctx.fillText(district.name, x + 12, y + 20);
       }
 
-      // Road centerline polylines preserve bridges, ramps, ring roads and
-      // the winding country route in the overview.
-      for (const road of map.roads) {
-        if (road.points.length < 2) continue;
-        ctx.save();
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.strokeStyle = road.roadClass === 'dirt' ? '#a16207' : road.roadClass === 'highway' ? '#cbd5e1' : '#475569';
-        ctx.lineWidth = road.roadClass === 'dirt' ? 5 : road.lanesPerDirection === 2 ? 13 : 8;
-        ctx.beginPath();
-        road.points.forEach((point, index) => {
-          const x = toMapCoord(point.x);
-          const y = toMapCoord(point.y);
-          if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        });
-        ctx.stroke();
-        if (road.feature === 'bridge' || road.feature === 'tunnel' || road.feature === 'rail_crossing') {
-          ctx.strokeStyle = road.feature === 'bridge' ? '#38bdf8' : road.feature === 'tunnel' ? '#94a3b8' : '#facc15';
-          ctx.lineWidth = 2;
-          ctx.setLineDash([8, 6]);
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
-
       // Districts make the overview readable: the city is not only a grid
       // of roads, it also has water, parks, a plaza and an industrial yard.
       for (const zone of map.decorations) {
@@ -136,6 +111,31 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
         ctx.strokeStyle = zone.type === 'water' ? '#38bdf8' : '#4ade80';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(x, y, width, height);
+      }
+
+      // Keep the overview draw order identical to the driving scene: zones are
+      // ground decoration, while roads remain the readable top layer.
+      for (const road of map.roads) {
+        if (road.points.length < 2) continue;
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = road.roadClass === 'dirt' ? '#a16207' : road.roadClass === 'highway' ? '#cbd5e1' : '#475569';
+        ctx.lineWidth = road.roadClass === 'dirt' ? 5 : road.lanesPerDirection === 2 ? 13 : 8;
+        ctx.beginPath();
+        road.points.forEach((point, index) => {
+          const x = toMapCoord(point.x);
+          const y = toMapCoord(point.y);
+          if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        if (road.feature === 'bridge' || road.feature === 'tunnel' || road.feature === 'rail_crossing') {
+          ctx.strokeStyle = road.feature === 'bridge' ? '#38bdf8' : road.feature === 'tunnel' ? '#94a3b8' : '#facc15';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 6]);
+          ctx.stroke();
+        }
+        ctx.restore();
       }
 
       // Scenic dirt routes break up the avenue grid and show where a vehicle

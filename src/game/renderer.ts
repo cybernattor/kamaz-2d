@@ -23,6 +23,7 @@ export class GameRenderer {
   // Day/Night time factor (0 = Night 00:00, 0.5 = Noon 12:00, 1.0 = Night 24:00)
   public timeOfDay = 0.5; // Starts at Noon (12:00) as in screenshot
   public isNightMode = false;
+  private viewBounds = { left: 0, top: 0, right: WORLD_SIZE, bottom: WORLD_SIZE };
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
@@ -52,6 +53,14 @@ export class GameRenderer {
     const follow = 1 - Math.exp(-9 * frameDelta);
     this.cameraX += (focusX - this.cameraX) * follow;
     this.cameraY += (focusY - this.cameraY) * follow;
+    const viewHalfWidth = canvasWidth / (2 * this.zoom);
+    const viewHalfHeight = canvasHeight / (2 * this.zoom);
+    this.viewBounds = {
+      left: this.cameraX - viewHalfWidth - 160,
+      top: this.cameraY - viewHalfHeight - 160,
+      right: this.cameraX + viewHalfWidth + 160,
+      bottom: this.cameraY + viewHalfHeight + 160,
+    };
 
     ctx.save();
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -168,6 +177,7 @@ export class GameRenderer {
 
   private renderMapDecorations(ctx: CanvasRenderingContext2D, decorations: MapDecoration[]) {
     decorations.forEach((zone) => {
+      if (!this.isVisible(zone.x, zone.y, zone.width, zone.height)) return;
       const left = zone.x - zone.width / 2;
       const top = zone.y - zone.height / 2;
       const right = zone.x + zone.width / 2;
@@ -316,6 +326,8 @@ export class GameRenderer {
   private renderScenicRoutes(ctx: CanvasRenderingContext2D, routes: MapTrail[]) {
     routes.forEach((route) => {
       if (route.points.length < 2) return;
+      const routeCenter = route.points[Math.floor(route.points.length / 2)];
+      if (!this.isVisible(routeCenter.x, routeCenter.y, 420, 420)) return;
       ctx.save();
       ctx.strokeStyle = '#a16207';
       ctx.lineWidth = 24;
@@ -415,6 +427,40 @@ export class GameRenderer {
       ctx.save();
       const half = inter.size / 2;
 
+      if (inter.trafficControlled === false) {
+        // Uncontrolled landmarks are not signalized four-way junctions. A
+        // square zebra template here made the market roundabout and T-junctions
+        // look like extra roads that do not exist.
+        ctx.fillStyle = '#334155';
+        ctx.beginPath();
+        if (inter.kind === 'roundabout' || inter.id.includes('roundabout')) {
+          ctx.arc(inter.x, inter.y, half, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#64748b';
+          ctx.lineWidth = 5;
+          ctx.stroke();
+          ctx.fillStyle = '#14532d';
+          ctx.beginPath();
+          ctx.arc(inter.x, inter.y, Math.max(18, half * 0.48), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#facc15';
+          ctx.lineWidth = 3;
+          ctx.setLineDash([10, 8]);
+          ctx.beginPath();
+          ctx.arc(inter.x, inter.y, Math.max(26, half * 0.7), 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else {
+          ctx.roundRect(inter.x - half, inter.y - half, inter.size, inter.size, 18);
+          ctx.fill();
+          ctx.strokeStyle = '#64748b';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+        ctx.restore();
+        return;
+      }
+
       // Center intersection asphalt
       ctx.fillStyle = '#1e2530';
       ctx.fillRect(inter.x - half, inter.y - half, inter.size, inter.size);
@@ -470,6 +516,7 @@ export class GameRenderer {
     targetPoi: PointOfInterest | null
   ) {
     pois.forEach((poi) => {
+      if (!this.isVisible(poi.x, poi.y, poi.width, poi.height)) return;
       ctx.save();
       const isTarget = targetPoi?.id === poi.id;
 
@@ -505,6 +552,7 @@ export class GameRenderer {
 
   private renderBuildings(ctx: CanvasRenderingContext2D, buildings: Building[]) {
     buildings.forEach((b) => {
+      if (!this.isVisible(b.x, b.y, b.width, b.height)) return;
       ctx.save();
       // Drop Shadow
       ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
@@ -548,6 +596,7 @@ export class GameRenderer {
   private renderDestructibles(ctx: CanvasRenderingContext2D, destructibles: DestructibleObject[]) {
     destructibles.forEach((obj) => {
       if (obj.isDestroyed) return;
+      if (!this.isVisible(obj.x, obj.y, obj.width + 24, obj.height + 24)) return;
 
       ctx.save();
       ctx.translate(obj.x, obj.y);
@@ -626,6 +675,7 @@ export class GameRenderer {
 
   private renderTrafficLights(ctx: CanvasRenderingContext2D, lights: TrafficLight[]) {
     lights.forEach((tl) => {
+      if (!this.isVisible(tl.x, tl.y, 30, 30)) return;
       ctx.save();
       ctx.translate(tl.x, tl.y);
 
@@ -684,12 +734,13 @@ export class GameRenderer {
   ) {
     // Render NPC & Local Player vehicles
     vehicles.forEach((v) => {
+      if (!this.isVisible(v.x, v.y, 100, 100)) return;
       this.drawVehicleBody(ctx, v);
     });
 
     // Render Remote Multiplayer vehicles
     remotePlayers.forEach((rp) => {
-      if (rp.inVehicle) {
+      if (rp.inVehicle && this.isVisible(rp.x, rp.y, 100, 100)) {
         const dummy: VehicleInstance = {
           id: rp.id,
           type: rp.vehicleType,
@@ -952,6 +1003,7 @@ export class GameRenderer {
   // Render Pedestrians ("человечки") with walking animations and speech bubbles
   private renderPedestrians(ctx: CanvasRenderingContext2D, pedestrians: Pedestrian[]) {
     pedestrians.forEach((ped) => {
+      if (!this.isVisible(ped.x, ped.y, 50, 50)) return;
       ctx.save();
       ctx.translate(ped.x, ped.y);
       ctx.rotate(ped.angle);
@@ -1109,7 +1161,7 @@ export class GameRenderer {
 
     // 2. Street Lamps circular light pools
     destructibles.forEach((obj) => {
-      if (obj.type === 'lamp_pole' && !obj.isDestroyed) {
+      if (obj.type === 'lamp_pole' && !obj.isDestroyed && this.isVisible(obj.x, obj.y, 180, 180)) {
         const rad = ctx.createRadialGradient(obj.x, obj.y, 5, obj.x, obj.y, 90);
         rad.addColorStop(0, 'rgba(254, 240, 138, 0.22)');
         rad.addColorStop(0.5, 'rgba(254, 240, 138, 0.07)');
@@ -1168,6 +1220,13 @@ export class GameRenderer {
     drawCone(rightOriginX, rightOriginY);
 
     ctx.restore();
+  }
+
+  private isVisible(x: number, y: number, width: number, height: number) {
+    return x + width / 2 >= this.viewBounds.left
+      && x - width / 2 <= this.viewBounds.right
+      && y + height / 2 >= this.viewBounds.top
+      && y - height / 2 <= this.viewBounds.bottom;
   }
 
   private renderParticles(ctx: CanvasRenderingContext2D, particles: Particle[]) {

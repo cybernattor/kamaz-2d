@@ -481,8 +481,11 @@ export class PhysicsEngine {
 
         const pdx = prop.x - v1.x;
         const pdy = prop.y - v1.y;
-        const pDist = Math.hypot(pdx, pdy);
         const hitDist = (cfg1.length * 0.42) + prop.width * 0.75;
+        // Cheap AABB broad-phase avoids a square-root for almost every prop;
+        // only objects close enough to touch need the exact circle test.
+        if (Math.abs(pdx) >= hitDist || Math.abs(pdy) >= hitDist) continue;
+        const pDist = Math.hypot(pdx, pdy);
 
         if (pDist < hitDist) {
           const hitSpeed = Math.abs(v1.speed);
@@ -539,6 +542,7 @@ export class PhysicsEngine {
         const lateral = -pedDx * Math.sin(v1.angle) + pedDy * Math.cos(v1.angle);
         const frontReach = cfg1.length / 2 + 5;
         const sideReach = cfg1.width / 2 + 5;
+        if (Math.abs(pedDx) >= frontReach + sideReach || Math.abs(pedDy) >= frontReach + sideReach) continue;
 
         if (
           Math.abs(forward) < frontReach &&
