@@ -26,10 +26,15 @@ const TURN_SIGNALS = new Set(['none', 'left', 'right', 'hazard']);
  *  clients know about and reject ids that were never generated. */
 const knownDestructibleIds = new Set(new CityMap().destructibles.map((prop) => prop.id));
 
+/**
+ * Only a real, finite JSON number is accepted; anything else keeps the previous
+ * value. Coercing instead would turn `null` into 0 — and NaN serialises to
+ * `null` over the wire, so a client glitching its physics teleported to the
+ * corner of the map rather than holding position.
+ */
 const clampNumber = (value: unknown, min: number, max: number, fallback: number) => {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(max, Math.max(min, parsed));
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
 };
 
 const clampText = (value: unknown, maxLength: number) =>

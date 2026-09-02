@@ -105,7 +105,9 @@ async function main() {
     }
 
     // 3. Garbage must not propagate. A single NaN out of the physics used to be
-    // copied straight into every other client's renderer.
+    // copied straight into every other client's renderer. NaN also serialises
+    // to null over the wire, so the position must hold rather than coerce to 0.
+    const heldX = clean?.x;
     b.messages.length = 0;
     alpha.send(JSON.stringify({
       type: 'update', x: NaN, y: 'abc', angle: null, speed: 1e12, steering: undefined,
@@ -124,6 +126,9 @@ async function main() {
       }
       if (typeof dirty.x === 'number' && (dirty.x < 0 || dirty.x > 3600)) {
         failures.push(`snapshot x escaped the world bounds: ${dirty.x}`);
+      }
+      if (dirty.x !== heldX) {
+        failures.push(`a null coordinate moved the player from ${heldX} to ${dirty.x} instead of holding`);
       }
       if (typeof dirty.condition === 'number' && dirty.condition > 100) {
         failures.push(`condition was not clamped: ${dirty.condition}`);
