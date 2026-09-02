@@ -1,0 +1,6 @@
+{
+  "name": "KAMAZ City Simulator 2D",
+  "description": "2D top-down open world driving sandbox featuring realistic physics, KAMAZ and city vehicles, pedestrians, destructible environments, missions, and multiplayer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
