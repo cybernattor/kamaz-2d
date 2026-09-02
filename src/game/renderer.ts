@@ -24,6 +24,8 @@ export class GameRenderer {
   public timeOfDay = 0.5; // Starts at Noon (12:00) as in screenshot
   public isNightMode = false;
   private viewBounds = { left: 0, top: 0, right: WORLD_SIZE, bottom: WORLD_SIZE };
+  private staticScene: HTMLCanvasElement | null = null;
+  private staticSceneMap: CityMap | null = null;
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
@@ -61,6 +63,7 @@ export class GameRenderer {
       right: this.cameraX + viewHalfWidth + 160,
       bottom: this.cameraY + viewHalfHeight + 160,
     };
+    this.ensureStaticScene(cityMap);
 
     ctx.save();
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -70,26 +73,13 @@ export class GameRenderer {
     ctx.scale(this.zoom, this.zoom);
     ctx.translate(-this.cameraX, -this.cameraY);
 
-    // 2. Render Ground Base (Grass & Suburbs)
-    this.renderGround(ctx);
-
-    // 2a. Render distinct districts before roads and buildings.
-    this.renderDistricts(ctx, cityMap.districts);
-    this.renderMapDecorations(ctx, cityMap.decorations);
-    this.renderScenicRoutes(ctx, cityMap.scenicRoutes);
-
-    // 3. Render Roads, Lane Markings & Crosswalks
-    this.renderRoads(ctx, cityMap.roads);
-    this.renderIntersections(ctx, cityMap);
-
-    // 4. Render POI Grounds & Parking Stalls
-    this.renderPOIs(ctx, cityMap.pois, targetPoi);
+    // Static geometry is rendered once to an offscreen canvas. Only the
+    // visible crop is copied each frame; moving objects remain on the live
+    // canvas below it.
+    this.drawStaticScene(ctx, canvasWidth, canvasHeight);
 
     // 5. Render Skid Marks
     this.renderSkidMarks(ctx, skidMarks);
-
-    // 6. Render Buildings
-    this.renderBuildings(ctx, cityMap.buildings);
 
     // 7. Render Destructible Props
     this.renderDestructibles(ctx, destructibles);
@@ -129,6 +119,52 @@ export class GameRenderer {
     }
 
     ctx.restore();
+  }
+
+  private ensureStaticScene(cityMap: CityMap) {
+    if (this.staticSceneMap === cityMap && this.staticScene) return;
+
+    const scene = document.createElement('canvas');
+    scene.width = WORLD_SIZE;
+    scene.height = WORLD_SIZE;
+    const sceneCtx = scene.getContext('2d');
+    if (!sceneCtx) return;
+
+    const previousBounds = this.viewBounds;
+    this.viewBounds = { left: 0, top: 0, right: WORLD_SIZE, bottom: WORLD_SIZE };
+    this.renderGround(sceneCtx);
+    this.renderDistricts(sceneCtx, cityMap.districts);
+    this.renderMapDecorations(sceneCtx, cityMap.decorations);
+    this.renderScenicRoutes(sceneCtx, cityMap.scenicRoutes);
+    this.renderRoads(sceneCtx, cityMap.roads);
+    this.renderIntersections(sceneCtx, cityMap);
+    this.renderPOIs(sceneCtx, cityMap.pois, null);
+    this.renderBuildings(sceneCtx, cityMap.buildings);
+    this.viewBounds = previousBounds;
+
+    this.staticScene = scene;
+    this.staticSceneMap = cityMap;
+  }
+
+  private drawStaticScene(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) {
+    if (!this.staticScene) return;
+
+    const scale = this.zoom;
+    const sourceWidth = Math.min(WORLD_SIZE, canvasWidth / scale + 320);
+    const sourceHeight = Math.min(WORLD_SIZE, canvasHeight / scale + 320);
+    const sourceX = Math.max(0, Math.min(WORLD_SIZE - sourceWidth, this.cameraX - sourceWidth / 2));
+    const sourceY = Math.max(0, Math.min(WORLD_SIZE - sourceHeight, this.cameraY - sourceHeight / 2));
+    ctx.drawImage(
+      this.staticScene,
+      sourceX,
+      sourceY,
+      sourceWidth,
+      sourceHeight,
+      sourceX,
+      sourceY,
+      sourceWidth,
+      sourceHeight
+    );
   }
 
   private renderGround(ctx: CanvasRenderingContext2D) {

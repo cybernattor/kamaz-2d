@@ -340,6 +340,7 @@ export default function App() {
     let frameCount = 0;
     let lastFpsUpdate = performance.now();
     let lastHudUpdate = performance.now();
+    let lastStreetName = streetName;
     const handleVehicleCrash = (
       firstVehicle: VehicleInstance,
       secondVehicle: VehicleInstance | undefined,
@@ -367,9 +368,9 @@ export default function App() {
         lastFpsUpdate = now;
       }
       // The simulation lives in refs for 60 FPS performance, so refresh only
-      // the HUD-facing React tree at a steady 20 FPS. This keeps the speed
+      // the HUD-facing React tree at a steady 10 FPS. This keeps the speed
       // readout responsive without rerendering the whole app every frame.
-      if (now - lastHudUpdate > 50) {
+      if (now - lastHudUpdate > 100) {
         setHudTick((tick) => tick + 1);
         lastHudUpdate = now;
       }
@@ -496,7 +497,10 @@ export default function App() {
 
       // 7. Update HUD Info (Street Name)
       const currentStreet = cityMapRef.current.getStreetNameAt(playerPos.x, playerPos.y);
-      setStreetName(currentStreet);
+      if (currentStreet !== lastStreetName) {
+        lastStreetName = currentStreet;
+        setStreetName(currentStreet);
+      }
 
       // 8. Multiplayer Telemetry Broadcast
       if (multiplayerRef.current && multiplayerRef.current.status === 'connected') {

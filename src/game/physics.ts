@@ -10,6 +10,7 @@ import {
 import { KMH_TO_WORLD_SPEED, VEHICLE_CONFIGS } from './vehicleConfigs';
 import { Building, CityMap, WORLD_SIZE } from './cityMap';
 import { sound } from '../audio/soundEngine';
+import { SpatialHash } from './spatialHash';
 
 export interface CollisionEvent {
   type: 'vehicle_vehicle' | 'vehicle_prop' | 'vehicle_ped' | 'vehicle_building';
@@ -31,6 +32,34 @@ export class PhysicsEngine {
   private maxSkidMarks = 500;
   private maxParticles = 800;
   private lastImpactTime: Map<string, number> = new Map();
+  private buildingIndex = new SpatialHash<Building>(256);
+  private propIndex = new SpatialHash<DestructibleObject>(256);
+  private pedestrianIndex = new SpatialHash<Pedestrian>(256);
+  private indexedBuildings?: Building[];
+  private indexedDestructibles?: DestructibleObject[];
+  private indexedPedestrians?: Pedestrian[];
+
+  private ensureCollisionIndexes(
+    destructibles: DestructibleObject[],
+    pedestrians: Pedestrian[],
+    buildings: Building[]
+  ) {
+    if (this.indexedBuildings !== buildings) {
+      this.buildingIndex.clear();
+      this.buildingIndex.insertAll(buildings);
+      this.indexedBuildings = buildings;
+    }
+    if (this.indexedDestructibles !== destructibles || this.indexedDestructibles?.length !== destructibles.length) {
+      this.propIndex.clear();
+      this.propIndex.insertAll(destructibles);
+      this.indexedDestructibles = destructibles;
+    }
+    if (this.indexedPedestrians !== pedestrians || this.indexedPedestrians?.length !== pedestrians.length) {
+      this.pedestrianIndex.clear();
+      this.pedestrianIndex.insertAll(pedestrians);
+      this.indexedPedestrians = pedestrians;
+    }
+  }
 
   // Update Player Vehicle with Realistic Kinematics & Physics
   public updatePlayerVehicle(
@@ -294,6 +323,7 @@ export class PhysicsEngine {
     onVehicleCrash?: VehicleCrashHandler
   ) {
     const now = performance.now();
+    this.ensureCollisionIndexes(destructibles, pedestrians, buildings);
 
     // Prevent one physical contact from being reported again on every frame
     // while a ragdoll is still close to the bumper.
@@ -442,7 +472,9 @@ export class PhysicsEngine {
       }
 
       // 2. Vehicle vs Buildings (Solid bounding walls)
-      for (const b of buildings) {
+      // Buildings are static and the city is bounded; a conservative radius
+      // keeps the broad phase cheap without ever missing a nearby wall.
+      for (const b of this.buildingIndex.queryRadius(v1.x, v1.y, 420)) {
         const halfW = b.width / 2 + cfg1.width * 0.45;
         const halfH = b.height / 2 + cfg1.length * 0.35;
 
@@ -476,7 +508,7 @@ export class PhysicsEngine {
       }
 
       // 3. Vehicle vs Destructibles (Crates, cones, lamps, hydrants, fences, barrels)
-      for (const prop of destructibles) {
+      for (const prop of this.propIndex.queryRadius(v1.x, v1.y, 160)) {
         if (prop.isDestroyed) continue;
 
         const pdx = prop.x - v1.x;
@@ -530,7 +562,7 @@ export class PhysicsEngine {
       }
 
       // 4. Vehicle vs Pedestrians ("человечки")
-      for (const ped of pedestrians) {
+      for (const ped of this.pedestrianIndex.queryRadius(v1.x, v1.y, 100)) {
         if ((ped.vehicleHitCooldown || 0) > 0) continue;
         const pedDx = ped.x - v1.x;
         const pedDy = ped.y - v1.y;

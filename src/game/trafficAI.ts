@@ -1,6 +1,7 @@
 import { Pedestrian, VehicleInstance } from '../types';
 import { CityMap, Intersection, RoadSegment, WORLD_SIZE } from './cityMap';
 import { KMH_TO_WORLD_SPEED, VEHICLE_CONFIGS } from './vehicleConfigs';
+import { SpatialHash } from './spatialHash';
 
 export type TrafficDirection = 'north' | 'south' | 'east' | 'west';
 
@@ -520,13 +521,17 @@ export class TrafficAI {
     // Sixteen passes keep dense queues stable while cutting the original
     // twenty-four-pass O(passes * cars²) hotspot by one third.
     for (let pass = 0; pass < 16; pass += 1) {
+      const nearby = new SpatialHash<VehicleInstance>(256);
+      nearby.insertAll(this.npcVehicles);
+      const order = new Map(this.npcVehicles.map((vehicle, index) => [vehicle.id, index]));
       for (let i = 0; i < this.npcVehicles.length; i += 1) {
         const first = this.npcVehicles[i];
         if (first.health <= 0 || first.isCrashed) continue;
         const firstConfig = VEHICLE_CONFIGS[first.type] || VEHICLE_CONFIGS.sedan;
 
-        for (let j = i + 1; j < this.npcVehicles.length; j += 1) {
-          const second = this.npcVehicles[j];
+        for (const second of nearby.queryRadius(first.x, first.y, 220)) {
+          const j = order.get(second.id);
+          if (j === undefined || j <= i) continue;
           if (second.health <= 0 || second.isCrashed) continue;
           const secondConfig = VEHICLE_CONFIGS[second.type] || VEHICLE_CONFIGS.sedan;
           const dx = second.x - first.x;
