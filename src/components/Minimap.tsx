@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { PointOfInterest, VehicleInstance } from '../types';
-import { CityMap } from '../game/cityMap';
+import { CityMap, WORLD_SIZE } from '../game/cityMap';
 
 interface MinimapProps {
   playerX: number;
@@ -52,9 +52,61 @@ export const Minimap: React.FC<MinimapProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const staticWorldScale = MAP_SIZE / RADAR_RANGE;
+    const staticCanvas = document.createElement('canvas');
+    staticCanvas.width = Math.ceil(WORLD_SIZE * staticWorldScale * dpr);
+    staticCanvas.height = Math.ceil(WORLD_SIZE * staticWorldScale * dpr);
+    const staticContext = staticCanvas.getContext('2d');
+    let staticMap: CityMap | null = null;
+
+    const rebuildStatic = (map: CityMap) => {
+      if (!staticContext) return;
+      staticContext.setTransform(dpr * staticWorldScale, 0, 0, dpr * staticWorldScale, 0, 0);
+      staticContext.clearRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+      for (const zone of map.decorations) {
+        staticContext.fillStyle = zone.type === 'water' || zone.type === 'beach'
+          ? 'rgba(14, 116, 144, 0.5)'
+          : zone.type === 'industrial' || zone.type === 'airport'
+          ? 'rgba(82, 82, 91, 0.45)'
+          : zone.type === 'desert'
+          ? 'rgba(146, 84, 24, 0.52)'
+          : zone.type === 'hills'
+          ? 'rgba(54, 83, 20, 0.5)'
+          : zone.type === 'rail'
+          ? 'rgba(71, 85, 105, 0.5)'
+          : zone.type === 'plaza'
+          ? 'rgba(30, 64, 175, 0.42)'
+          : 'rgba(22, 101, 52, 0.5)';
+        staticContext.fillRect(zone.x - zone.width / 2, zone.y - zone.height / 2, zone.width, zone.height);
+      }
+      staticContext.lineCap = 'round';
+      staticContext.lineJoin = 'round';
+      for (const road of map.roads) {
+        if (road.points.length < 2) continue;
+        staticContext.strokeStyle = road.roadClass === 'dirt' ? 'rgba(180, 126, 58, 0.9)' : road.roadClass === 'highway' ? 'rgba(148, 163, 184, 0.9)' : 'rgba(71, 85, 105, 0.78)';
+        staticContext.lineWidth = road.roadClass === 'dirt' ? 2 : road.lanesPerDirection === 2 ? 5 : 3;
+        staticContext.beginPath();
+        road.points.forEach((point, index) => {
+          if (index === 0) staticContext.moveTo(point.x, point.y); else staticContext.lineTo(point.x, point.y);
+        });
+        staticContext.stroke();
+      }
+      for (const route of map.scenicRoutes) {
+        if (route.points.length < 2) continue;
+        staticContext.strokeStyle = 'rgba(214, 179, 122, 0.8)';
+        staticContext.lineWidth = 2.5;
+        staticContext.beginPath();
+        staticContext.moveTo(route.points[0].x, route.points[0].y);
+        route.points.slice(1).forEach((point) => staticContext.lineTo(point.x, point.y));
+        staticContext.stroke();
+      }
+      staticMap = map;
+    };
+
     const smooth = { ...playerRef.current };
     let animationFrameId = 0;
     let lastFrame = performance.now();
+    let lastDrawAt = 0;
 
     const lerpAngle = (from: number, to: number, amount: number) => {
       const difference = Math.atan2(Math.sin(to - from), Math.cos(to - from));
@@ -62,6 +114,11 @@ export const Minimap: React.FC<MinimapProps> = ({
     };
 
     const draw = (now: number) => {
+      if (now - lastDrawAt < 66) {
+        animationFrameId = requestAnimationFrame(draw);
+        return;
+      }
+      lastDrawAt = now;
       const frameDelta = Math.min((now - lastFrame) / 1000, 0.1);
       lastFrame = now;
       const follow = 1 - Math.exp(-12 * frameDelta);
@@ -101,58 +158,21 @@ export const Minimap: React.FC<MinimapProps> = ({
       ctx.lineTo(MAP_SIZE / 2, MAP_SIZE);
       ctx.stroke();
 
-      // Districts first: the radar should communicate where the player is,
-      // not only show a stack of identical perpendicular lines.
-      for (const zone of map.decorations) {
-        const topLeft = toRadar(zone.x - zone.width / 2, zone.y - zone.height / 2);
-        const bottomRight = toRadar(zone.x + zone.width / 2, zone.y + zone.height / 2);
-        ctx.fillStyle = zone.type === 'water' || zone.type === 'beach'
-          ? 'rgba(14, 116, 144, 0.5)'
-          : zone.type === 'industrial' || zone.type === 'airport'
-          ? 'rgba(82, 82, 91, 0.45)'
-          : zone.type === 'desert'
-          ? 'rgba(146, 84, 24, 0.52)'
-          : zone.type === 'hills'
-          ? 'rgba(54, 83, 20, 0.5)'
-          : zone.type === 'rail'
-          ? 'rgba(71, 85, 105, 0.5)'
-          : zone.type === 'plaza'
-          ? 'rgba(30, 64, 175, 0.42)'
-          : 'rgba(22, 101, 52, 0.5)';
-        ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
-      }
-
-      // Roads are centerline polylines, including the ring road, ramps and
-      // the winding country route.
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      for (const road of map.roads) {
-        if (road.points.length < 2) continue;
-        ctx.strokeStyle = road.roadClass === 'dirt' ? 'rgba(180, 126, 58, 0.9)' : road.roadClass === 'highway' ? 'rgba(148, 163, 184, 0.9)' : 'rgba(71, 85, 105, 0.78)';
-        ctx.lineWidth = road.roadClass === 'dirt' ? 2 : road.lanesPerDirection === 2 ? 5 : 3;
-        ctx.beginPath();
-        road.points.forEach((point, index) => {
-          const pos = toRadar(point.x, point.y);
-          if (index === 0) ctx.moveTo(pos.x, pos.y); else ctx.lineTo(pos.x, pos.y);
-        });
-        ctx.stroke();
-      }
-
-      for (const route of map.scenicRoutes) {
-        if (route.points.length < 2) continue;
-        ctx.save();
-        ctx.strokeStyle = 'rgba(214, 179, 122, 0.8)';
-        ctx.lineWidth = 2.5;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        const first = toRadar(route.points[0].x, route.points[0].y);
-        ctx.moveTo(first.x, first.y);
-        route.points.slice(1).forEach((point) => {
-          const pos = toRadar(point.x, point.y);
-          ctx.lineTo(pos.x, pos.y);
-        });
-        ctx.stroke();
-        ctx.restore();
+      if (map !== staticMap) rebuildStatic(map);
+      if (staticContext) {
+        const sourceX = Math.max(0, Math.min(WORLD_SIZE - RADAR_RANGE, smooth.x - RADAR_RANGE / 2));
+        const sourceY = Math.max(0, Math.min(WORLD_SIZE - RADAR_RANGE, smooth.y - RADAR_RANGE / 2));
+        ctx.drawImage(
+          staticCanvas,
+          sourceX * staticWorldScale * dpr,
+          sourceY * staticWorldScale * dpr,
+          RADAR_RANGE * staticWorldScale * dpr,
+          RADAR_RANGE * staticWorldScale * dpr,
+          0,
+          0,
+          MAP_SIZE,
+          MAP_SIZE
+        );
       }
 
       // Traffic dots.

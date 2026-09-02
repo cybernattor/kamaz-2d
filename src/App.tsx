@@ -16,6 +16,7 @@ import { PhysicsEngine } from './game/physics';
 import { TrafficAI } from './game/trafficAI';
 import { MissionManager } from './game/missions';
 import { GameRenderer } from './game/renderer';
+import { PixiGameRenderer } from './game/pixiRenderer';
 import { MultiplayerClient } from './network/multiplayerClient';
 import { sound } from './audio/soundEngine';
 import { HUD } from './components/HUD';
@@ -34,7 +35,7 @@ export default function App() {
   const physicsRef = useRef<PhysicsEngine>(new PhysicsEngine());
   const trafficRef = useRef<TrafficAI>(new TrafficAI(cityMapRef.current));
   const missionsRef = useRef<MissionManager>(new MissionManager());
-  const rendererRef = useRef<GameRenderer | null>(null);
+  const rendererRef = useRef<GameRenderer | PixiGameRenderer | null>(null);
   const multiplayerRef = useRef<MultiplayerClient | null>(null);
 
   // Player State
@@ -330,10 +331,65 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    let disposed = false;
+    let pixiCanvas: HTMLCanvasElement | null = null;
+    let pixiFallbackTimer: number | null = null;
+    const requestedRenderer = import.meta.env.VITE_RENDERER === 'canvas' ? 'canvas' : 'pixi';
 
-    rendererRef.current = new GameRenderer(ctx);
+    const installCanvasFallback = () => {
+      if (disposed || rendererRef.current instanceof GameRenderer) return;
+      try {
+        if (pixiFallbackTimer !== null) {
+          window.clearTimeout(pixiFallbackTimer);
+          pixiFallbackTimer = null;
+        }
+        if (pixiCanvas) {
+          pixiCanvas.remove();
+          pixiCanvas = null;
+        }
+        canvas.style.display = '';
+        const context = canvas.getContext('2d');
+        if (!context) return;
+        const fallback = new GameRenderer(context);
+        fallback.resize(window.innerWidth, window.innerHeight);
+        rendererRef.current = fallback;
+      } catch {
+        rendererRef.current = null;
+      }
+    };
+
+    if (requestedRenderer === 'canvas') {
+      installCanvasFallback();
+    } else {
+      const probeCanvas = document.createElement('canvas');
+      const webglAvailable = Boolean(
+        probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl')
+      );
+      if (!webglAvailable) {
+        installCanvasFallback();
+      } else {
+        pixiCanvas = document.createElement('canvas');
+        pixiCanvas.className = canvas.className;
+        pixiCanvas.setAttribute('aria-hidden', 'true');
+        canvas.parentElement?.insertBefore(pixiCanvas, canvas);
+        canvas.style.display = 'none';
+        const pixiRenderer = new PixiGameRenderer(pixiCanvas);
+        rendererRef.current = pixiRenderer;
+        void pixiRenderer.ready.then(() => {
+          if (pixiFallbackTimer !== null) {
+            window.clearTimeout(pixiFallbackTimer);
+            pixiFallbackTimer = null;
+          }
+        }).catch(() => installCanvasFallback());
+        pixiFallbackTimer = window.setTimeout(() => {
+          if (rendererRef.current === pixiRenderer && !pixiRenderer.hasVisibleFrame()) {
+            pixiRenderer.destroy();
+            rendererRef.current = null;
+            installCanvasFallback();
+          }
+        }, 2500);
+      }
+    }
 
     let animationFrameId: number;
     let lastTime = performance.now();
@@ -526,8 +582,8 @@ export default function App() {
         rendererRef.current.zoom = zoom;
         rendererRef.current.frameDelta = delta;
         rendererRef.current.render(
-          canvas.width,
-          canvas.height,
+          canvas.clientWidth || window.innerWidth,
+          canvas.clientHeight || window.innerHeight,
           cityMapRef.current,
           v,
           char,
@@ -549,7 +605,13 @@ export default function App() {
     animationFrameId = requestAnimationFrame(loop);
 
     return () => {
+      disposed = true;
+      if (pixiFallbackTimer !== null) window.clearTimeout(pixiFallbackTimer);
       cancelAnimationFrame(animationFrameId);
+      rendererRef.current?.destroy();
+      rendererRef.current = null;
+      pixiCanvas?.remove();
+      canvas.style.display = '';
     };
   }, [zoom, targetPoi]);
 
@@ -557,8 +619,16 @@ export default function App() {
   useEffect(() => {
     const handleResize = () => {
       if (canvasRef.current) {
-        canvasRef.current.width = window.innerWidth;
-        canvasRef.current.height = window.innerHeight;
+        const canvas = canvasRef.current;
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        if (rendererRef.current instanceof PixiGameRenderer) {
+          rendererRef.current.resize(width, height);
+        } else {
+          canvas.width = width;
+          canvas.height = height;
+          rendererRef.current?.resize(width, height);
+        }
       }
     };
 

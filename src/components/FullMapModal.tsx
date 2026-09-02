@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { PointOfInterest, VehicleInstance } from '../types';
 import { CityMap, WORLD_SIZE } from '../game/cityMap';
+import { GameRenderer } from '../game/renderer';
 import { X, Compass } from 'lucide-react';
 
 const FULL_MAP_SIZE = 580;
@@ -47,6 +48,10 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
 
     let animationFrameId = 0;
     let displaySize = FULL_MAP_SIZE;
+    let lastDrawAt = 0;
+    const staticRenderer = new GameRenderer(ctx);
+    let staticMap: CityMap | null = null;
+    let staticScene: HTMLCanvasElement | null = null;
 
     const resize = () => {
       displaySize = Math.max(1, Math.min(FULL_MAP_SIZE, canvas.clientWidth || FULL_MAP_SIZE));
@@ -60,6 +65,11 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
     resize();
 
     const draw = (now: number) => {
+      if (now - lastDrawAt < 66) {
+        animationFrameId = requestAnimationFrame(draw);
+        return;
+      }
+      lastDrawAt = now;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const scale = displaySize / FULL_MAP_SIZE;
       ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
@@ -70,105 +80,22 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
       const map = cityMapRef.current;
       const toMapCoord = (value: number) => (value / WORLD_SIZE) * FULL_MAP_SIZE;
 
-      // Districts create the GTA-style city/outskirts contrast before the
-      // road network is drawn on top.
+      if (map !== staticMap) {
+        staticScene = staticRenderer.getStaticScene(map);
+        staticMap = map;
+      }
+      if (staticScene) {
+        ctx.drawImage(staticScene, 0, 0, WORLD_SIZE, WORLD_SIZE, 0, 0, FULL_MAP_SIZE, FULL_MAP_SIZE);
+      }
       for (const district of map.districts) {
         const x = toMapCoord(district.x - district.width / 2);
         const y = toMapCoord(district.y - district.height / 2);
-        ctx.fillStyle = `${district.color}cc`;
-        ctx.fillRect(x, y, toMapCoord(district.width), toMapCoord(district.height));
-        ctx.strokeStyle = `${district.accent}88`;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x, y, toMapCoord(district.width), toMapCoord(district.height));
         ctx.fillStyle = `${district.accent}bb`;
         ctx.font = 'bold 12px "JetBrains Mono", sans-serif';
         ctx.fillText(district.name, x + 12, y + 20);
       }
 
-      // Districts make the overview readable: the city is not only a grid
-      // of roads, it also has water, parks, a plaza and an industrial yard.
-      for (const zone of map.decorations) {
-        const x = toMapCoord(zone.x - zone.width / 2);
-        const y = toMapCoord(zone.y - zone.height / 2);
-        const width = toMapCoord(zone.width);
-        const height = toMapCoord(zone.height);
-        ctx.fillStyle = zone.type === 'water'
-          ? 'rgba(14, 116, 144, 0.9)'
-          : zone.type === 'industrial'
-          ? 'rgba(82, 82, 91, 0.9)'
-          : zone.type === 'plaza'
-          ? 'rgba(100, 116, 139, 0.9)'
-          : zone.type === 'desert'
-          ? 'rgba(146, 84, 24, 0.82)'
-          : zone.type === 'hills'
-          ? 'rgba(54, 83, 20, 0.82)'
-          : zone.type === 'rail'
-          ? 'rgba(71, 85, 105, 0.84)'
-          : zone.type === 'airport'
-          ? 'rgba(51, 65, 85, 0.9)'
-          : 'rgba(22, 101, 52, 0.9)';
-        ctx.fillRect(x, y, width, height);
-        ctx.strokeStyle = zone.type === 'water' ? '#38bdf8' : '#4ade80';
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(x, y, width, height);
-      }
-
-      // Keep the overview draw order identical to the driving scene: zones are
-      // ground decoration, while roads remain the readable top layer.
-      for (const road of map.roads) {
-        if (road.points.length < 2) continue;
-        ctx.save();
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.strokeStyle = road.roadClass === 'dirt' ? '#a16207' : road.roadClass === 'highway' ? '#cbd5e1' : '#475569';
-        ctx.lineWidth = road.roadClass === 'dirt' ? 5 : road.lanesPerDirection === 2 ? 13 : 8;
-        ctx.beginPath();
-        road.points.forEach((point, index) => {
-          const x = toMapCoord(point.x);
-          const y = toMapCoord(point.y);
-          if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        });
-        ctx.stroke();
-        if (road.feature === 'bridge' || road.feature === 'tunnel' || road.feature === 'rail_crossing') {
-          ctx.strokeStyle = road.feature === 'bridge' ? '#38bdf8' : road.feature === 'tunnel' ? '#94a3b8' : '#facc15';
-          ctx.lineWidth = 2;
-          ctx.setLineDash([8, 6]);
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
-
-      // Scenic dirt routes break up the avenue grid and show where a vehicle
-      // can make a controlled ground detour around a blocked junction.
-      for (const route of map.scenicRoutes) {
-        if (route.points.length < 2) continue;
-        ctx.save();
-        ctx.strokeStyle = '#a16207';
-        ctx.lineWidth = 5;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
-        ctx.moveTo(toMapCoord(route.points[0].x), toMapCoord(route.points[0].y));
-        route.points.slice(1).forEach((point) => ctx.lineTo(toMapCoord(point.x), toMapCoord(point.y)));
-        ctx.stroke();
-        ctx.strokeStyle = '#f1d39b';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 5]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
-      }
-
-      // Buildings and POIs.
-      for (const building of map.buildings) {
-        ctx.fillStyle = 'rgba(30, 41, 59, 0.88)';
-        ctx.fillRect(
-          toMapCoord(building.x - building.width / 2),
-          toMapCoord(building.y - building.height / 2),
-          toMapCoord(building.width),
-          toMapCoord(building.height)
-        );
-      }
+      // POI emphasis is dynamic because the selected mission can change.
       for (const poi of map.pois) {
         const x = toMapCoord(poi.x - poi.width / 2);
         const y = toMapCoord(poi.y - poi.height / 2);

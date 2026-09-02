@@ -31,6 +31,27 @@ export class GameRenderer {
     this.ctx = ctx;
   }
 
+  public resize(_width: number, _height: number) {
+    // Canvas fallback uses the host canvas dimensions directly.
+  }
+
+  public setZoom(value: number) {
+    this.zoom = value;
+  }
+
+  public setNightMode(value: boolean) {
+    this.isNightMode = value;
+  }
+
+  public destroy() {
+    // No external resources are owned by the Canvas fallback.
+  }
+
+  public getStaticScene(cityMap: CityMap) {
+    this.ensureStaticScene(cityMap);
+    return this.staticScene;
+  }
+
   public render(
     canvasWidth: number,
     canvasHeight: number,
@@ -750,6 +771,16 @@ export class GameRenderer {
 
   private renderSkidMarks(ctx: CanvasRenderingContext2D, skids: SkidMark[]) {
     skids.forEach((skid) => {
+      const minX = Math.min(skid.x1, skid.x2);
+      const minY = Math.min(skid.y1, skid.y2);
+      const maxX = Math.max(skid.x1, skid.x2);
+      const maxY = Math.max(skid.y1, skid.y2);
+      if (
+        maxX < this.viewBounds.left ||
+        minX > this.viewBounds.right ||
+        maxY < this.viewBounds.top ||
+        minY > this.viewBounds.bottom
+      ) return;
       ctx.save();
       ctx.strokeStyle = `rgba(15, 23, 42, ${skid.alpha})`;
       ctx.lineWidth = skid.width;
@@ -1165,6 +1196,11 @@ export class GameRenderer {
     remotePlayers: RemotePlayer[],
     destructibles: DestructibleObject[]
   ) {
+    // Daylight does not need a full-screen blend or radial lamp gradients.
+    // Skipping the pass entirely avoids dozens of expensive Canvas gradients
+    // every frame while preserving the lighting treatment at night.
+    if (!this.isNightMode) return;
+
     // Determine ambient darkness (0.0 at noon, 0.78 at midnight)
     const isNight = this.isNightMode;
     const ambientDarkness = isNight ? 0.78 : 0.05;
