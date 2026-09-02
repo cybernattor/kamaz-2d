@@ -22,8 +22,20 @@ import { VEHICLE_CONFIGS } from './vehicleConfigs';
 
 type EntityView = {
   container: Container;
-  graphics: Graphics;
   sprite?: Sprite;
+  indicator?: Sprite;
+  indicatorKey?: string;
+};
+
+export type PerformanceTier = 'high' | 'balanced' | 'low';
+
+export type RendererPerformanceStats = {
+  tier: PerformanceTier;
+  renderScale: number;
+  p50RenderMs: number;
+  p95RenderMs: number;
+  activeParticles: number;
+  activeSkids: number;
 };
 
 const colorNumber = (value: string | undefined, fallback = 0xffffff) => {
@@ -37,10 +49,8 @@ const createEntityView = (layer: Container, texture?: Texture): EntityView => {
   const sprite = texture ? new Sprite(texture) : undefined;
   sprite?.anchor.set(0.5);
   if (sprite) container.addChild(sprite);
-  const graphics = new Graphics();
-  container.addChild(graphics);
   layer.addChild(container);
-  return { container, graphics, sprite };
+  return { container, sprite };
 };
 
 /**
@@ -72,10 +82,6 @@ export class PixiGameRenderer {
   private readonly particleLayer = new Container();
   private readonly beaconLayer = new Container();
 
-  private readonly skidGraphics = new Graphics();
-  private readonly lightGraphics = new Graphics();
-  private readonly particleGraphics = new Graphics();
-  private readonly beaconGraphics = new Graphics();
   private readonly vehicleViews = new Map<string, EntityView>();
   private readonly pedestrianViews = new Map<string, EntityView>();
   private readonly propViews = new Map<string, EntityView>();
@@ -83,6 +89,14 @@ export class PixiGameRenderer {
   private readonly vehicleTextures = new Map<string, Texture>();
   private readonly propTextures = new Map<string, Texture>();
   private readonly trafficLightTextures = new Map<string, Texture>();
+  private readonly indicatorTextures = new Map<string, Texture>();
+  private readonly effectTextures = new Map<string, Texture>();
+  private readonly skidSprites = new Map<string, Sprite>();
+  private readonly particleSprites = new Map<string, Sprite>();
+  private readonly lightSprites = new Map<string, Sprite>();
+  private readonly effectPool: Sprite[] = [];
+  private beaconRing: Sprite | null = null;
+  private beaconDot: Sprite | null = null;
   private pedestrianTexture: Texture | null = null;
 
   private staticCanvasRenderer: GameRenderer | null = null;
@@ -98,6 +112,8 @@ export class PixiGameRenderer {
   private renderScale = 1;
   private slowFrameStreak = 0;
   private goodFrameStreak = 0;
+  private performanceTier: PerformanceTier = 'high';
+  private readonly renderSamples: number[] = [];
 
   public constructor(private readonly canvas: HTMLCanvasElement) {
     this.canvas.dataset.pixiStatus = 'initializing';
@@ -148,10 +164,6 @@ export class PixiGameRenderer {
     );
     this.staticBackground.rect(0, 0, WORLD_SIZE, WORLD_SIZE).fill(0x0f3822);
     this.staticLayer.addChildAt(this.staticBackground, 0);
-    this.skidLayer.addChild(this.skidGraphics);
-    this.lightLayer.addChild(this.lightGraphics);
-    this.particleLayer.addChild(this.particleGraphics);
-    this.beaconLayer.addChild(this.beaconGraphics);
     this.app.stage.addChild(this.world);
     this.initialized = true;
     this.canvas.dataset.pixiStatus = 'ready';
@@ -255,7 +267,9 @@ export class PixiGameRenderer {
     // the TickerPlugin and is the documented manual-render path for v8.
     this.app.renderer.render(this.app.stage);
     this.canvas.dataset.pixiStatus = 'rendered';
-    this.adjustResolution(performance.now() - renderStarted);
+    const renderMs = performance.now() - renderStarted;
+    this.recordRenderSample(renderMs);
+    this.adjustResolution(renderMs);
   }
 
   private adjustResolution(frameTimeMs: number) {
@@ -270,8 +284,8 @@ export class PixiGameRenderer {
       this.goodFrameStreak = 0;
     }
 
-    if (this.slowFrameStreak >= 8 && this.renderScale > 0.75) {
-      this.renderScale = Math.max(0.75, this.renderScale - 0.1);
+    if (this.slowFrameStreak >= 8 && this.renderScale > 0.6) {
+      this.renderScale = Math.max(0.6, this.renderScale - 0.1);
       this.slowFrameStreak = 0;
       this.resize(this.viewportWidth, this.viewportHeight);
     } else if (this.goodFrameStreak >= 120 && this.renderScale < 1) {
@@ -279,6 +293,31 @@ export class PixiGameRenderer {
       this.goodFrameStreak = 0;
       this.resize(this.viewportWidth, this.viewportHeight);
     }
+    this.performanceTier = this.renderScale <= 0.7 ? 'low' : this.renderScale < 1 ? 'balanced' : 'high';
+  }
+
+  private recordRenderSample(renderMs: number) {
+    this.renderSamples.push(renderMs);
+    if (this.renderSamples.length > 120) this.renderSamples.shift();
+  }
+
+  public getPerformanceStats(): RendererPerformanceStats {
+    const sorted = [...this.renderSamples].sort((a, b) => a - b);
+    const at = (percentile: number) => sorted.length === 0 ? 0 : sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * percentile))];
+    return {
+      tier: this.performanceTier,
+      renderScale: this.renderScale,
+      p50RenderMs: at(0.5),
+      p95RenderMs: at(0.95),
+      activeParticles: this.particleSprites.size,
+      activeSkids: this.skidSprites.size,
+    };
+  }
+
+  private effectLimit(kind: 'particles' | 'skids') {
+    if (this.performanceTier === 'low') return kind === 'particles' ? 120 : 160;
+    if (this.performanceTier === 'balanced') return kind === 'particles' ? 260 : 320;
+    return kind === 'particles' ? 500 : 500;
   }
 
   private rebuildStaticScene(cityMap: CityMap) {
@@ -322,14 +361,25 @@ export class PixiGameRenderer {
   }
 
   private renderSkidMarks(skids: SkidMark[], bounds: Bounds) {
-    this.skidGraphics.clear();
-    for (const skid of skids) {
+    const active = new Set<string>();
+    let rendered = 0;
+    for (let index = 0; index < skids.length; index += 1) {
+      if (rendered >= this.effectLimit('skids')) break;
+      const skid = skids[index];
       if (!lineVisible(skid.x1, skid.y1, skid.x2, skid.y2, bounds)) continue;
-      this.skidGraphics
-        .moveTo(skid.x1, skid.y1)
-        .lineTo(skid.x2, skid.y2)
-        .stroke({ color: 0x0f172a, alpha: skid.alpha, width: skid.width });
+      const id = `${index}:${skid.x1}:${skid.y1}`;
+      const sprite = this.acquireEffectSprite(this.skidSprites, id, this.skidLayer, this.getEffectTexture('skid'));
+      active.add(id);
+      const dx = skid.x2 - skid.x1;
+      const dy = skid.y2 - skid.y1;
+      sprite.visible = true;
+      sprite.position.set((skid.x1 + skid.x2) * 0.5, (skid.y1 + skid.y2) * 0.5);
+      sprite.rotation = Math.atan2(dy, dx);
+      sprite.alpha = skid.alpha;
+      sprite.scale.set(Math.max(0.01, Math.hypot(dx, dy) / 16), Math.max(0.01, skid.width / 2));
+      rendered += 1;
     }
+    this.releaseEffects(this.skidSprites, active);
   }
 
   private renderProps(props: DestructibleObject[], bounds: Bounds) {
@@ -415,7 +465,16 @@ export class PixiGameRenderer {
     view.container.position.set(vehicle.x, vehicle.y);
     view.container.rotation = vehicle.angle;
     if (view.sprite) view.sprite.texture = this.getVehicleTexture(vehicle);
-    this.drawVehicleIndicators(view.graphics, vehicle);
+    const indicatorKey = `${vehicle.type}:${vehicle.headlights}:${vehicle.isBraking}:${vehicle.turnSignal}:${vehicle.isCrashed ? 1 : 0}:${Math.floor(Date.now() / 350) % 2}`;
+    if (!view.indicator) {
+      view.indicator = new Sprite(this.getVehicleIndicatorTexture(vehicle));
+      view.indicator.anchor.set(0.5);
+      view.container.addChild(view.indicator);
+      view.indicatorKey = indicatorKey;
+    } else if (view.indicatorKey !== indicatorKey) {
+      view.indicator.texture = this.getVehicleIndicatorTexture(vehicle);
+      view.indicatorKey = indicatorKey;
+    }
   }
 
   private renderPedestrians(pedestrians: Pedestrian[], bounds: Bounds) {
@@ -439,47 +498,83 @@ export class PixiGameRenderer {
     props: DestructibleObject[],
     bounds: Bounds
   ) {
-    this.lightGraphics.clear();
-    if (!this.isNightMode) return;
+    const active = new Set<string>();
+    if (!this.isNightMode) {
+      this.releaseEffects(this.lightSprites, active);
+      return;
+    }
 
     for (const vehicle of [...npcVehicles, ...playerVehicles]) {
       if (!vehicle.headlights || !this.isVisible(vehicle.x, vehicle.y, 360, 360, bounds)) continue;
-      this.drawHeadlight(this.lightGraphics, vehicle.x, vehicle.y, vehicle.angle, vehicle.headlights);
+      const sprite = this.acquireEffectSprite(this.lightSprites, `headlight:${vehicle.id}`, this.lightLayer, this.getEffectTexture(vehicle.headlights === 2 ? 'headlight-high' : 'headlight-low'));
+      active.add(`headlight:${vehicle.id}`);
+      sprite.visible = true;
+      sprite.position.set(vehicle.x, vehicle.y);
+      sprite.rotation = vehicle.angle;
+      sprite.alpha = 0.55;
     }
     for (const remote of remotePlayers) {
       if (!remote.inVehicle || !remote.headlights || !this.isVisible(remote.x, remote.y, 360, 360, bounds)) continue;
-      this.drawHeadlight(this.lightGraphics, remote.x, remote.y, remote.angle, remote.headlights);
+      const id = `headlight:remote:${remote.id}`;
+      const sprite = this.acquireEffectSprite(this.lightSprites, id, this.lightLayer, this.getEffectTexture(remote.headlights === 2 ? 'headlight-high' : 'headlight-low'));
+      active.add(id);
+      sprite.visible = true;
+      sprite.position.set(remote.x, remote.y);
+      sprite.rotation = remote.angle;
+      sprite.alpha = 0.55;
     }
     for (const prop of props) {
       if (prop.type !== 'lamp_pole' || prop.isDestroyed || !this.isVisible(prop.x, prop.y, 180, 180, bounds)) continue;
-      this.lightGraphics.circle(prop.x, prop.y, 90).fill({ color: 0xfef08a, alpha: 0.12 });
+      const id = `lamp:${prop.id}`;
+      const sprite = this.acquireEffectSprite(this.lightSprites, id, this.lightLayer, this.getEffectTexture('lamp'));
+      active.add(id);
+      sprite.visible = true;
+      sprite.position.set(prop.x, prop.y);
+      sprite.alpha = 0.12;
     }
+    this.releaseEffects(this.lightSprites, active);
   }
 
   private renderParticles(particles: Particle[], bounds: Bounds) {
-    this.particleGraphics.clear();
+    const active = new Set<string>();
+    let rendered = 0;
     for (const particle of particles) {
+      if (rendered >= this.effectLimit('particles')) break;
       if (!this.isVisible(particle.x, particle.y, particle.size * 2 + 8, particle.size * 2 + 8, bounds)) continue;
-      if (particle.type === 'splinter') {
-        this.particleGraphics
-          .rect(particle.x - particle.size / 2, particle.y - 1, particle.size, 2)
-          .fill({ color: colorNumber(particle.color), alpha: particle.alpha });
-      } else {
-        this.particleGraphics
-          .circle(particle.x, particle.y, Math.max(1, particle.size))
-          .fill({ color: colorNumber(particle.color), alpha: particle.alpha });
-      }
+      const sprite = this.acquireEffectSprite(this.particleSprites, particle.id, this.particleLayer, this.getEffectTexture(particle.type === 'splinter' ? 'splinter' : 'particle'));
+      active.add(particle.id);
+      sprite.visible = true;
+      sprite.position.set(particle.x, particle.y);
+      sprite.rotation = particle.angle || 0;
+      sprite.tint = colorNumber(particle.color);
+      sprite.alpha = particle.alpha;
+      const size = Math.max(1, particle.size);
+      sprite.scale.set(particle.type === 'splinter' ? size / 12 : size / 8, particle.type === 'splinter' ? 1 : size / 8);
+      rendered += 1;
     }
+    this.releaseEffects(this.particleSprites, active);
   }
 
   private renderBeacon(poi: PointOfInterest | null, bounds: Bounds) {
-    this.beaconGraphics.clear();
-    if (!poi || !this.isVisible(poi.x, poi.y, poi.width, poi.height, bounds)) return;
+    if (!poi || !this.isVisible(poi.x, poi.y, poi.width, poi.height, bounds)) {
+      if (this.beaconRing) this.beaconRing.visible = false;
+      if (this.beaconDot) this.beaconDot.visible = false;
+      return;
+    }
+    if (!this.beaconRing) {
+      this.beaconRing = new Sprite(this.getEffectTexture('beacon-ring'));
+      this.beaconRing.anchor.set(0.5);
+      this.beaconLayer.addChild(this.beaconRing);
+      this.beaconDot = new Sprite(this.getEffectTexture('beacon-dot'));
+      this.beaconDot.anchor.set(0.5);
+      this.beaconLayer.addChild(this.beaconDot);
+    }
     const pulse = 34 + Math.sin(performance.now() * 0.006) * 8;
-    this.beaconGraphics
-      .circle(poi.x, poi.y, pulse)
-      .stroke({ color: 0xfde047, width: 4, alpha: 0.9 });
-    this.beaconGraphics.circle(poi.x, poi.y, 10).fill({ color: 0xfde047, alpha: 0.85 });
+    this.beaconRing.visible = true;
+    this.beaconRing.position.set(poi.x, poi.y);
+    this.beaconRing.scale.set(pulse / 40);
+    this.beaconDot!.visible = true;
+    this.beaconDot!.position.set(poi.x, poi.y);
   }
 
   private drawProp(graphics: Graphics, prop: DestructibleObject) {
@@ -558,6 +653,78 @@ export class PixiGameRenderer {
       if (vehicle.turnSignal === 'right' || vehicle.turnSignal === 'hazard') graphics.circle(halfLength - 2, halfWidth - 2, 4).fill(0xf59e0b);
     }
     if (vehicle.isCrashed) graphics.rect(-halfLength - 4, -halfWidth - 4, config.length + 8, config.width + 8).stroke({ color: 0xf97316, width: 3 });
+  }
+
+  /** Indicators are regenerated only when their state changes, then rendered as a Sprite. */
+  private getVehicleIndicatorTexture(vehicle: VehicleInstance) {
+    const blink = Math.floor(Date.now() / 350) % 2;
+    const key = `${vehicle.type}:${vehicle.headlights}:${vehicle.isBraking}:${vehicle.turnSignal}:${vehicle.isCrashed ? 1 : 0}:${blink}`;
+    const existing = this.indicatorTextures.get(key);
+    if (existing) return existing;
+    const template = new Graphics();
+    this.drawVehicleIndicators(template, vehicle);
+    const texture = this.app.renderer.generateTexture(template);
+    template.destroy();
+    this.indicatorTextures.set(key, texture);
+    return texture;
+  }
+
+  private getEffectTexture(kind: 'skid' | 'particle' | 'splinter' | 'headlight-low' | 'headlight-high' | 'lamp' | 'beacon-ring' | 'beacon-dot') {
+    const existing = this.effectTextures.get(kind);
+    if (existing) return existing;
+    const template = new Graphics();
+    switch (kind) {
+      case 'skid':
+        template.rect(0, 0, 16, 2).fill(0x0f172a);
+        break;
+      case 'particle':
+        template.circle(8, 8, 8).fill(0xffffff);
+        break;
+      case 'splinter':
+        template.rect(0, 0, 12, 2).fill(0xffffff);
+        break;
+      case 'headlight-low':
+        template.poly([0, 70, 190, 18, 190, 122]).fill(0xfef08a);
+        break;
+      case 'headlight-high':
+        template.poly([0, 90, 270, 8, 270, 172]).fill(0xfef08a);
+        break;
+      case 'lamp':
+        template.circle(90, 90, 90).fill(0xfef08a);
+        break;
+      case 'beacon-ring':
+        template.circle(40, 40, 36).stroke({ color: 0xfde047, width: 4, alpha: 0.9 });
+        break;
+      case 'beacon-dot':
+        template.circle(10, 10, 10).fill({ color: 0xfde047, alpha: 0.85 });
+        break;
+    }
+    const texture = this.app.renderer.generateTexture(template);
+    template.destroy();
+    this.effectTextures.set(kind, texture);
+    return texture;
+  }
+
+  private acquireEffectSprite(map: Map<string, Sprite>, id: string, layer: Container, texture: Texture) {
+    let sprite = map.get(id);
+    if (!sprite) {
+      sprite = this.effectPool.pop() || new Sprite(texture);
+      sprite.texture = texture;
+      sprite.anchor.set(0.5);
+      layer.addChild(sprite);
+      map.set(id, sprite);
+    }
+    return sprite;
+  }
+
+  private releaseEffects(map: Map<string, Sprite>, active: Set<string>) {
+    for (const [id, sprite] of map) {
+      if (active.has(id)) continue;
+      map.delete(id);
+      sprite.visible = false;
+      sprite.removeFromParent();
+      this.effectPool.push(sprite);
+    }
   }
 
   private getVehicleTexture(vehicle: VehicleInstance) {
@@ -663,6 +830,14 @@ export class PixiGameRenderer {
     this.propTextures.clear();
     for (const texture of this.trafficLightTextures.values()) texture.destroy(true);
     this.trafficLightTextures.clear();
+    for (const texture of this.indicatorTextures.values()) texture.destroy(true);
+    this.indicatorTextures.clear();
+    for (const texture of this.effectTextures.values()) texture.destroy(true);
+    this.effectTextures.clear();
+    this.skidSprites.clear();
+    this.particleSprites.clear();
+    this.lightSprites.clear();
+    this.effectPool.length = 0;
     this.pedestrianTexture?.destroy(true);
     this.pedestrianTexture = null;
   }

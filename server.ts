@@ -507,7 +507,13 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    // Vite fingerprints assets. Cache those immutable files aggressively while
+    // keeping index.html fresh so a newly deployed asset manifest is used.
+    app.use('/assets', express.static(path.join(distPath, 'assets'), {
+      maxAge: '1y',
+      immutable: true,
+    }));
+    app.use(express.static(distPath, { maxAge: 0 }));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });

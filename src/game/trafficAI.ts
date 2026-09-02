@@ -49,6 +49,11 @@ export class TrafficAI {
   private intersectionReservations: Map<string, string> = new Map();
   private intersectionReservationAge: Map<string, number> = new Map();
   private wasPlayerHonking = false;
+  // Rebuilt once per simulation tick and shared by spacing, braking and
+  // pedestrian safety checks. The old implementation rebuilt it 16 times.
+  private readonly vehicleIndex = new SpatialHash<VehicleInstance>(256);
+  private readonly pedestrianIndex = new SpatialHash<Pedestrian>(128);
+  private readonly vehicleOrder = new Map<string, number>();
 
   private cityMap: CityMap;
   private maxCars = 40;
@@ -518,19 +523,16 @@ export class TrafficAI {
   }
 
   private resolveNpcSpacing() {
-    // Sixteen passes keep dense queues stable while cutting the original
-    // twenty-four-pass O(passes * cars²) hotspot by one third.
+    // Keep the mature 16-pass queue stability, but share one broad phase and
+    // ordering for the full tick instead of rebuilding both on every pass.
     for (let pass = 0; pass < 16; pass += 1) {
-      const nearby = new SpatialHash<VehicleInstance>(256);
-      nearby.insertAll(this.npcVehicles);
-      const order = new Map(this.npcVehicles.map((vehicle, index) => [vehicle.id, index]));
       for (let i = 0; i < this.npcVehicles.length; i += 1) {
         const first = this.npcVehicles[i];
         if (first.health <= 0 || first.isCrashed) continue;
         const firstConfig = VEHICLE_CONFIGS[first.type] || VEHICLE_CONFIGS.sedan;
 
-        for (const second of nearby.queryRadius(first.x, first.y, 220)) {
-          const j = order.get(second.id);
+        for (const second of this.vehicleIndex.queryRadius(first.x, first.y, 220)) {
+          const j = this.vehicleOrder.get(second.id);
           if (j === undefined || j <= i) continue;
           if (second.health <= 0 || second.isCrashed) continue;
           const secondConfig = VEHICLE_CONFIGS[second.type] || VEHICLE_CONFIGS.sedan;
@@ -853,6 +855,12 @@ export class TrafficAI {
   public updateTraffic(delta: number, playerVehicle?: VehicleInstance | null) {
     const sirenActive = Boolean(playerVehicle && playerVehicle.isSiren);
     this.cleanupIntersectionReservations(delta);
+    this.vehicleIndex.clear();
+    this.vehicleIndex.insertAll(this.npcVehicles);
+    this.vehicleOrder.clear();
+    this.npcVehicles.forEach((vehicle, index) => this.vehicleOrder.set(vehicle.id, index));
+    this.pedestrianIndex.clear();
+    this.pedestrianIndex.insertAll(this.pedestrians);
 
     for (const car of this.npcVehicles) {
       if (car.isCrashed) {
@@ -1090,7 +1098,10 @@ export class TrafficAI {
       let blockedObstacle: VehicleInstance | null = null;
       const activeIntersection = this.getActiveIntersection(car, ai);
       if (!ai.isTurning) {
-        const allObstacles = playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles;
+        const allObstacles = this.vehicleIndex.queryRadius(car.x, car.y, 220);
+        if (playerVehicle && Math.hypot(playerVehicle.x - car.x, playerVehicle.y - car.y) <= 220) {
+          allObstacles.push(playerVehicle);
+        }
         for (const other of allObstacles) {
           if (other.id === car.id) continue;
           if (!other.isPlayer && (other.health <= 0 || other.isCrashed)) continue;
@@ -1241,7 +1252,7 @@ export class TrafficAI {
       }
 
       // 6. Pedestrian Safety Braking
-      for (const ped of this.pedestrians) {
+      for (const ped of this.pedestrianIndex.queryRadius(car.x, car.y, 55)) {
         if (ped.state === 'ragdoll') continue;
         const pdx = ped.x - car.x;
         const pdy = ped.y - car.y;

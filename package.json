@@ -23,6 +23,7 @@
     "test:pedestrian-horn": "tsx repros/pedestrian-horn.repro.ts",
     "test:pedestrian-sidewalk": "tsx repros/pedestrian-sidewalk.repro.ts",
     "test:physics-particles": "tsx repros/physics-particle-api.repro.ts",
+    "test:fixed-step": "tsx repros/fixed-step.repro.ts",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

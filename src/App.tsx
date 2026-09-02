@@ -16,7 +16,7 @@ import { PhysicsEngine } from './game/physics';
 import { TrafficAI } from './game/trafficAI';
 import { MissionManager } from './game/missions';
 import { GameRenderer } from './game/renderer';
-import { PixiGameRenderer } from './game/pixiRenderer';
+import type { PixiGameRenderer } from './game/pixiRenderer';
 import { MultiplayerClient } from './network/multiplayerClient';
 import { sound } from './audio/soundEngine';
 import { HUD } from './components/HUD';
@@ -26,6 +26,7 @@ import { MultiplayerModal } from './components/MultiplayerModal';
 import { FullMapModal } from './components/FullMapModal';
 import { VirtualControls } from './components/VirtualControls';
 import { VEHICLE_CONFIGS } from './game/vehicleConfigs';
+import { FixedStepAccumulator } from './game/fixedStep';
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -333,6 +334,7 @@ export default function App() {
 
     let disposed = false;
     let pixiCanvas: HTMLCanvasElement | null = null;
+    let pixiRenderer: PixiGameRenderer | null = null;
     let pixiFallbackTimer: number | null = null;
     const requestedRenderer = import.meta.env.VITE_RENDERER === 'canvas' ? 'canvas' : 'pixi';
 
@@ -358,9 +360,11 @@ export default function App() {
       }
     };
 
-    if (requestedRenderer === 'canvas') {
-      installCanvasFallback();
-    } else {
+    // Always start with the lightweight Canvas renderer. Pixi is loaded only
+    // after a usable first frame exists, keeping the large WebGL bundle off the
+    // critical path and providing a reliable fallback on constrained GPUs.
+    installCanvasFallback();
+    if (requestedRenderer !== 'canvas') {
       const probeCanvas = document.createElement('canvas');
       const webglAvailable = Boolean(
         probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl')
@@ -368,26 +372,29 @@ export default function App() {
       if (!webglAvailable) {
         installCanvasFallback();
       } else {
-        pixiCanvas = document.createElement('canvas');
-        pixiCanvas.className = canvas.className;
-        pixiCanvas.setAttribute('aria-hidden', 'true');
-        canvas.parentElement?.insertBefore(pixiCanvas, canvas);
-        canvas.style.display = 'none';
-        const pixiRenderer = new PixiGameRenderer(pixiCanvas);
-        rendererRef.current = pixiRenderer;
-        void pixiRenderer.ready.then(() => {
-          if (pixiFallbackTimer !== null) {
-            window.clearTimeout(pixiFallbackTimer);
-            pixiFallbackTimer = null;
-          }
+        void import('./game/pixiRenderer').then(({ PixiGameRenderer }) => {
+          if (disposed) return;
+          pixiCanvas = document.createElement('canvas');
+          pixiCanvas.className = canvas.className;
+          pixiCanvas.setAttribute('aria-hidden', 'true');
+          canvas.parentElement?.insertBefore(pixiCanvas, canvas);
+          canvas.style.display = 'none';
+          pixiRenderer = new PixiGameRenderer(pixiCanvas);
+          rendererRef.current = pixiRenderer;
+          void pixiRenderer.ready.then(() => {
+            if (pixiFallbackTimer !== null) {
+              window.clearTimeout(pixiFallbackTimer);
+              pixiFallbackTimer = null;
+            }
+          }).catch(() => installCanvasFallback());
+          pixiFallbackTimer = window.setTimeout(() => {
+            if (rendererRef.current === pixiRenderer && !pixiRenderer.hasVisibleFrame()) {
+              pixiRenderer.destroy();
+              rendererRef.current = null;
+              installCanvasFallback();
+            }
+          }, 2500);
         }).catch(() => installCanvasFallback());
-        pixiFallbackTimer = window.setTimeout(() => {
-          if (rendererRef.current === pixiRenderer && !pixiRenderer.hasVisibleFrame()) {
-            pixiRenderer.destroy();
-            rendererRef.current = null;
-            installCanvasFallback();
-          }
-        }, 2500);
       }
     }
 
@@ -396,6 +403,8 @@ export default function App() {
     let frameCount = 0;
     let lastFpsUpdate = performance.now();
     let lastHudUpdate = performance.now();
+    let lastPerformanceReport = performance.now();
+    const simulation = new FixedStepAccumulator();
     let lastStreetName = streetName;
     const handleVehicleCrash = (
       firstVehicle: VehicleInstance,
@@ -426,15 +435,15 @@ export default function App() {
       // The simulation lives in refs for 60 FPS performance, so refresh only
       // the HUD-facing React tree at a steady 10 FPS. This keeps the speed
       // readout responsive without rerendering the whole app every frame.
-      if (now - lastHudUpdate > 100) {
+      if (now - lastHudUpdate > 200) {
         setHudTick((tick) => tick + 1);
+        setCarCount(trafficRef.current.npcVehicles.length);
+        setPedCount(trafficRef.current.pedestrians.length);
         lastHudUpdate = now;
       }
 
-      // 1. Update Traffic Lights Cycles
-      cityMapRef.current.updateTrafficLights(delta);
-
-      // 2. Process Player Inputs & Physics
+      // Player input remains responsive at display rate. Expensive NPC
+      // simulation below runs at a bounded fixed 30Hz instead.
       const keys = keysRef.current;
       const v = playerVehicleRef.current;
       const char = playerCharRef.current;
@@ -474,13 +483,17 @@ export default function App() {
         sound.stopEngine();
       }
 
-      // 3. Update NPC Traffic & Pedestrians AI
       const playerPos = isCar ? { x: v.x, y: v.y } : { x: char.x, y: char.y };
-      trafficRef.current.updateTraffic(delta, isCar ? v : undefined);
-      trafficRef.current.updatePedestrians(delta, playerPos.x, playerPos.y, v.isHonking);
+      const simulationStarted = performance.now();
+      const simulationSteps = simulation.consume(delta, (simulationStep) => {
+        // 30Hz is sufficient for NPC steering and collision response while
+        // avoiding a CPU spike whenever the display refresh is higher.
+        cityMapRef.current.updateTrafficLights(simulationStep);
+        trafficRef.current.updateTraffic(simulationStep, isCar ? v : undefined);
+        trafficRef.current.updatePedestrians(simulationStep, playerPos.x, playerPos.y, v.isHonking);
 
       // 4. Resolve Collisions (Vehicles vs Props vs Pedestrians vs Buildings)
-      physicsRef.current.resolveAllCollisions(
+        physicsRef.current.resolveAllCollisions(
         isCar ? [v, ...trafficRef.current.npcVehicles] : trafficRef.current.npcVehicles,
         cityMapRef.current.destructibles,
         trafficRef.current.pedestrians,
@@ -488,7 +501,7 @@ export default function App() {
         (propId) => {
           multiplayerRef.current?.sendObjectDestroyed(propId);
         },
-        delta,
+        simulationStep,
         (event, firstVehicle, secondVehicle) => {
           handleVehicleCrash(
             firstVehicle,
@@ -498,34 +511,34 @@ export default function App() {
             event.y
           );
         }
-      );
+        );
 
       // 5. Update Particles
-      physicsRef.current.updateParticles(delta);
+        physicsRef.current.updateParticles(simulationStep);
 
       // 6. Update Missions & Check Arrival
-      const missionResult = missionsRef.current.update(delta);
-      if (missionResult.failed) {
-        setActiveMission(null);
-        setTargetPoi(null);
-      }
+        const missionResult = missionsRef.current.update(simulationStep);
+        if (missionResult.failed) {
+          setActiveMission(null);
+          setTargetPoi(null);
+        }
 
-      const arrivalResult = missionsRef.current.checkZoneArrival(
+        const arrivalResult = missionsRef.current.checkZoneArrival(
         playerPos.x,
         playerPos.y,
         cityMapRef.current.pois
-      );
+        );
 
-      if (arrivalResult.reachedPickup && arrivalResult.pickupPoi) {
+        if (arrivalResult.reachedPickup && arrivalResult.pickupPoi) {
         sound.playReward();
         const active = missionsRef.current.activeMission;
         if (active) {
           const destPoi = cityMapRef.current.pois.find((p) => p.id === active.targetPoiId);
           setTargetPoi(destPoi || null);
         }
-      }
+        }
 
-      if (arrivalResult.completedMission) {
+        if (arrivalResult.completedMission) {
         sound.playReward();
         confetti({ particleCount: 120, spread: 70, origin: { y: 0.6 } });
         char.money += arrivalResult.completedMission.rewardMoney;
@@ -537,19 +550,21 @@ export default function App() {
         }
         setActiveMission(null);
         setTargetPoi(null);
-      }
+        }
 
       // Auto-repair at Workshop
-      const workshopPoi = cityMapRef.current.pois.find((p) => p.type === 'workshop');
-      if (workshopPoi && isCar && v.health < 100) {
+        const workshopPoi = cityMapRef.current.pois.find((p) => p.type === 'workshop');
+        if (workshopPoi && isCar && v.health < 100) {
         const dWorkshop = Math.hypot(workshopPoi.x - v.x, workshopPoi.y - v.y);
         if (dWorkshop < Math.max(workshopPoi.width, workshopPoi.height) * 0.5) {
-          v.health = Math.min(100, v.health + delta * 25);
+          v.health = Math.min(100, v.health + simulationStep * 25);
           if (Math.random() < 0.2) {
             physicsRef.current.spawnSparks(v.x, v.y);
           }
         }
-      }
+        }
+      });
+      const simulationMs = performance.now() - simulationStarted;
 
       // 7. Update HUD Info (Street Name)
       const currentStreet = cityMapRef.current.getStreetNameAt(playerPos.x, playerPos.y);
@@ -599,6 +614,18 @@ export default function App() {
         );
       }
 
+      if (import.meta.env.DEV && now - lastPerformanceReport > 2000) {
+        const renderer = rendererRef.current;
+        if (renderer && 'getPerformanceStats' in renderer) {
+          console.debug('[KAMAZ performance]', {
+            simulationMs: Number(simulationMs.toFixed(2)),
+            simulationSteps,
+            ...renderer.getPerformanceStats(),
+          });
+        }
+        lastPerformanceReport = now;
+      }
+
       animationFrameId = requestAnimationFrame(loop);
     };
 
@@ -622,13 +649,9 @@ export default function App() {
         const canvas = canvasRef.current;
         const width = window.innerWidth;
         const height = window.innerHeight;
-        if (rendererRef.current instanceof PixiGameRenderer) {
-          rendererRef.current.resize(width, height);
-        } else {
-          canvas.width = width;
-          canvas.height = height;
-          rendererRef.current?.resize(width, height);
-        }
+        canvas.width = width;
+        canvas.height = height;
+        rendererRef.current?.resize(width, height);
       }
     };
 
