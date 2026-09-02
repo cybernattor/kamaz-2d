@@ -8,6 +8,12 @@ interface NPCAIExtra {
   roadType: 'vertical' | 'horizontal';
   roadCoord: number; // gx or gy coordinate
   direction: TrafficDirection;
+  laneIndex: 0 | 1;
+  routeRoadIds: string[];
+  routeIndex: number;
+  rerouteCooldown: number;
+  routeSourcePoiId?: string;
+  routeTargetPoiId?: string;
   isTurning: boolean;
   turnStartPos?: { x: number; y: number };
   turnEndPos?: { x: number; y: number };
@@ -28,6 +34,11 @@ interface NPCAIExtra {
     waypoints: Array<{ x: number; y: number }>;
     waypointIndex: number;
   };
+  adaptiveBypass?: {
+    obstacleId: string;
+    waypoints: Array<{ x: number; y: number }>;
+    waypointIndex: number;
+  };
 }
 
 export class TrafficAI {
@@ -42,25 +53,31 @@ export class TrafficAI {
   private maxCars = 40;
   private maxPedestrians = 35;
 
-  private gridX = [600, 1400, 2200, 3000];
-  private gridY = [600, 1400, 2200, 3000];
+  private gridX: number[];
+  private gridY: number[];
   private laneOffset = 34;
+  private laneSpacing = 54;
 
   constructor(cityMap: CityMap) {
     this.cityMap = cityMap;
+    this.gridX = cityMap.roads.filter((road) => road.isVertical && road.roadClass === 'arterial').map((road) => road.x1);
+    this.gridY = cityMap.roads.filter((road) => !road.isVertical && road.roadClass === 'arterial').map((road) => road.y1);
+    if (this.gridX.length < 2) this.gridX = [520, 1320, 2200, 3040];
+    if (this.gridY.length < 2) this.gridY = [620, 1450, 2320, 3100];
     this.spawnInitialTraffic();
     this.spawnInitialPedestrians();
   }
 
-  private getTargetLane(roadType: 'vertical' | 'horizontal', roadCoord: number, direction: TrafficDirection) {
+  private getTargetLane(roadType: 'vertical' | 'horizontal', roadCoord: number, direction: TrafficDirection, laneIndex: 0 | 1 = 0) {
+    const laneOffset = this.laneOffset + laneIndex * this.laneSpacing;
     if (roadType === 'vertical') {
       return {
-        x: direction === 'south' ? roadCoord + this.laneOffset : roadCoord - this.laneOffset,
+        x: direction === 'south' ? roadCoord + laneOffset : roadCoord - laneOffset,
         angle: direction === 'south' ? Math.PI / 2 : -Math.PI / 2,
       };
     } else {
       return {
-        y: direction === 'east' ? roadCoord + this.laneOffset : roadCoord - this.laneOffset,
+        y: direction === 'east' ? roadCoord + laneOffset : roadCoord - laneOffset,
         angle: direction === 'east' ? 0 : Math.PI,
       };
     }
@@ -111,7 +128,7 @@ export class TrafficAI {
     ai: NPCAIExtra,
     inter: Intersection
   ): number | null {
-    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction);
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
 
     if (ai.roadType === 'vertical') {
       if (Math.abs(inter.x - ai.roadCoord) > 70) return null;
@@ -132,6 +149,7 @@ export class TrafficAI {
 
     let active: { inter: Intersection; approachDistance: number } | null = null;
     for (const inter of this.cityMap.intersections) {
+      if (inter.trafficControlled === false) continue;
       const approachDistance = this.getIntersectionApproachDistance(car, ai, inter);
       if (approachDistance === null || approachDistance < -120 || approachDistance > 190) continue;
       if (!active || Math.abs(approachDistance) < Math.abs(active.approachDistance)) {
@@ -168,7 +186,7 @@ export class TrafficAI {
       x: inter.x + forwardX * pastIntersection + lateralX * side * detourOffset,
       y: inter.y + forwardY * pastIntersection + lateralY * side * detourOffset,
     };
-    const targetLane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction);
+    const targetLane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
     const rejoinPoint = ai.roadType === 'vertical'
       ? { x: targetLane.x!, y: pastPoint.y }
       : { x: pastPoint.x, y: targetLane.y! };
@@ -193,7 +211,7 @@ export class TrafficAI {
     if (!waypoint) {
       ai.groundBypass = undefined;
       car.turnSignal = 'none';
-      car.angle = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction).angle;
+      car.angle = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex).angle;
       car.speed = cruiseSpeed * 0.7;
       return false;
     }
@@ -222,6 +240,167 @@ export class TrafficAI {
     );
     car.isBraking = false;
     car.turnSignal = 'hazard';
+    car.x += Math.cos(car.angle) * car.speed * 60 * delta;
+    car.y += Math.sin(car.angle) * car.speed * 60 * delta;
+    return true;
+  }
+
+  private getAdaptiveWaypointClearance(
+    car: VehicleInstance,
+    waypoint: { x: number; y: number },
+    playerVehicle?: VehicleInstance | null
+  ) {
+    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const vehicles = playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles;
+    return vehicles.reduce((minimum, other) => {
+      if (other.id === car.id || other.health <= 0 || other.isCrashed) return minimum;
+      const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
+      const minimumClearance = (carConfig.width + otherConfig.width) * 0.5 + 12;
+      return Math.min(minimum, Math.hypot(other.x - waypoint.x, other.y - waypoint.y) - minimumClearance);
+    }, Infinity);
+  }
+
+  private isAdaptiveWaypointClear(
+    car: VehicleInstance,
+    waypoint: { x: number; y: number },
+    playerVehicle?: VehicleInstance | null
+  ) {
+    return this.getAdaptiveWaypointClearance(car, waypoint, playerVehicle) >= 0;
+  }
+
+  private startAdaptiveBypass(
+    car: VehicleInstance,
+    ai: NPCAIExtra,
+    obstacle: VehicleInstance,
+    playerVehicle?: VehicleInstance | null
+  ) {
+    if (ai.adaptiveBypass || ai.groundBypass || ai.isTurning) return false;
+
+    const forwardX = Math.cos(car.angle);
+    const forwardY = Math.sin(car.angle);
+    const lateralX = -forwardY;
+    const lateralY = forwardX;
+    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const obstacleConfig = VEHICLE_CONFIGS[obstacle.type] || VEHICLE_CONFIGS.sedan;
+    const lateralOffset = Math.min(48, Math.max(34, carConfig.width * 0.9));
+    const passDistance = (carConfig.length + obstacleConfig.length) * 0.5 + 38;
+    const rejoinDistance = passDistance + 58;
+    const sides = [-1, 1] as const;
+
+    const options = sides.map((side) => {
+      const sidePoint = {
+        // First move sideways at the current longitudinal position. Advancing
+        // here would shorten the bumper gap diagonally before the pass starts.
+        x: car.x + lateralX * side * lateralOffset,
+        y: car.y + lateralY * side * lateralOffset,
+      };
+      const passPoint = {
+        x: obstacle.x + forwardX * passDistance + lateralX * side * lateralOffset,
+        y: obstacle.y + forwardY * passDistance + lateralY * side * lateralOffset,
+      };
+      const rejoinPoint = {
+        x: obstacle.x + forwardX * rejoinDistance,
+        y: obstacle.y + forwardY * rejoinDistance,
+      };
+      const clearance = Math.min(
+        ...[sidePoint, passPoint, rejoinPoint].map((point) =>
+          this.getAdaptiveWaypointClearance(car, point, playerVehicle)
+        )
+      );
+      return { side, sidePoint, passPoint, rejoinPoint, clearance };
+    });
+
+    const selected = options
+      .filter((option) => option.clearance >= 0)
+      .sort((first, second) => second.clearance - first.clearance)[0];
+    if (!selected) return false;
+
+    ai.adaptiveBypass = {
+      obstacleId: obstacle.id,
+      waypoints: [selected.sidePoint, selected.passPoint, selected.rejoinPoint],
+      waypointIndex: 0,
+    };
+    ai.progressTimer = 0;
+    ai.stuckTimer = 0;
+    car.isBraking = false;
+    car.turnSignal = selected.side < 0 ? 'left' : 'right';
+    return true;
+  }
+
+  private updateAdaptiveBypass(
+    car: VehicleInstance,
+    ai: NPCAIExtra,
+    delta: number,
+    cruiseSpeed: number,
+    playerVehicle?: VehicleInstance | null
+  ) {
+    const bypass = ai.adaptiveBypass;
+    if (!bypass) return false;
+
+    const waypoint = bypass.waypoints[bypass.waypointIndex];
+    if (!waypoint) {
+      ai.adaptiveBypass = undefined;
+      car.turnSignal = 'none';
+      car.angle = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex).angle;
+      car.speed = cruiseSpeed * 0.72;
+      return false;
+    }
+
+    // Re-check the route every frame. A route that was free when selected can
+    // become occupied by another NPC before the pass point is reached.
+    if (!this.isAdaptiveWaypointClear(car, waypoint, playerVehicle)) {
+      car.speed = Math.max(0, car.speed - 5 * delta);
+      car.isBraking = true;
+      return true;
+    }
+
+    const dx = waypoint.x - car.x;
+    const dy = waypoint.y - car.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 14) {
+      bypass.waypointIndex += 1;
+      return true;
+    }
+
+    const desiredAngle = Math.atan2(dy, dx);
+    const angleDelta = Math.atan2(
+      Math.sin(desiredAngle - car.angle),
+      Math.cos(desiredAngle - car.angle)
+    );
+    const maxTurnPerFrame = Math.min(0.18, Math.max(0.06, 11 * delta));
+    car.angle += Math.max(-maxTurnPerFrame, Math.min(maxTurnPerFrame, angleDelta));
+    const alignment = Math.max(0.22, Math.cos(angleDelta));
+    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const bypassSpeed = Math.min(8.5, Math.max(5.0, cruiseSpeed * 0.62));
+    const nextSpeed = Math.min(
+      bypassSpeed * Math.min(1, alignment * 1.45),
+      distance / Math.max(delta * 60, 1)
+    );
+    const projectedPosition = {
+      x: car.x + Math.cos(car.angle) * nextSpeed * 60 * delta,
+      y: car.y + Math.sin(car.angle) * nextSpeed * 60 * delta,
+    };
+    const obstacle = (playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles)
+      .find((candidate) => candidate.id === bypass.obstacleId);
+    if (obstacle) {
+      const obstacleConfig = VEHICLE_CONFIGS[obstacle.type] || VEHICLE_CONFIGS.sedan;
+      const safeGap = (carConfig.length + obstacleConfig.length) * 0.5 + 24;
+      if (Math.hypot(projectedPosition.x - obstacle.x, projectedPosition.y - obstacle.y) < safeGap) {
+        car.speed = 0;
+        car.isBraking = true;
+        return true;
+      }
+    }
+    if (!this.isAdaptiveWaypointClear(car, projectedPosition, playerVehicle)) {
+      // Keep steering toward the selected side while stationary. This avoids
+      // cutting diagonally into the obstacle during the first half of a lane
+      // change, then resumes as soon as the projected position is clear.
+      car.speed = 0;
+      car.isBraking = true;
+      return true;
+    }
+    car.speed = nextSpeed;
+    car.isBraking = false;
     car.x += Math.cos(car.angle) * car.speed * 60 * delta;
     car.y += Math.sin(car.angle) * car.speed * 60 * delta;
     return true;
@@ -330,8 +509,8 @@ export class TrafficAI {
     if (first.isTurning || second.isTurning || first.roadType !== second.roadType) return false;
     if (first.roadCoord !== second.roadCoord || first.direction !== second.direction) return false;
 
-    const firstLane = this.getTargetLane(first.roadType, first.roadCoord, first.direction);
-    const secondLane = this.getTargetLane(second.roadType, second.roadCoord, second.direction);
+    const firstLane = this.getTargetLane(first.roadType, first.roadCoord, first.direction, first.laneIndex);
+    const secondLane = this.getTargetLane(second.roadType, second.roadCoord, second.direction, second.laneIndex);
     return first.roadType === 'vertical'
       ? Math.abs(firstLane.x! - secondLane.x!) < 10
       : Math.abs(firstLane.y! - secondLane.y!) < 10;
@@ -352,6 +531,8 @@ export class TrafficAI {
           const secondConfig = VEHICLE_CONFIGS[second.type] || VEHICLE_CONFIGS.sedan;
           const dx = second.x - first.x;
           const dy = second.y - first.y;
+          const firstAi = this.aiData.get(first.id);
+          const secondAi = this.aiData.get(second.id);
           const distance = Math.hypot(dx, dy);
           // Keep same-heading traffic ordered along its lane. Choosing the
           // yielding vehicle by id alone can move the lead car forward and
@@ -360,14 +541,24 @@ export class TrafficAI {
             Math.sin(second.angle - first.angle),
             Math.cos(second.angle - first.angle)
           );
-          const sameHeading = Math.abs(angleDifference) < 0.25;
-          const firstAi = this.aiData.get(first.id);
-          const secondAi = this.aiData.get(second.id);
+          const sameAssignedLane = Boolean(
+            firstAi && secondAi &&
+              !firstAi.isTurning && !secondAi.isTurning &&
+              firstAi.roadType === secondAi.roadType &&
+              firstAi.roadCoord === secondAi.roadCoord &&
+              firstAi.direction === secondAi.direction &&
+              firstAi.laneIndex === secondAi.laneIndex
+          );
+          // Keep a vehicle in its assigned queue even while it is easing
+          // around an obstacle. Using only the instantaneous angle here made
+          // an adaptive bypass temporarily lose its longitudinal clearance.
+          const sameHeading = sameAssignedLane;
           const sameRoadOppositeLane = Boolean(
             firstAi && secondAi &&
               !firstAi.isTurning && !secondAi.isTurning &&
               firstAi.roadType === secondAi.roadType &&
               firstAi.roadCoord === secondAi.roadCoord &&
+              firstAi.laneIndex === secondAi.laneIndex &&
               firstAi.direction !== secondAi.direction
           );
           const firstRadius = Math.hypot(firstConfig.length / 2, firstConfig.width / 2);
@@ -505,10 +696,18 @@ export class TrafficAI {
       };
 
       this.npcVehicles.push(car);
+      const routeSourcePoiId = this.cityMap.pois[i % this.cityMap.pois.length]?.id || 'poi_depot';
+      const routeTargetPoiId = this.cityMap.pois[(i * 3 + 2) % this.cityMap.pois.length]?.id || 'poi_market';
       this.aiData.set(carId, {
         roadType: isVert ? 'vertical' : 'horizontal',
         roadCoord,
         direction,
+        laneIndex: (i % 4 === 1 ? 1 : 0) as 0 | 1,
+        routeRoadIds: this.cityMap.getRouteBetweenPois(routeSourcePoiId, routeTargetPoiId),
+        routeIndex: 0,
+        rerouteCooldown: 0,
+        routeSourcePoiId,
+        routeTargetPoiId,
         isTurning: false,
         turnProgress: 0,
         turnStartAngle: angle,
@@ -662,6 +861,10 @@ export class TrafficAI {
           roadType: 'vertical',
           roadCoord: this.gridX[0],
           direction: 'south',
+          laneIndex: 0,
+          routeRoadIds: [],
+          routeIndex: 0,
+          rerouteCooldown: 0,
           isTurning: false,
           turnProgress: 0,
           turnStartAngle: Math.PI / 2,
@@ -684,10 +887,52 @@ export class TrafficAI {
         ai.lastY = car.y;
         continue;
       }
+      if (this.updateAdaptiveBypass(car, ai, delta, cruiseSpeed, playerVehicle)) {
+        ai.lastX = car.x;
+        ai.lastY = car.y;
+        continue;
+      }
       const movementSinceLastTick = Math.hypot(car.x - ai.lastX, car.y - ai.lastY);
       ai.progressTimer = movementSinceLastTick < 0.2 ? ai.progressTimer + delta : 0;
+      ai.rerouteCooldown = Math.max(0, ai.rerouteCooldown - delta);
       ai.lastX = car.x;
       ai.lastY = car.y;
+      // Hysteresis: a blocked route may be reconsidered, but not every frame.
+      // This is the traffic equivalent of a driver waiting for the next safe
+      // gap instead of oscillating between two turns.
+      if (
+        ai.progressTimer > 1.4 &&
+        ai.rerouteCooldown <= 0 &&
+        ai.routeSourcePoiId &&
+        ai.routeTargetPoiId
+      ) {
+        const blockedRoadIds = this.npcVehicles
+          .filter((candidate) => candidate.id !== car.id && candidate.isCrashed)
+          .map((candidate) => ai.routeRoadIds[Math.min(ai.routeIndex, Math.max(0, ai.routeRoadIds.length - 1))])
+          .filter((roadId): roadId is string => Boolean(roadId));
+        const alternative = this.cityMap.getRouteBetweenPois(
+          ai.routeSourcePoiId,
+          ai.routeTargetPoiId,
+          blockedRoadIds,
+          (edge) => {
+            const road = this.cityMap.roads.find((candidate) => candidate.id === edge.roadId);
+            if (!road) return 0;
+            const occupancy = this.npcVehicles.filter((candidate) => {
+              if (candidate.id === car.id || candidate.health <= 0) return false;
+              return road.points.some((point) => Math.hypot(candidate.x - point.x, candidate.y - point.y) < 130);
+            }).length;
+            const crashed = this.npcVehicles.some((candidate) =>
+              candidate.id !== car.id && candidate.isCrashed && road.points.some((point) => Math.hypot(candidate.x - point.x, candidate.y - point.y) < 150)
+            );
+            return occupancy * 24 + (crashed ? 12000 : 0);
+          }
+        );
+        if (alternative.length > 0) {
+          ai.routeRoadIds = alternative;
+          ai.routeIndex = 0;
+          ai.rerouteCooldown = 2.2;
+        }
+      }
       // Traffic uses the same world-unit scale as the player physics. Keeping
       // NPCs below 16 px/frame leaves enough distance to react to a light and
       // prevents the first frame burst from turning into a traffic pile-up.
@@ -727,7 +972,7 @@ export class TrafficAI {
           ai.roadType = nearestIsVert ? 'vertical' : 'horizontal';
           ai.roadCoord = nearestCoord;
           ai.direction = nearestIsVert ? 'south' : 'east';
-          const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction);
+          const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
           if (nearestIsVert) {
             car.x = lane.x!;
           } else {
@@ -754,10 +999,14 @@ export class TrafficAI {
       // still moving and enter a red intersection.
       if (!car.isSiren && !ai.isTurning) {
         for (const inter of this.cityMap.intersections) {
+          if (inter.trafficControlled === false) continue;
           let distAxis = 9999;
           let lightState: 'red' | 'yellow' | 'green' = 'green';
 
-          if (ai.roadType === 'vertical' && Math.abs(car.x - inter.x) < 55) {
+          // Two lanes per direction place the inner lane farther from the
+          // road center. Check the road corridor, not only the old single
+          // lane center, otherwise the second lane would ignore the light.
+          if (ai.roadType === 'vertical' && Math.abs(car.x - inter.x) < 110) {
             if (ai.direction === 'south') {
               distAxis = inter.y - car.y; // Approaching from North (above)
               if (distAxis > 0 && distAxis < 230) {
@@ -775,7 +1024,7 @@ export class TrafficAI {
                 if (tl) lightState = tl.state;
               }
             }
-          } else if (ai.roadType === 'horizontal' && Math.abs(car.y - inter.y) < 55) {
+          } else if (ai.roadType === 'horizontal' && Math.abs(car.y - inter.y) < 110) {
             if (ai.direction === 'east') {
               distAxis = inter.x - car.x; // Approaching from West (left)
               if (distAxis > 0 && distAxis < 230) {
@@ -819,6 +1068,7 @@ export class TrafficAI {
       let blockedBySameLaneTraffic = false;
       let blockedByTraffic = false;
       let blockedByPlayer = false;
+      let blockedObstacle: VehicleInstance | null = null;
       const activeIntersection = this.getActiveIntersection(car, ai);
       if (!ai.isTurning) {
         const allObstacles = playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles;
@@ -857,7 +1107,7 @@ export class TrafficAI {
             const forwardX = Math.cos(car.angle);
             const forwardY = Math.sin(car.angle);
             const dot = (dx * forwardX + dy * forwardY) / dist;
-            const targetLane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction);
+            const targetLane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
             const playerInSameLane = !other.isPlayer || (
               ai.roadType === 'vertical'
                 ? Math.abs(other.x - targetLane.x!) < 58
@@ -873,6 +1123,7 @@ export class TrafficAI {
                 shouldStop = true;
                 blockedBySameLaneTraffic = true;
                 if (other.isPlayer) blockedByPlayer = true;
+                blockedObstacle = other;
                 // Put the follower at a deterministic bumper gap immediately
                 // instead of letting braking integrate through the obstacle
                 // and oscillate around it for several frames.
@@ -927,7 +1178,7 @@ export class TrafficAI {
       // short-radius obstacle scan, so a stopped player is caught early enough
       // for the NPC to settle behind the bumper rather than tap it first.
       if (playerVehicle && !ai.isTurning) {
-        const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction);
+        const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
         const playerDx = playerVehicle.x - car.x;
         const playerDy = playerVehicle.y - car.y;
         const forwardX = Math.cos(car.angle);
@@ -942,6 +1193,7 @@ export class TrafficAI {
           const safeGap = (config.length + playerConfig.length) * 0.5 + 24;
           blockedByPlayer = true;
           shouldStop = true;
+          blockedObstacle = playerVehicle;
           if (aheadDistance <= safeGap + 30) {
             car.x = playerVehicle.x - forwardX * safeGap;
             car.y = playerVehicle.y - forwardY * safeGap;
@@ -950,6 +1202,9 @@ export class TrafficAI {
             targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92));
           }
         }
+      }
+      if (blockedObstacle && !activeIntersection && ai.progressTimer > 0.45) {
+        if (this.startAdaptiveBypass(car, ai, blockedObstacle, playerVehicle)) continue;
       }
       if (blockedByPlayer && activeIntersection && ai.progressTimer > 2.5) {
         if (this.startGroundBypass(car, ai, activeIntersection.inter)) continue;
@@ -1024,7 +1279,7 @@ export class TrafficAI {
             }
           }
 
-          const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction);
+          const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
           if (ai.roadType === 'vertical') car.x = lane.x!;
           else car.y = lane.y!;
           // Pull a deadlocked car back along its own lane instead of teleporting
@@ -1046,10 +1301,11 @@ export class TrafficAI {
       // 7. Intersection Turning Navigation & Lane Handover
       if (!ai.isTurning && !shouldStop) {
         for (const inter of this.cityMap.intersections) {
+          if (inter.trafficControlled === false) continue;
           const dInter = Math.hypot(inter.x - car.x, inter.y - car.y);
 
           // Check if right at intersection entrance
-          if (dInter < 52 && ai.lastIntersectionId !== inter.id) {
+          if (dInter < 116 && ai.lastIntersectionId !== inter.id) {
             ai.lastIntersectionId = inter.id;
 
             const roll = Math.random();
@@ -1060,7 +1316,8 @@ export class TrafficAI {
                 inter,
                 ai.roadType,
                 ai.direction,
-                isRightTurn
+                isRightTurn,
+                ai.laneIndex
               );
 
               if (turnResult) {
@@ -1166,7 +1423,7 @@ export class TrafficAI {
 
       // 10. Straight Road Driving & Active Lane-Centering
       if (!ai.isTurning) {
-        const targetLane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction);
+        const targetLane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
 
         // Integrate forward motion along current heading
         const vx = Math.cos(car.angle) * car.speed;
@@ -1213,7 +1470,8 @@ export class TrafficAI {
     inter: Intersection,
     currentRoadType: 'vertical' | 'horizontal',
     currentDirection: TrafficDirection,
-    isRightTurn: boolean
+    isRightTurn: boolean,
+    laneIndex: 0 | 1 = 0
   ): {
     endPos: { x: number; y: number };
     controlPos: { x: number; y: number };
@@ -1223,7 +1481,7 @@ export class TrafficAI {
   } | null {
     const gx = inter.x;
     const gy = inter.y;
-    const off = this.laneOffset;
+    const off = this.laneOffset + laneIndex * this.laneSpacing;
 
     if (currentRoadType === 'vertical') {
       if (currentDirection === 'south') {

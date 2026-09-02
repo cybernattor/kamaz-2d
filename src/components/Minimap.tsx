@@ -101,31 +101,41 @@ export const Minimap: React.FC<MinimapProps> = ({
       ctx.lineTo(MAP_SIZE / 2, MAP_SIZE);
       ctx.stroke();
 
-      // Roads.
-      ctx.fillStyle = 'rgba(71, 85, 105, 0.62)';
-      for (const road of map.roads) {
-        if (road.isVertical) {
-          const { x } = toRadar(road.x1, smooth.y);
-          if (x >= -10 && x <= MAP_SIZE + 10) ctx.fillRect(x - 3, 0, 6, MAP_SIZE);
-        } else {
-          const { y } = toRadar(smooth.x, road.y1);
-          if (y >= -10 && y <= MAP_SIZE + 10) ctx.fillRect(0, y - 3, MAP_SIZE, 6);
-        }
-      }
-
-      // Show the district shapes behind traffic dots so the radar has more
-      // landmarks than identical perpendicular roads.
+      // Districts first: the radar should communicate where the player is,
+      // not only show a stack of identical perpendicular lines.
       for (const zone of map.decorations) {
         const topLeft = toRadar(zone.x - zone.width / 2, zone.y - zone.height / 2);
         const bottomRight = toRadar(zone.x + zone.width / 2, zone.y + zone.height / 2);
-        ctx.fillStyle = zone.type === 'water'
+        ctx.fillStyle = zone.type === 'water' || zone.type === 'beach'
           ? 'rgba(14, 116, 144, 0.5)'
-          : zone.type === 'industrial'
+          : zone.type === 'industrial' || zone.type === 'airport'
           ? 'rgba(82, 82, 91, 0.45)'
+          : zone.type === 'desert'
+          ? 'rgba(146, 84, 24, 0.52)'
+          : zone.type === 'hills'
+          ? 'rgba(54, 83, 20, 0.5)'
+          : zone.type === 'rail'
+          ? 'rgba(71, 85, 105, 0.5)'
           : zone.type === 'plaza'
-          ? 'rgba(100, 116, 139, 0.45)'
+          ? 'rgba(30, 64, 175, 0.42)'
           : 'rgba(22, 101, 52, 0.5)';
         ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+      }
+
+      // Roads are centerline polylines, including the ring road, ramps and
+      // the winding country route.
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (const road of map.roads) {
+        if (road.points.length < 2) continue;
+        ctx.strokeStyle = road.roadClass === 'dirt' ? 'rgba(180, 126, 58, 0.9)' : road.roadClass === 'highway' ? 'rgba(148, 163, 184, 0.9)' : 'rgba(71, 85, 105, 0.78)';
+        ctx.lineWidth = road.roadClass === 'dirt' ? 2 : road.lanesPerDirection === 2 ? 5 : 3;
+        ctx.beginPath();
+        road.points.forEach((point, index) => {
+          const pos = toRadar(point.x, point.y);
+          if (index === 0) ctx.moveTo(pos.x, pos.y); else ctx.lineTo(pos.x, pos.y);
+        });
+        ctx.stroke();
       }
 
       for (const route of map.scenicRoutes) {

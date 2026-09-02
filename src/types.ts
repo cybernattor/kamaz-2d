@@ -156,7 +156,17 @@ export interface TrafficLight {
   pedestrianState: 'walk' | 'dont_walk';
 }
 
-export type MapDecorationType = 'water' | 'park' | 'forest' | 'plaza' | 'industrial';
+export type MapDecorationType =
+  | 'water'
+  | 'park'
+  | 'forest'
+  | 'plaza'
+  | 'industrial'
+  | 'desert'
+  | 'hills'
+  | 'rail'
+  | 'beach'
+  | 'airport';
 
 export interface MapDecoration {
   id: string;
@@ -178,7 +188,22 @@ export interface PointOfInterest {
   id: string;
   name: string;
   nameRu: string;
-  type: 'depot' | 'construction' | 'port' | 'quarry' | 'hospital' | 'police' | 'workshop' | 'gas_station' | 'warehouse';
+  type:
+    | 'depot'
+    | 'construction'
+    | 'port'
+    | 'quarry'
+    | 'hospital'
+    | 'police'
+    | 'workshop'
+    | 'gas_station'
+    | 'warehouse'
+    | 'airport'
+    | 'rail_terminal'
+    | 'truck_stop'
+    | 'market'
+    | 'lookout'
+    | 'camp';
   x: number;
   y: number;
   width: number;

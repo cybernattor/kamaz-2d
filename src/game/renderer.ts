@@ -157,10 +157,20 @@ export class GameRenderer {
         ? '#3f3f46'
         : zone.type === 'plaza'
         ? '#475569'
+        : zone.type === 'desert'
+        ? '#713f12'
+        : zone.type === 'hills'
+        ? '#365314'
+        : zone.type === 'rail'
+        ? '#1e293b'
+        : zone.type === 'airport'
+        ? '#334155'
+        : zone.type === 'beach'
+        ? '#a16207'
         : '#166534';
       ctx.fillRect(left, top, zone.width, zone.height);
 
-      ctx.strokeStyle = zone.type === 'water' ? '#38bdf8' : '#4ade80';
+      ctx.strokeStyle = zone.type === 'water' || zone.type === 'rail' || zone.type === 'airport' ? '#38bdf8' : zone.type === 'desert' ? '#f59e0b' : '#4ade80';
       ctx.lineWidth = 3;
       ctx.strokeRect(left + 3, top + 3, zone.width - 6, zone.height - 6);
 
@@ -233,6 +243,43 @@ export class GameRenderer {
         ctx.lineTo(right - 16, bottom - 38);
         ctx.stroke();
         ctx.setLineDash([]);
+      } else if (zone.type === 'desert' || zone.type === 'hills') {
+        ctx.fillStyle = zone.type === 'desert' ? 'rgba(251, 191, 36, 0.28)' : 'rgba(134, 239, 172, 0.18)';
+        for (let i = 0; i < 9; i += 1) {
+          const hillX = left + 50 + ((i * 137) % Math.max(80, zone.width - 80));
+          const hillY = top + 40 + ((i * 83) % Math.max(80, zone.height - 80));
+          ctx.beginPath();
+          ctx.arc(hillX, hillY, zone.type === 'desert' ? 20 + (i % 3) * 8 : 34 + (i % 2) * 12, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (zone.type === 'rail') {
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 3;
+        for (let y = top + 18; y < bottom; y += 26) {
+          ctx.beginPath();
+          ctx.moveTo(left, y);
+          ctx.lineTo(right, y);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(left, top + 20);
+        ctx.lineTo(right, top + 20);
+        ctx.moveTo(left, bottom - 20);
+        ctx.lineTo(right, bottom - 20);
+        ctx.stroke();
+      } else if (zone.type === 'airport') {
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(left + 20, zone.y - 9, zone.width - 40, 18);
+        ctx.strokeStyle = '#f8fafc';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([24, 18]);
+        ctx.beginPath();
+        ctx.moveTo(left + 35, zone.y);
+        ctx.lineTo(right - 35, zone.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
 
       ctx.fillStyle = 'rgba(226, 232, 240, 0.72)';
@@ -274,76 +321,68 @@ export class GameRenderer {
   private renderRoads(ctx: CanvasRenderingContext2D, roads: RoadSegment[]) {
     roads.forEach((road) => {
       ctx.save();
-      const isVert = road.isVertical;
+      const points = road.points.length > 1 ? road.points : [{ x: road.x1, y: road.y1 }, { x: road.x2, y: road.y2 }];
+      const draw = (offset = 0) => {
+        ctx.beginPath();
+        points.forEach((point, index) => {
+          const previous = points[Math.max(0, index - 1)];
+          const next = points[Math.min(points.length - 1, index + 1)];
+          const tangentX = next.x - previous.x;
+          const tangentY = next.y - previous.y;
+          const length = Math.hypot(tangentX, tangentY) || 1;
+          const x = point.x - (tangentY / length) * offset;
+          const y = point.y + (tangentX / length) * offset;
+          if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      };
 
-      // Sidewalk Outer Border
-      ctx.fillStyle = '#334155'; // Slate sidewalk
-      if (isVert) {
-        ctx.fillRect(road.x1 - road.width / 2 - 24, 0, road.width + 48, WORLD_SIZE);
-      } else {
-        ctx.fillRect(0, road.y1 - road.width / 2 - 24, WORLD_SIZE, road.width + 48);
-      }
-
-      // Asphalt Road Surface
-      ctx.fillStyle = '#1e2530'; // Dark asphalt
-      if (isVert) {
-        ctx.fillRect(road.x1 - road.width / 2, 0, road.width, WORLD_SIZE);
-      } else {
-        ctx.fillRect(0, road.y1 - road.width / 2, WORLD_SIZE, road.width);
-      }
-
-      // Road Curb Lines
+      // Sidewalk and asphalt are stroked along the full polyline, so bends do
+      // not turn into disconnected rectangular slabs.
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = road.width + 48;
+      draw();
+      ctx.strokeStyle = road.roadClass === 'dirt' ? '#9a6b30' : road.roadClass === 'highway' ? '#202938' : '#1e2530';
+      ctx.lineWidth = road.width;
+      draw();
       ctx.strokeStyle = '#64748b';
       ctx.lineWidth = 2;
-      if (isVert) {
-        ctx.strokeRect(road.x1 - road.width / 2, 0, road.width, WORLD_SIZE);
+      draw(road.width / 2);
+      draw(-road.width / 2);
+
+      if (road.roadClass !== 'dirt') {
+        const laneWidth = road.width / (road.lanesPerDirection * 2);
+        ctx.strokeStyle = '#eab308';
+        ctx.lineWidth = road.directionMode === 'one-way' ? 2 : 3;
+        ctx.setLineDash([]);
+        draw(road.directionMode === 'one-way' ? 0 : 3);
+        if (road.directionMode !== 'one-way') draw(-3);
+
+        ctx.strokeStyle = '#f8fafc';
+        ctx.lineWidth = 2.2;
+        ctx.setLineDash([16, 18]);
+        for (let lane = 1; lane < road.lanesPerDirection * 2; lane += 1) {
+          if (road.directionMode === 'one-way' && lane === road.lanesPerDirection) continue;
+          const offset = -road.width / 2 + laneWidth * lane;
+          draw(offset);
+        }
       } else {
-        ctx.strokeRect(0, road.y1 - road.width / 2, WORLD_SIZE, road.width);
+        ctx.strokeStyle = '#f1d39b';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([14, 12]);
+        draw();
+      }
+      if (road.feature === 'bridge' || road.feature === 'tunnel') {
+        ctx.strokeStyle = road.feature === 'bridge' ? '#93c5fd' : '#64748b';
+        ctx.lineWidth = 5;
+        ctx.setLineDash([28, 20]);
+        draw(road.width / 2 + 11);
+        draw(-road.width / 2 - 11);
       }
 
-      // Double Solid Center Yellow Lines (Iconic Russian/Global Road Marking)
-      ctx.strokeStyle = '#eab308'; // Vivid Yellow
-      ctx.lineWidth = 3;
       ctx.setLineDash([]);
-
-      if (isVert) {
-        ctx.beginPath();
-        ctx.moveTo(road.x1 - 4, 0);
-        ctx.lineTo(road.x1 - 4, WORLD_SIZE);
-        ctx.moveTo(road.x1 + 4, 0);
-        ctx.lineTo(road.x1 + 4, WORLD_SIZE);
-        ctx.stroke();
-      } else {
-        ctx.beginPath();
-        ctx.moveTo(0, road.y1 - 4);
-        ctx.lineTo(WORLD_SIZE, road.y1 - 4);
-        ctx.moveTo(0, road.y1 + 4);
-        ctx.lineTo(WORLD_SIZE, road.y1 + 4);
-        ctx.stroke();
-      }
-
-      // White Dashed Lane Separators
-      ctx.strokeStyle = '#f8fafc';
-      ctx.lineWidth = 2.5;
-      ctx.setLineDash([16, 18]);
-
-      const laneOffset = 34;
-      if (isVert) {
-        ctx.beginPath();
-        ctx.moveTo(road.x1 - laneOffset, 0);
-        ctx.lineTo(road.x1 - laneOffset, WORLD_SIZE);
-        ctx.moveTo(road.x1 + laneOffset, 0);
-        ctx.lineTo(road.x1 + laneOffset, WORLD_SIZE);
-        ctx.stroke();
-      } else {
-        ctx.beginPath();
-        ctx.moveTo(0, road.y1 - laneOffset);
-        ctx.lineTo(WORLD_SIZE, road.y1 - laneOffset);
-        ctx.moveTo(0, road.y1 + laneOffset);
-        ctx.lineTo(WORLD_SIZE, road.y1 + laneOffset);
-        ctx.stroke();
-      }
-
       ctx.restore();
     });
   }

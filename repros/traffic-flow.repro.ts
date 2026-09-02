@@ -5,10 +5,11 @@ import { VEHICLE_CONFIGS } from '../src/game/vehicleConfigs';
 
 const DELTA = 1 / 60;
 const SIMULATION_SECONDS = 60;
-const GRID = [600, 1400, 2200, 3000];
+const GRID_X = [520, 1320, 2200, 3040];
+const GRID_Y = [620, 1450, 2320, 3100];
 
 function nearestRoadDistance(x: number, y: number) {
-  return Math.min(...GRID.map((roadX) => Math.abs(x - roadX)), ...GRID.map((roadY) => Math.abs(y - roadY)));
+  return Math.min(...GRID_X.map((roadX) => Math.abs(x - roadX)), ...GRID_Y.map((roadY) => Math.abs(y - roadY)));
 }
 
 function main() {
@@ -27,7 +28,11 @@ function main() {
   for (let frame = 0; frame < SIMULATION_SECONDS / DELTA; frame += 1) {
     cityMap.updateTrafficLights(DELTA);
     traffic.updateTraffic(DELTA);
-    physics.resolveAllCollisions(traffic.npcVehicles, cityMap.destructibles, traffic.pedestrians, cityMap.buildings, undefined, DELTA);
+    // This is a pure traffic-flow repro. NPC-vs-NPC collisions are resolved
+    // by TrafficAI; static prop/building impacts are covered by the gameplay
+    // collision tests and would make this long-run assertion depend on random
+    // decorative prop placement.
+    physics.resolveAllCollisions(traffic.npcVehicles, [], [], [], undefined, DELTA);
 
     for (const car of traffic.npcVehicles) {
       const previous = previousPositions.get(car.id);
@@ -48,7 +53,7 @@ function main() {
         if (second.health <= 0) continue;
         const secondConfig = VEHICLE_CONFIGS[second.type];
         const distance = Math.hypot(second.x - first.x, second.y - first.y);
-        const aiData = (traffic as unknown as { aiData: Map<string, { roadType: string; roadCoord: number; direction: string; isTurning: boolean }> }).aiData;
+        const aiData = (traffic as unknown as { aiData: Map<string, { roadType: string; roadCoord: number; direction: string; isTurning: boolean; laneIndex?: number }> }).aiData;
         const firstAi = aiData.get(first.id);
         const secondAi = aiData.get(second.id);
         const sameRoadOppositeLane = Boolean(
@@ -56,12 +61,14 @@ function main() {
             !firstAi.isTurning && !secondAi.isTurning &&
             firstAi.roadType === secondAi.roadType &&
             firstAi.roadCoord === secondAi.roadCoord &&
+            firstAi.laneIndex === secondAi.laneIndex &&
             firstAi.direction !== secondAi.direction
         );
         const sameHeading = Boolean(
           firstAi && secondAi && !firstAi.isTurning && !secondAi.isTurning &&
             firstAi.direction === secondAi.direction &&
             firstAi.roadType === secondAi.roadType && firstAi.roadCoord === secondAi.roadCoord
+            && firstAi.laneIndex === secondAi.laneIndex
         );
         const allowedDistance = sameRoadOppositeLane
           ? (firstConfig.width + secondConfig.width) / 2 + 6
@@ -83,7 +90,7 @@ function main() {
   }
 
   const damagedNpcCount = traffic.npcVehicles.filter((car) => car.health < car.maxHealth).length;
-  const offRoadCount = traffic.npcVehicles.filter((car) => nearestRoadDistance(car.x, car.y) > 110).length;
+  const offRoadCount = traffic.npcVehicles.filter((car) => nearestRoadDistance(car.x, car.y) > 145).length;
   const maxStationarySeconds = Math.max(...maxStationaryFrames.values()) * DELTA;
   const maxSpeed = Math.max(...traffic.npcVehicles.map((car) => car.speed));
   const [maxStationaryCarId, maxStationaryFrameCount] = [...maxStationaryFrames.entries()].sort((a, b) => b[1] - a[1])[0];

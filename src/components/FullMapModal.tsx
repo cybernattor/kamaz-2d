@@ -70,14 +70,44 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
       const map = cityMapRef.current;
       const toMapCoord = (value: number) => (value / WORLD_SIZE) * FULL_MAP_SIZE;
 
-      // Roads.
-      ctx.fillStyle = 'rgba(71, 85, 105, 0.72)';
+      // Districts create the GTA-style city/outskirts contrast before the
+      // road network is drawn on top.
+      for (const district of map.districts) {
+        const x = toMapCoord(district.x - district.width / 2);
+        const y = toMapCoord(district.y - district.height / 2);
+        ctx.fillStyle = `${district.color}cc`;
+        ctx.fillRect(x, y, toMapCoord(district.width), toMapCoord(district.height));
+        ctx.strokeStyle = `${district.accent}88`;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, toMapCoord(district.width), toMapCoord(district.height));
+        ctx.fillStyle = `${district.accent}bb`;
+        ctx.font = 'bold 12px "JetBrains Mono", sans-serif';
+        ctx.fillText(district.name, x + 12, y + 20);
+      }
+
+      // Road centerline polylines preserve bridges, ramps, ring roads and
+      // the winding country route in the overview.
       for (const road of map.roads) {
-        if (road.isVertical) {
-          ctx.fillRect(toMapCoord(road.x1) - 8, 0, 16, FULL_MAP_SIZE);
-        } else {
-          ctx.fillRect(0, toMapCoord(road.y1) - 8, FULL_MAP_SIZE, 16);
+        if (road.points.length < 2) continue;
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = road.roadClass === 'dirt' ? '#a16207' : road.roadClass === 'highway' ? '#cbd5e1' : '#475569';
+        ctx.lineWidth = road.roadClass === 'dirt' ? 5 : road.lanesPerDirection === 2 ? 13 : 8;
+        ctx.beginPath();
+        road.points.forEach((point, index) => {
+          const x = toMapCoord(point.x);
+          const y = toMapCoord(point.y);
+          if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        if (road.feature === 'bridge' || road.feature === 'tunnel' || road.feature === 'rail_crossing') {
+          ctx.strokeStyle = road.feature === 'bridge' ? '#38bdf8' : road.feature === 'tunnel' ? '#94a3b8' : '#facc15';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 6]);
+          ctx.stroke();
         }
+        ctx.restore();
       }
 
       // Districts make the overview readable: the city is not only a grid
@@ -93,6 +123,14 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
           ? 'rgba(82, 82, 91, 0.9)'
           : zone.type === 'plaza'
           ? 'rgba(100, 116, 139, 0.9)'
+          : zone.type === 'desert'
+          ? 'rgba(146, 84, 24, 0.82)'
+          : zone.type === 'hills'
+          ? 'rgba(54, 83, 20, 0.82)'
+          : zone.type === 'rail'
+          ? 'rgba(71, 85, 105, 0.84)'
+          : zone.type === 'airport'
+          ? 'rgba(51, 65, 85, 0.9)'
           : 'rgba(22, 101, 52, 0.9)';
         ctx.fillRect(x, y, width, height);
         ctx.strokeStyle = zone.type === 'water' ? '#38bdf8' : '#4ade80';
@@ -239,7 +277,7 @@ export const FullMapModal: React.FC<FullMapModalProps> = ({
             </div>
             <div>
               <h3 className="text-lg font-bold text-slate-100">Карта Города и Логистических Зон</h3>
-              <p className="text-xs text-slate-400">Обзор всех районов, баз КАМАЗ, строек, порта и карьера</p>
+              <p className="text-xs text-slate-400">6 районов · трассы, порт, ж/д, аэропорт, карьер и лесные маршруты</p>
             </div>
           </div>
 

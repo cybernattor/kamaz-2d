@@ -2,10 +2,11 @@ import { CityMap } from '../src/game/cityMap';
 import { TrafficAI } from '../src/game/trafficAI';
 
 const DELTA = 1 / 60;
-const GRID = [600, 1400, 2200, 3000];
+const GRID_X = [520, 1320, 2200, 3040];
+const GRID_Y = [620, 1450, 2320, 3100];
 
 function nearestRoadDistance(x: number, y: number) {
-  return Math.min(...GRID.map((roadX) => Math.abs(x - roadX)), ...GRID.map((roadY) => Math.abs(y - roadY)));
+  return Math.min(...GRID_X.map((roadX) => Math.abs(x - roadX)), ...GRID_Y.map((roadY) => Math.abs(y - roadY)));
 }
 
 function main() {
