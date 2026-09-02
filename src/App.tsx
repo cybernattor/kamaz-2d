@@ -93,6 +93,11 @@ export default function App() {
   const [isNight, setIsNight] = useState<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(1.0);
+  // The render loop reads these through refs. Putting them in the effect's
+  // dependency list would tear down the WebGL renderer - and re-upload the
+  // whole city texture - every time the player zooms or picks a mission.
+  const zoomRef = useRef(1.0);
+  const targetPoiRef = useRef<PointOfInterest | null>(null);
 
   const [activeMission, setActiveMission] = useState<Mission | null>(null);
   const [targetPoi, setTargetPoi] = useState<PointOfInterest | null>(null);
@@ -355,6 +360,9 @@ export default function App() {
         const fallback = new GameRenderer(context);
         fallback.resize(window.innerWidth, window.innerHeight);
         rendererRef.current = fallback;
+        // Which renderer is live is the first thing to check when the game
+        // feels slow or soft: the Canvas path is the low-end fallback.
+        document.body.dataset.renderer = 'canvas';
       } catch {
         rendererRef.current = null;
       }
@@ -381,6 +389,7 @@ export default function App() {
           canvas.style.display = 'none';
           pixiRenderer = new PixiGameRenderer(pixiCanvas);
           rendererRef.current = pixiRenderer;
+          document.body.dataset.renderer = 'pixi';
           void pixiRenderer.ready.then(() => {
             if (pixiFallbackTimer !== null) {
               window.clearTimeout(pixiFallbackTimer);
@@ -594,7 +603,7 @@ export default function App() {
 
       // 9. Render Canvas Scene
       if (rendererRef.current) {
-        rendererRef.current.zoom = zoom;
+        rendererRef.current.zoom = zoomRef.current;
         rendererRef.current.frameDelta = delta;
         rendererRef.current.render(
           canvas.clientWidth || window.innerWidth,
@@ -610,7 +619,7 @@ export default function App() {
           cityMapRef.current.destructibles,
           physicsRef.current.particles,
           physicsRef.current.skidMarks,
-          targetPoi
+          targetPoiRef.current
         );
       }
 
@@ -640,7 +649,15 @@ export default function App() {
       pixiCanvas?.remove();
       canvas.style.display = '';
     };
-  }, [zoom, targetPoi]);
+  }, []);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
+    targetPoiRef.current = targetPoi;
+  }, [targetPoi]);
 
   // Handle Window Resize for Canvas
   useEffect(() => {

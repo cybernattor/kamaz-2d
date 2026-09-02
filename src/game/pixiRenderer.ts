@@ -109,6 +109,8 @@ export class PixiGameRenderer {
   private viewportWidth = 1;
   private viewportHeight = 1;
   private pixelRatio = 1;
+  private spriteResolution = 2;
+  private visibleFrameProbe: boolean | null = null;
   private renderScale = 1;
   private slowFrameStreak = 0;
   private goodFrameStreak = 0;
@@ -125,6 +127,9 @@ export class PixiGameRenderer {
       window.devicePixelRatio || 1,
       window.innerWidth < 768 ? 1 : 1.5
     );
+    // Sprite templates are rasterised above screen density so they stay sharp
+    // when the camera zooms in; they are small, so the memory cost is tiny.
+    this.spriteResolution = Math.min(3, Math.max(2, this.pixelRatio * 2));
     this.viewportWidth = canvasWidth(this.canvas);
     this.viewportHeight = canvasHeight(this.canvas);
 
@@ -142,7 +147,9 @@ export class PixiGameRenderer {
       preference: 'webgl',
       webgl: {
         preferWebGLVersion: 2,
-        useBackBuffer: true,
+        // The scene uses no advanced blend modes, so the back buffer would only
+        // add a full-screen copy of every frame.
+        useBackBuffer: false,
         powerPreference: 'high-performance',
       },
     });
@@ -197,8 +204,16 @@ export class PixiGameRenderer {
    */
   public hasVisibleFrame() {
     if (this.destroyed || !this.initialized) return false;
+    // Only report a blank surface once the probe below has actually run
+    // immediately after a draw call; a readPixels outside that window reads an
+    // undefined drawing buffer and would drop a healthy GPU to Canvas.
+    return this.visibleFrameProbe !== false;
+  }
+
+  private probeVisibleFrame() {
+    if (this.visibleFrameProbe !== null) return;
     const gl = this.canvas.getContext('webgl2') || this.canvas.getContext('webgl');
-    if (!gl) return false;
+    if (!gl) return;
     const pixel = new Uint8Array(4);
     gl.readPixels(
       Math.floor(this.canvas.width / 2),
@@ -209,7 +224,7 @@ export class PixiGameRenderer {
       gl.UNSIGNED_BYTE,
       pixel
     );
-    return pixel[0] + pixel[1] + pixel[2] > 0;
+    this.visibleFrameProbe = pixel[0] + pixel[1] + pixel[2] > 0;
   }
 
   public render(
@@ -266,6 +281,7 @@ export class PixiGameRenderer {
     // Drive Pixi directly from the existing game loop. This avoids relying on
     // the TickerPlugin and is the documented manual-render path for v8.
     this.app.renderer.render(this.app.stage);
+    this.probeVisibleFrame();
     this.canvas.dataset.pixiStatus = 'rendered';
     const renderMs = performance.now() - renderStarted;
     this.recordRenderSample(renderMs);
@@ -284,8 +300,8 @@ export class PixiGameRenderer {
       this.goodFrameStreak = 0;
     }
 
-    if (this.slowFrameStreak >= 8 && this.renderScale > 0.6) {
-      this.renderScale = Math.max(0.6, this.renderScale - 0.1);
+    if (this.slowFrameStreak >= 8 && this.renderScale > 0.8) {
+      this.renderScale = Math.max(0.8, this.renderScale - 0.1);
       this.slowFrameStreak = 0;
       this.resize(this.viewportWidth, this.viewportHeight);
     } else if (this.goodFrameStreak >= 120 && this.renderScale < 1) {
@@ -293,7 +309,7 @@ export class PixiGameRenderer {
       this.goodFrameStreak = 0;
       this.resize(this.viewportWidth, this.viewportHeight);
     }
-    this.performanceTier = this.renderScale <= 0.7 ? 'low' : this.renderScale < 1 ? 'balanced' : 'high';
+    this.performanceTier = this.renderScale <= 0.8 ? 'low' : this.renderScale < 1 ? 'balanced' : 'high';
   }
 
   private recordRenderSample(renderMs: number) {
@@ -320,6 +336,12 @@ export class PixiGameRenderer {
     return kind === 'particles' ? 500 : 500;
   }
 
+  private maxTextureSize() {
+    const gl = (this.app.renderer as unknown as { gl?: WebGLRenderingContext }).gl;
+    const reported = gl?.getParameter(gl.MAX_TEXTURE_SIZE);
+    return typeof reported === 'number' && reported > 0 ? reported : 2048;
+  }
+
   private rebuildStaticScene(cityMap: CityMap) {
     this.currentMap = cityMap;
     if (!this.staticCanvasRenderer) {
@@ -329,20 +351,16 @@ export class PixiGameRenderer {
       this.staticCanvasRenderer = new GameRenderer(snapshotContext);
     }
 
+    // Render the city snapshot at screen density instead of one texel per world
+    // unit. Anything less is upscaled by the camera and reads as a blurred map.
+    // The budget caps VRAM: 4096px is ~67MB, still 2x the old 2048px snapshot.
+    const budget = window.innerWidth < 768 ? 2560 : 4096;
+    const maxScale = Math.min(this.maxTextureSize(), budget) / WORLD_SIZE;
+    const scale = Math.max(0.5, Math.min(this.pixelRatio, maxScale));
+    this.staticCanvasRenderer.setStaticSceneScale(scale);
+
     const snapshot = this.staticCanvasRenderer.getStaticScene(cityMap);
     if (!snapshot) return;
-
-    // Keep the uploaded texture below the 2048px limit of older/mobile GPUs.
-    // The sprite is scaled back to world coordinates, while the source is
-    // still the exact Canvas snapshot so road placement stays unchanged.
-    const textureScale = Math.min(1, 2048 / Math.max(snapshot.width, snapshot.height));
-    const gpuCanvas = document.createElement('canvas');
-    gpuCanvas.width = Math.max(1, Math.ceil(snapshot.width * textureScale));
-    gpuCanvas.height = Math.max(1, Math.ceil(snapshot.height * textureScale));
-    const gpuContext = gpuCanvas.getContext('2d');
-    if (!gpuContext) return;
-    gpuContext.imageSmoothingEnabled = true;
-    gpuContext.drawImage(snapshot, 0, 0, gpuCanvas.width, gpuCanvas.height);
 
     try {
       if (this.staticSprite) {
@@ -350,10 +368,11 @@ export class PixiGameRenderer {
         this.staticSprite.destroy();
       }
       this.staticTexture?.destroy(true);
-      this.staticTexture = Texture.from(gpuCanvas);
+      this.staticTexture = Texture.from(snapshot);
       this.staticSprite = new Sprite(this.staticTexture);
       this.staticSprite.position.set(0, 0);
-      this.staticSprite.scale.set(1 / textureScale);
+      // The snapshot is in scaled pixels; map it back onto world coordinates.
+      this.staticSprite.scale.set(WORLD_SIZE / snapshot.width, WORLD_SIZE / snapshot.height);
       this.staticLayer.addChild(this.staticSprite);
     } catch (error) {
       console.error('Pixi static scene upload failed; continuing with dynamic GPU layers.', error);
@@ -656,6 +675,19 @@ export class PixiGameRenderer {
   }
 
   /** Indicators are regenerated only when their state changes, then rendered as a Sprite. */
+  /**
+   * Sprite templates are rasterised once. Generating them at screen density
+   * (instead of Pixi's default resolution of 1) keeps vehicles and props crisp
+   * without changing their size in world units.
+   */
+  private generateSpriteTexture(template: Graphics) {
+    return this.app.renderer.generateTexture({
+      target: template,
+      resolution: this.spriteResolution,
+      antialias: true,
+    });
+  }
+
   private getVehicleIndicatorTexture(vehicle: VehicleInstance) {
     const blink = Math.floor(Date.now() / 350) % 2;
     const key = `${vehicle.type}:${vehicle.headlights}:${vehicle.isBraking}:${vehicle.turnSignal}:${vehicle.isCrashed ? 1 : 0}:${blink}`;
@@ -663,7 +695,7 @@ export class PixiGameRenderer {
     if (existing) return existing;
     const template = new Graphics();
     this.drawVehicleIndicators(template, vehicle);
-    const texture = this.app.renderer.generateTexture(template);
+    const texture = this.generateSpriteTexture(template);
     template.destroy();
     this.indicatorTextures.set(key, texture);
     return texture;
@@ -699,7 +731,7 @@ export class PixiGameRenderer {
         template.circle(10, 10, 10).fill({ color: 0xfde047, alpha: 0.85 });
         break;
     }
-    const texture = this.app.renderer.generateTexture(template);
+    const texture = this.generateSpriteTexture(template);
     template.destroy();
     this.effectTextures.set(kind, texture);
     return texture;
@@ -733,7 +765,7 @@ export class PixiGameRenderer {
     if (existing) return existing;
     const template = new Graphics();
     this.drawVehicle(template, { ...vehicle, headlights: 0, turnSignal: 'none', isBraking: false, isCrashed: false });
-    const texture = this.app.renderer.generateTexture(template);
+    const texture = this.generateSpriteTexture(template);
     template.destroy();
     this.vehicleTextures.set(key, texture);
     return texture;
@@ -747,7 +779,7 @@ export class PixiGameRenderer {
     template.rect(-3, 2, 6, 3).fill(colorNumber(pedestrian.pantsColor));
     template.ellipse(0, 0, 6, 5).fill(colorNumber(pedestrian.shirtColor));
     template.circle(2, 0, 4).fill(colorNumber(pedestrian.skinColor));
-    this.pedestrianTexture = this.app.renderer.generateTexture(template);
+    this.pedestrianTexture = this.generateSpriteTexture(template);
     template.destroy();
     return this.pedestrianTexture;
   }
@@ -758,7 +790,7 @@ export class PixiGameRenderer {
     if (existing) return existing;
     const template = new Graphics();
     this.drawProp(template, prop);
-    const texture = this.app.renderer.generateTexture(template);
+    const texture = this.generateSpriteTexture(template);
     template.destroy();
     this.propTextures.set(key, texture);
     return texture;
@@ -770,7 +802,7 @@ export class PixiGameRenderer {
     if (existing) return existing;
     const template = new Graphics();
     this.drawTrafficLight(template, light);
-    const texture = this.app.renderer.generateTexture(template);
+    const texture = this.generateSpriteTexture(template);
     template.destroy();
     this.trafficLightTextures.set(key, texture);
     return texture;

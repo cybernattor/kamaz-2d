@@ -231,7 +231,7 @@ export const Minimap: React.FC<MinimapProps> = ({
   return (
     <div
       id="hud-minimap-container"
-      className="relative bg-slate-950/90 backdrop-blur-md border-2 border-slate-700/80 rounded-xl overflow-hidden shadow-2xl p-1"
+      className="relative bg-slate-950/95 border-2 border-slate-700/80 rounded-xl overflow-hidden shadow-2xl p-1"
       style={{ width: MAP_SIZE + 8, height: MAP_SIZE + 8 }}
     >
       <div className="relative w-full h-full bg-slate-900/90 rounded-lg overflow-hidden">

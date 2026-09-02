@@ -26,6 +26,7 @@ export class GameRenderer {
   private viewBounds = { left: 0, top: 0, right: WORLD_SIZE, bottom: WORLD_SIZE };
   private staticScene: HTMLCanvasElement | null = null;
   private staticSceneMap: CityMap | null = null;
+  private staticSceneScale = 1;
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
@@ -45,6 +46,23 @@ export class GameRenderer {
 
   public destroy() {
     // No external resources are owned by the Canvas fallback.
+  }
+
+  /**
+   * Supersamples the one-off city snapshot. The GPU renderer asks for screen
+   * density so the map stays sharp under the camera; the Canvas path keeps 1:1
+   * because it blits the snapshot at world scale.
+   */
+  public setStaticSceneScale(scale: number) {
+    const next = Math.max(0.25, scale);
+    if (next === this.staticSceneScale) return;
+    this.staticSceneScale = next;
+    this.staticScene = null;
+    this.staticSceneMap = null;
+  }
+
+  public getStaticSceneScale() {
+    return this.staticSceneScale;
   }
 
   public getStaticScene(cityMap: CityMap) {
@@ -145,11 +163,13 @@ export class GameRenderer {
   private ensureStaticScene(cityMap: CityMap) {
     if (this.staticSceneMap === cityMap && this.staticScene) return;
 
+    const scale = this.staticSceneScale;
     const scene = document.createElement('canvas');
-    scene.width = WORLD_SIZE;
-    scene.height = WORLD_SIZE;
+    scene.width = Math.ceil(WORLD_SIZE * scale);
+    scene.height = Math.ceil(WORLD_SIZE * scale);
     const sceneCtx = scene.getContext('2d');
     if (!sceneCtx) return;
+    sceneCtx.setTransform(scale, 0, 0, scale, 0, 0);
 
     const previousBounds = this.viewBounds;
     this.viewBounds = { left: 0, top: 0, right: WORLD_SIZE, bottom: WORLD_SIZE };
@@ -175,12 +195,15 @@ export class GameRenderer {
     const sourceHeight = Math.min(WORLD_SIZE, canvasHeight / scale + 320);
     const sourceX = Math.max(0, Math.min(WORLD_SIZE - sourceWidth, this.cameraX - sourceWidth / 2));
     const sourceY = Math.max(0, Math.min(WORLD_SIZE - sourceHeight, this.cameraY - sourceHeight / 2));
+    // The snapshot may be supersampled, so the source rectangle lives in
+    // snapshot pixels while the destination stays in world coordinates.
+    const snapshotScale = this.staticSceneScale;
     ctx.drawImage(
       this.staticScene,
-      sourceX,
-      sourceY,
-      sourceWidth,
-      sourceHeight,
+      sourceX * snapshotScale,
+      sourceY * snapshotScale,
+      sourceWidth * snapshotScale,
+      sourceHeight * snapshotScale,
       sourceX,
       sourceY,
       sourceWidth,

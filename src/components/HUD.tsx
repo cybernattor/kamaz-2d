@@ -107,7 +107,7 @@ export const HUD: React.FC<HUDProps> = ({
       {/* 1. TOP STATUS BAR */}
       <div id="hud-top-bar" className="relative min-h-[158px] w-full pointer-events-auto">
         {/* Left Side: Street Name + FPS + Stats */}
-        <div className="w-[calc(100%-168px)] sm:w-[calc(100%-174px)] min-w-0 flex items-center gap-2 bg-slate-950/90 backdrop-blur-md border border-slate-700/80 px-2.5 sm:px-3 py-2 rounded-xl shadow-lg">
+        <div className="w-[calc(100%-168px)] sm:w-[calc(100%-174px)] min-w-0 flex items-center gap-2 bg-slate-950/95 border border-slate-700/80 px-2.5 sm:px-3 py-2 rounded-xl shadow-lg">
           <div className="min-w-0 flex items-center gap-1.5 text-cyan-400 font-bold text-xs sm:text-sm tracking-wide">
             <Compass className="w-4 h-4 text-cyan-400 animate-pulse" />
             <span className="font-mono truncate">{streetName}</span>
@@ -130,7 +130,7 @@ export const HUD: React.FC<HUDProps> = ({
         </div>
 
         {/* Center / Quick Controls Toggles */}
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 bg-slate-950/90 backdrop-blur-md border border-slate-700/80 px-2 py-1.5 rounded-xl shadow-lg w-[calc(100%-168px)] sm:w-fit sm:max-w-[calc(100vw-190px)]">
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 bg-slate-950/95 border border-slate-700/80 px-2 py-1.5 rounded-xl shadow-lg w-[calc(100%-168px)] sm:w-fit sm:max-w-[calc(100vw-190px)]">
           {/* Day / Night Toggle */}
           <button
             id="btn-toggle-day-night"
@@ -231,7 +231,7 @@ export const HUD: React.FC<HUDProps> = ({
         {activeMission && (
           <div
             id="active-mission-hud-card"
-            className="pointer-events-auto bg-slate-950/90 backdrop-blur-md border-2 border-amber-500/80 rounded-xl p-3 shadow-2xl w-full sm:max-w-sm"
+            className="pointer-events-auto bg-slate-950/95 border-2 border-amber-500/80 rounded-xl p-3 shadow-2xl w-full sm:max-w-sm"
           >
             <div className="flex items-center justify-between gap-2 mb-1.5">
               <div className="flex items-center gap-1.5 text-amber-400 font-bold text-xs">
@@ -269,7 +269,7 @@ export const HUD: React.FC<HUDProps> = ({
         {/* Bottom-Left Controls Helper (Screenshot Match) */}
         <div
           id="hud-controls-legend"
-          className="bg-slate-950/90 backdrop-blur-md border border-slate-800/80 rounded-xl p-2.5 sm:p-3 shadow-xl w-full sm:max-w-md max-h-24 sm:max-h-none overflow-y-auto sm:overflow-visible text-[11px] font-mono text-slate-300 space-y-1"
+          className="bg-slate-950/95 border border-slate-800/80 rounded-xl p-2.5 sm:p-3 shadow-xl w-full sm:max-w-md max-h-24 sm:max-h-none overflow-y-auto sm:overflow-visible text-[11px] font-mono text-slate-300 space-y-1"
         >
           <div className="text-xs font-bold text-cyan-400 mb-1 tracking-wider uppercase">Управление</div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -319,7 +319,7 @@ export const HUD: React.FC<HUDProps> = ({
 
           <div
             id="hud-instrument-pod"
-            className="bg-slate-950/95 backdrop-blur-md border-2 border-slate-700/80 rounded-2xl p-3 shadow-2xl w-full space-y-2.5"
+            className="bg-slate-950/95 border-2 border-slate-700/80 rounded-2xl p-3 shadow-2xl w-full space-y-2.5"
           >
           {/* Top Row: Speedometer + Gear + Vehicle Name */}
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
