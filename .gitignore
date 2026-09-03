@@ -25,6 +25,7 @@ pnpm-debug.log*
 .idea/
 *.swp
 *.swo
+.impeccable/
 
 # OS files
 .DS_Store

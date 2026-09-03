@@ -92,6 +92,7 @@ export class PixiGameRenderer {
   private readonly propViews = new Map<string, EntityView>();
   private readonly trafficLightViews = new Map<string, EntityView>();
   private readonly vehicleTextures = new Map<string, Texture>();
+  private readonly pedestrianTextures = new Map<string, Texture>();
   private readonly propTextures = new Map<string, Texture>();
   private readonly trafficLightTextures = new Map<string, Texture>();
   private readonly indicatorTextures = new Map<string, Texture>();
@@ -105,7 +106,6 @@ export class PixiGameRenderer {
   private readonly effectPool: Sprite[] = [];
   private beaconRing: Sprite | null = null;
   private beaconDot: Sprite | null = null;
-  private pedestrianTexture: Texture | null = null;
   private playerCharacterTexture: Texture | null = null;
   private playerCharacterView: EntityView | null = null;
   private static readonly PLAYER_CHARACTER_LABEL_ID = 'player-character';
@@ -867,9 +867,9 @@ export class PixiGameRenderer {
     graphics.rect(-halfLength * 0.58, halfWidth - 3, 12, 6).fill(wheelColor);
     graphics.rect(halfLength * 0.38, halfWidth - 3, 12, 6).fill(wheelColor);
 
-    // Ambulance and police used to fall into the generic sedan body below —
-    // same rectangle and windshields as every other car, no cross, no
-    // lightbar livery — so they were visually indistinguishable from a taxi.
+    // Each class gets one strong top-down cue that survives the normal game
+    // zoom. The scene is too dense for fussy detail: silhouette and livery
+    // must identify a vehicle before its colour does.
     if (vehicle.type === 'ambulance') {
       graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(0xffffff).stroke({ color: 0xe2e8f0, width: 1.5 });
       graphics.rect(-halfLength, -halfWidth + 4, config.length, 3).fill(0xdc2626);
@@ -882,15 +882,58 @@ export class PixiGameRenderer {
       graphics.rect(-halfLength * 0.2, -halfWidth + 2, halfLength * 0.8, config.width - 4).fill(0xffffff);
       graphics.rect(halfLength * 0.35, -halfWidth + 3, 5, config.width - 6).fill(0x0284c7);
       graphics.rect(-halfLength * 0.55, -halfWidth + 3, 4, config.width - 6).fill(0x0284c7);
+    } else if (vehicle.type === 'kamaz_dump') {
+      // Raised ribbed tipper body and a separate cab make the KAMAZ readable
+      // as working machinery rather than a long orange sedan.
+      graphics.rect(-halfLength, -halfWidth + 3, halfLength * 1.15, config.width - 6).fill(0xd97706).stroke({ color: 0x78350f, width: 2 });
+      graphics.rect(-halfLength * 0.85, -halfWidth + 6, halfLength * 0.78, config.width - 12).fill(0x92400e);
+      for (let rib = 0; rib < 3; rib += 1) {
+        graphics.rect(-halfLength * 0.7 + rib * halfLength * 0.24, -halfWidth + 5, 3, config.width - 10).fill(0xfbbf24);
+      }
+      graphics.rect(halfLength * 0.2, -halfWidth, halfLength * 0.8, config.width).fill(body).stroke({ color: 0x0f172a, width: 2 });
+      graphics.rect(halfLength * 0.5, -halfWidth + 4, halfLength * 0.22, config.width - 8).fill(0x7dd3fc);
+    } else if (vehicle.type === 'kamaz_flatbed') {
+      // Open rails and boxed cargo distinguish the flatbed from a dump body.
+      graphics.rect(-halfLength, -halfWidth + 4, halfLength * 1.16, config.width - 8).fill(0x075985).stroke({ color: 0x0c4a6e, width: 2 });
+      graphics.rect(-halfLength * 0.92, -halfWidth + 6, halfLength * 0.85, 3).fill(0xe2e8f0);
+      graphics.rect(-halfLength * 0.92, halfWidth - 9, halfLength * 0.85, 3).fill(0xe2e8f0);
+      graphics.rect(-halfLength * 0.7, -halfWidth + 9, 15, config.width - 18).fill(0x94a3b8);
+      graphics.rect(-halfLength * 0.3, -halfWidth + 9, 15, config.width - 18).fill(0xf59e0b);
+      graphics.rect(halfLength * 0.2, -halfWidth, halfLength * 0.8, config.width).fill(body).stroke({ color: 0x0f172a, width: 2 });
+      graphics.rect(halfLength * 0.5, -halfWidth + 4, halfLength * 0.22, config.width - 8).fill(0x7dd3fc);
+    } else if (vehicle.type === 'bus') {
+      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(body).stroke({ color: 0x0f172a, width: 2 });
+      graphics.rect(-halfLength * 0.78, -halfWidth + 4, halfLength * 1.45, 4).fill(0xbfe9ff);
+      graphics.rect(-halfLength * 0.78, halfWidth - 8, halfLength * 1.45, 4).fill(0xbfe9ff);
+      graphics.rect(-5, -halfWidth + 3, 7, config.width - 6).fill(0xf8fafc);
+      graphics.rect(-halfLength * 0.45, -5, 11, 10).fill(0x0f172a);
+    } else if (vehicle.type === 'taxi') {
+      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(body).stroke({ color: 0x0f172a, width: 2 });
+      for (let mark = 0; mark < 4; mark += 1) {
+        graphics.rect(-halfLength * 0.48 + mark * 6, -halfWidth + 2, 4, 4).fill(mark % 2 === 0 ? 0x111827 : 0xf8fafc);
+        graphics.rect(-halfLength * 0.48 + mark * 6, halfWidth - 6, 4, 4).fill(mark % 2 === 0 ? 0x111827 : 0xf8fafc);
+      }
+      graphics.rect(-2, -5, 9, 10).fill(0xf8fafc).stroke({ color: 0x111827, width: 1.5 });
+      graphics.rect(halfLength * 0.22, -halfWidth + 3, halfLength * 0.3, config.width - 6).fill(0x7dd3fc);
+    } else if (vehicle.type === 'sports') {
+      graphics.poly([-halfLength, -halfWidth * 0.58, -halfLength * 0.62, -halfWidth, halfLength * 0.76, -halfWidth, halfLength, 0, halfLength * 0.76, halfWidth, -halfLength * 0.62, halfWidth, -halfLength, halfWidth * 0.58]).fill(body).stroke({ color: 0x0f172a, width: 2 });
+      graphics.poly([-halfLength * 0.22, -halfWidth + 3, halfLength * 0.48, -halfWidth + 3, halfLength * 0.62, 0, halfLength * 0.48, halfWidth - 3, -halfLength * 0.22, halfWidth - 3]).fill(0x7dd3fc);
+      graphics.rect(-halfLength * 0.9, -halfWidth - 3, 8, 2).fill(0x111827);
+      graphics.rect(-halfLength * 0.9, halfWidth + 1, 8, 2).fill(0x111827);
+    } else if (vehicle.type === 'hatchback') {
+      graphics.poly([-halfLength * 0.8, -halfWidth, halfLength, -halfWidth, halfLength, halfWidth, -halfLength * 0.8, halfWidth, -halfLength, halfWidth * 0.48, -halfLength, -halfWidth * 0.48]).fill(body).stroke({ color: 0x0f172a, width: 2 });
+      graphics.rect(-halfLength * 0.16, -halfWidth + 3, halfLength * 0.45, config.width - 6).fill(0x7dd3fc);
+      graphics.rect(-halfLength * 0.82, -halfWidth + 4, 5, config.width - 8).fill(0x475569);
+    } else if (vehicle.type === 'heavy_4x4') {
+      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(body).stroke({ color: 0x0f172a, width: 2 });
+      graphics.rect(-halfLength * 0.82, -halfWidth - 2, 16, 4).fill(0x111827);
+      graphics.rect(-halfLength * 0.82, halfWidth - 2, 16, 4).fill(0x111827);
+      graphics.rect(-halfLength * 0.72, -halfWidth + 5, halfLength * 0.54, config.width - 10).fill(0x334155);
+      graphics.rect(halfLength * 0.08, -halfWidth + 3, halfLength * 0.42, config.width - 6).fill(0x7dd3fc);
     } else {
       graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(body).stroke({ color: 0x0f172a, width: 2, alpha: 0.75 });
-      graphics.rect(halfLength * 0.25, -halfWidth + 3, Math.max(6, halfLength * 0.28), config.width - 6).fill(0x0284c7);
-      graphics.rect(-halfLength * 0.42, -halfWidth + 3, Math.max(5, halfLength * 0.18), config.width - 6).fill(0x075985);
-    }
-
-    if (vehicle.type === 'kamaz_dump' || vehicle.type === 'kamaz_flatbed') {
-      graphics.rect(-halfLength * 0.9, -halfWidth + 4, halfLength * 0.72, config.width - 8).fill(0xd97706);
-      graphics.rect(halfLength * 0.28, -halfWidth, halfLength * 0.5, config.width).fill(body);
+      graphics.rect(-halfLength * 0.1, -halfWidth + 3, halfLength * 0.42, config.width - 6).fill(0x7dd3fc);
+      graphics.rect(-halfLength * 0.62, -halfWidth + 5, halfLength * 0.28, config.width - 10).fill(0x94a3b8);
     }
     // The flashing lightbar is dynamic (it alternates color on a timer) so it
     // belongs on the indicator overlay in drawVehicleIndicators, not on this
@@ -1043,16 +1086,24 @@ export class PixiGameRenderer {
   }
 
   private getPedestrianTexture(pedestrian: Pedestrian) {
-    if (this.pedestrianTexture) return this.pedestrianTexture;
+    const key = `${pedestrian.skinColor}:${pedestrian.shirtColor}:${pedestrian.pantsColor}:${pedestrian.isDriver ? 'driver' : 'walker'}`;
+    const existing = this.pedestrianTextures.get(key);
+    if (existing) return existing;
     const template = new Graphics();
-    template.ellipse(0, 0, 7, 5).fill({ color: 0x000000, alpha: 0.3 });
-    template.rect(-3, -5, 6, 3).fill(colorNumber(pedestrian.pantsColor));
-    template.rect(-3, 2, 6, 3).fill(colorNumber(pedestrian.pantsColor));
-    template.ellipse(0, 0, 6, 5).fill(colorNumber(pedestrian.shirtColor));
-    template.circle(2, 0, 4).fill(colorNumber(pedestrian.skinColor));
-    this.pedestrianTexture = this.generateSpriteTexture(template);
+    const pants = colorNumber(pedestrian.pantsColor);
+    const shirt = colorNumber(pedestrian.shirtColor);
+    template.ellipse(0, 1, 8, 6).fill({ color: 0x000000, alpha: 0.32 });
+    template.rect(-4, -6, 3, 5).fill(pants);
+    template.rect(1, 2, 3, 5).fill(pants);
+    template.roundRect(-4, -3, 8, 7, 2).fill(shirt).stroke({ color: 0x0f172a, width: 1 });
+    template.rect(-5, -1, 2, 4).fill(shirt);
+    template.rect(3, -1, 2, 4).fill(shirt);
+    template.circle(1, -6, 4).fill(colorNumber(pedestrian.skinColor)).stroke({ color: 0x0f172a, width: 1 });
+    if (pedestrian.isDriver) template.rect(-5, -10, 10, 2).fill(0xfacc15);
+    const texture = this.generateSpriteTexture(template);
     template.destroy();
-    return this.pedestrianTexture;
+    this.pedestrianTextures.set(key, texture);
+    return texture;
   }
 
   private getPropTexture(prop: DestructibleObject) {
@@ -1143,8 +1194,8 @@ export class PixiGameRenderer {
     this.particleSprites.clear();
     this.lightSprites.clear();
     this.effectPool.length = 0;
-    this.pedestrianTexture?.destroy(true);
-    this.pedestrianTexture = null;
+    for (const texture of this.pedestrianTextures.values()) texture.destroy(true);
+    this.pedestrianTextures.clear();
   }
 
   private disposeApplication() {

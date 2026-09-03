@@ -144,6 +144,7 @@ export default function App() {
   const [showMissions, setShowMissions] = useState<boolean>(false);
   const [showMultiplayer, setShowMultiplayer] = useState<boolean>(false);
   const [showFullMap, setShowFullMap] = useState<boolean>(false);
+  const modalOpenRef = useRef(false);
 
   // Multiplayer UI State
   const [mpStatus, setMpStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
@@ -211,6 +212,12 @@ export default function App() {
     inVehicleStateRef.current = inVehicle;
   }, [inVehicle]);
 
+  // Global game shortcuts stay registered while a dialog is on screen, so
+  // mirror that state in a ref for the stable keyboard listener below.
+  useEffect(() => {
+    modalOpenRef.current = showGarage || showMissions || showMultiplayer || showFullMap;
+  }, [showGarage, showMissions, showMultiplayer, showFullMap]);
+
   // Handle Keyboard Input
   useEffect(() => {
     const clearActiveInputs = () => {
@@ -227,7 +234,23 @@ export default function App() {
         return; // Don't capture inputs when typing in chat
       }
 
+      if (modalOpenRef.current) {
+        if (!e.repeat && e.code === 'Escape') {
+          setShowGarage(false);
+          setShowMissions(false);
+          setShowMultiplayer(false);
+          setShowFullMap(false);
+        }
+        return;
+      }
+
       keysRef.current[e.code] = true;
+
+      // Browsers repeat keydown while a key is held. Movement should keep its
+      // pressed state, but actions such as getting out, opening a modal or
+      // switching lights must run once per physical press. Otherwise holding
+      // E can immediately put the player back in the vehicle.
+      if (e.repeat) return;
 
       // Handle Key Toggles
       if (e.code === 'KeyE') {

@@ -19,6 +19,8 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput }) => 
           onMouseUp={() => onInput('steerLeft', false)}
           onMouseLeave={() => onInput('steerLeft', false)}
           className="w-14 h-14 rounded-full bg-slate-900/85 border border-slate-700 text-white flex items-center justify-center active:bg-cyan-600 shadow-xl"
+          aria-label="Повернуть влево"
+          title="Повернуть влево"
         >
           <ArrowLeft className="w-6 h-6" />
         </button>
@@ -31,6 +33,8 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput }) => 
           onMouseUp={() => onInput('steerRight', false)}
           onMouseLeave={() => onInput('steerRight', false)}
           className="w-14 h-14 rounded-full bg-slate-900/85 border border-slate-700 text-white flex items-center justify-center active:bg-cyan-600 shadow-xl"
+          aria-label="Повернуть вправо"
+          title="Повернуть вправо"
         >
           <ArrowRight className="w-6 h-6" />
         </button>
@@ -47,6 +51,8 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput }) => 
           onMouseUp={() => onInput('horn', false)}
           onMouseLeave={() => onInput('horn', false)}
           className="w-12 h-12 rounded-full bg-amber-600/80 border border-amber-500 text-white flex items-center justify-center active:bg-amber-500 shadow-xl"
+          aria-label="Подать сигнал"
+          title="Подать сигнал"
         >
           <Volume2 className="w-5 h-5" />
         </button>
@@ -60,6 +66,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput }) => 
           onMouseUp={() => onInput('brake', false)}
           onMouseLeave={() => onInput('brake', false)}
           className="w-14 h-14 rounded-full bg-rose-700/85 border border-rose-600 text-white flex flex-col items-center justify-center active:bg-rose-600 shadow-xl font-mono text-[10px] font-bold"
+          aria-label="Тормоз"
         >
           <ArrowDown className="w-5 h-5" />
           <span>ТОРМОЗ</span>
@@ -74,6 +81,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput }) => 
           onMouseUp={() => onInput('throttle', false)}
           onMouseLeave={() => onInput('throttle', false)}
           className="w-16 h-16 rounded-full bg-emerald-600/85 border border-emerald-500 text-white flex flex-col items-center justify-center active:bg-emerald-500 shadow-xl font-mono text-xs font-bold"
+          aria-label="Газ"
         >
           <ArrowUp className="w-6 h-6" />
           <span>ГАЗ</span>

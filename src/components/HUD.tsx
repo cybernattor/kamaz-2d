@@ -139,26 +139,28 @@ export const HUD: React.FC<HUDProps> = ({
           <button
             id="btn-toggle-day-night"
             onClick={onToggleDayNight}
-            className="min-h-9 flex items-center gap-1 text-xs font-mono px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-amber-300 transition-colors cursor-pointer"
+            className="min-h-9 flex items-center gap-1 text-xs font-mono px-2 sm:px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-amber-300 transition-colors cursor-pointer"
             title="Toggle Day/Night [T]"
+            aria-label="Переключить день или ночь"
           >
             {isNight ? <Moon className="w-3.5 h-3.5 text-indigo-400" /> : <Sun className="w-3.5 h-3.5 text-amber-400" />}
-            <span>{isNight ? 'Night (00:00)' : 'Day (12:00)'}</span>
+            <span className="hidden sm:inline">{isNight ? 'Night (00:00)' : 'Day (12:00)'}</span>
           </button>
 
           {/* Audio Mute Toggle */}
           <button
             id="btn-toggle-audio"
             onClick={onToggleMute}
-            className="min-h-9 flex items-center gap-1 text-xs font-mono px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-200 transition-colors cursor-pointer"
+            className="min-h-9 flex items-center gap-1 text-xs font-mono px-2 sm:px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-200 transition-colors cursor-pointer"
             title="Toggle Audio"
+            aria-label="Переключить звук"
           >
             {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
-            <span>{isMuted ? 'Audio OFF' : 'Audio ON'}</span>
+            <span className="hidden sm:inline">{isMuted ? 'Audio OFF' : 'Audio ON'}</span>
           </button>
 
           {/* Zoom In/Out */}
-          <div className="flex items-center bg-slate-800/80 rounded-lg px-1 min-h-9">
+          <div className="flex items-center bg-slate-800/80 rounded-lg px-0.5 sm:px-1 min-h-9">
             <button
               id="btn-zoom-out"
               onClick={onZoomOut}
@@ -167,7 +169,7 @@ export const HUD: React.FC<HUDProps> = ({
             >
               <ZoomOut className="w-3.5 h-3.5" />
             </button>
-            <span className="text-[11px] font-mono text-slate-400 px-1">{Math.round(zoom * 100)}%</span>
+            <span className="hidden sm:inline text-[11px] font-mono text-slate-400 px-1">{Math.round(zoom * 100)}%</span>
             <button
               id="btn-zoom-in"
               onClick={onZoomIn}
@@ -182,33 +184,37 @@ export const HUD: React.FC<HUDProps> = ({
           <button
             id="btn-open-garage"
             onClick={onOpenGarage}
-            className="min-h-9 flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow cursor-pointer transition-all"
+            className="min-h-9 flex items-center gap-1 text-xs font-semibold px-2 sm:px-2.5 py-1 rounded-lg bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow cursor-pointer transition-all"
+            title="Гараж [G]"
+            aria-label="Открыть гараж"
           >
             <Car className="w-3.5 h-3.5" />
-            <span>Гараж [G]</span>
+            <span className="hidden sm:inline">Гараж [G]</span>
           </button>
 
           <button
             id="btn-open-missions"
             onClick={onOpenMissions}
-            className="min-h-9 flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow cursor-pointer transition-all"
+            className="min-h-9 flex items-center gap-1 text-xs font-semibold px-2 sm:px-2.5 py-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow cursor-pointer transition-all"
+            title="Задания [J]"
+            aria-label="Открыть задания"
           >
             <Briefcase className="w-3.5 h-3.5" />
-            <span>Задания [J]</span>
+            <span className="hidden sm:inline">Задания [J]</span>
           </button>
 
           {/* Multiplayer Badge & Lobby Trigger */}
           <button
             id="btn-open-multiplayer"
             onClick={onOpenMultiplayer}
-            className={`min-h-9 flex items-center gap-1 text-xs font-mono px-2.5 py-1 rounded-lg border transition-colors cursor-pointer ${
+            className={`min-h-9 flex items-center gap-1 text-xs font-mono px-2 sm:px-2.5 py-1 rounded-lg border transition-colors cursor-pointer ${
               multiplayerStatus === 'connected'
                 ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 hover:bg-emerald-900/60'
                 : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700'
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>
+            <span className="hidden sm:inline">
               {multiplayerStatus === 'connected' ? `Онлайн (${onlineCount + 1})` : 'Мультиплеер'}
             </span>
           </button>
@@ -283,7 +289,11 @@ export const HUD: React.FC<HUDProps> = ({
               <div>Кнопка <span className="text-amber-400 font-bold">[E]</span> в HUD — сесть / выйти</div>
             </div>
           ) : (
-          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+          <>
+          <div className="sm:hidden text-slate-300 leading-relaxed">
+            <span className="text-amber-400 font-bold">WASD</span> ехать · <span className="text-amber-400 font-bold">[E]</span> сесть / выйти · <span className="text-amber-400 font-bold">[H]</span> гудок
+          </div>
+          <div className="hidden sm:grid grid-cols-2 gap-x-3 gap-y-1">
             <div>
               <span className="text-amber-400 font-bold">WASD / 🠹🠸🠺🠻</span> Управление
             </div>
@@ -315,6 +325,7 @@ export const HUD: React.FC<HUDProps> = ({
               <span className="text-amber-400 font-bold">[T]</span> День / Ночь
             </div>
           </div>
+          </>
           )}
         </div>
 
@@ -331,23 +342,23 @@ export const HUD: React.FC<HUDProps> = ({
 
           <div
             id="hud-instrument-pod"
-            className="bg-slate-950/95 border-2 border-slate-700/80 rounded-2xl p-3 shadow-2xl w-full space-y-2.5"
+            className="bg-slate-950/95 border-2 border-slate-700/80 rounded-xl sm:rounded-2xl p-2 sm:p-3 shadow-2xl w-full space-y-1.5 sm:space-y-2.5"
           >
           {/* Top Row: Speedometer + Gear + Vehicle Name */}
-          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-1.5 sm:pb-2">
             <div className="flex items-baseline gap-1">
-              <span className="text-4xl font-extrabold font-mono text-cyan-400 tracking-tight drop-shadow-[0_0_10px_#22d3ee]">
+              <span className="text-3xl sm:text-4xl font-extrabold font-mono text-cyan-400 tracking-tight drop-shadow-[0_0_10px_#22d3ee]">
                 {speedKmH}
               </span>
               <span className="text-xs font-mono text-slate-400 font-bold">КМ/Ч</span>
             </div>
 
             <div className="text-right">
-              <div className="text-sm font-bold text-slate-100">
+              <div className="max-w-40 text-xs sm:text-sm font-bold text-slate-100 truncate">
                 {vehicleConfig ? vehicleConfig.nameRu : playerChar.name}
               </div>
-              <div className="text-xs font-mono text-amber-400">
-                Передача: <span className="font-bold text-cyan-300">{gear}</span>
+              <div className="text-[11px] sm:text-xs font-mono text-amber-400">
+                <span className="hidden sm:inline">Передача: </span><span className="font-bold text-cyan-300">{gear}</span>
               </div>
             </div>
           </div>
@@ -357,7 +368,7 @@ export const HUD: React.FC<HUDProps> = ({
             <div className="flex items-center justify-between text-xs font-mono">
               <span className="text-slate-400 flex items-center gap-1">
                 <Wrench className="w-3.5 h-3.5 text-emerald-400" />
-                Состояние (Condition):
+                <span className="sm:hidden">Состояние</span><span className="hidden sm:inline">Состояние (Condition):</span>
               </span>
               <span
                 className={`font-bold ${
@@ -394,11 +405,11 @@ export const HUD: React.FC<HUDProps> = ({
             className="w-full flex items-center justify-center gap-1.5 text-xs font-mono font-bold py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 transition-colors cursor-pointer"
           >
             <Wrench className="w-3.5 h-3.5" />
-            <span>Ремонт авто [R]</span>
+            <span className="sm:hidden">Ремонт [R]</span><span className="hidden sm:inline">Ремонт авто [R]</span>
           </button>
 
           {/* Headlights & Turn Signal Controls Bar (Screenshot Match) */}
-          <div className="flex items-center justify-between gap-1.5 pt-1">
+          <div className="flex items-center justify-between gap-1 pt-0.5 sm:gap-1.5 sm:pt-1">
             {/* Turn Signal Left */}
             <button
               id="btn-turn-left"
@@ -416,20 +427,21 @@ export const HUD: React.FC<HUDProps> = ({
             <button
               id="btn-toggle-headlights"
               onClick={onToggleHeadlights}
-              className={`flex-[2] min-h-10 py-1 px-2 rounded text-xs font-mono font-bold border transition-colors cursor-pointer flex items-center justify-center gap-1 ${
+              className={`flex-[2] min-h-10 py-1 px-1 sm:px-2 rounded text-xs font-mono font-bold border transition-colors cursor-pointer flex items-center justify-center gap-1 ${
                 playerVehicle && playerVehicle.headlights > 0
                   ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
                   : 'bg-slate-900 text-slate-400 border-slate-700 hover:bg-slate-800'
               }`}
             >
               <Lightbulb className="w-3.5 h-3.5" />
-              <span>
+              <span className="hidden sm:inline">
                 {playerVehicle?.headlights === 2
                   ? 'Дальний (L)'
                   : playerVehicle?.headlights === 1
                   ? 'Ближний (L)'
                   : 'Фары Выкл (L)'}
               </span>
+              <span className="sm:hidden">L</span>
             </button>
 
             {/* Turn Signal Right */}
