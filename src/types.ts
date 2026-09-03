@@ -101,6 +101,8 @@ export interface Pedestrian {
   walkRoadType?: 'vertical' | 'horizontal';
   walkRoadCoord?: number;
   walkSide?: number;
+  /** Current sidewalk travel direction; pedestrians reverse only at a block end. */
+  walkDirection?: -1 | 1;
 }
 
 export type DestructibleType =

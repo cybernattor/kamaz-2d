@@ -93,13 +93,27 @@ export class TrafficAI {
     const roadType = ped.walkRoadType || 'vertical';
     const roadCoord = ped.walkRoadCoord ?? this.gridX[0];
     const side = ped.walkSide ?? 108;
+    const current = roadType === 'vertical' ? ped.y : ped.x;
+    const bounds = this.getPedestrianAxisBounds(
+      current,
+      roadType === 'vertical' ? this.gridY : this.gridX
+    );
+    let direction = ped.walkDirection ?? 1;
+    const destination = direction > 0 ? bounds.upper : bounds.lower;
+
+    // A pedestrian follows one side of a block to its end. The previous
+    // random destination could be behind them on every update, producing a
+    // conspicuous back-and-forth shuffle on an otherwise empty sidewalk.
+    if (Math.abs(destination - current) < 25) {
+      direction = direction === 1 ? -1 : 1;
+    }
+    ped.walkDirection = direction;
+    const target = direction > 0 ? bounds.upper : bounds.lower;
     if (roadType === 'vertical') {
-      const bounds = this.getPedestrianAxisBounds(ped.y, this.gridY);
       ped.targetX = roadCoord + side;
-      ped.targetY = bounds.lower + Math.random() * Math.max(0, bounds.upper - bounds.lower);
+      ped.targetY = target;
     } else {
-      const bounds = this.getPedestrianAxisBounds(ped.x, this.gridX);
-      ped.targetX = bounds.lower + Math.random() * Math.max(0, bounds.upper - bounds.lower);
+      ped.targetX = target;
       ped.targetY = roadCoord + side;
     }
   }
@@ -222,6 +236,15 @@ export class TrafficAI {
       waypoints: [sidePoint, pastPoint, rejoinPoint],
       waypointIndex: 0,
     };
+    // This car is deliberately leaving the conflict zone instead of crossing
+    // it normally. Keeping its old reservation until the five-second cleanup
+    // timeout makes every perpendicular approach wait behind a car that is
+    // already clearing the junction, which turns a single obstruction into a
+    // visible gridlock.
+    if (this.intersectionReservations.get(inter.id) === car.id) {
+      this.intersectionReservations.delete(inter.id);
+      this.intersectionReservationAge.delete(inter.id);
+    }
     ai.progressTimer = 0;
     ai.stuckTimer = 0;
     car.isBraking = false;
@@ -798,6 +821,7 @@ export class TrafficAI {
         walkRoadType: isVert ? 'vertical' : 'horizontal',
         walkRoadCoord: roadCoord,
         walkSide: side,
+        walkDirection: i % 2 === 0 ? 1 : -1,
       });
       this.choosePedestrianWaypoint(this.pedestrians[this.pedestrians.length - 1]);
     }
@@ -866,6 +890,7 @@ export class TrafficAI {
           vy: 0,
           isDriver: true,
           vehicleId: vehicle.id,
+          walkDirection: side > 0 ? 1 : -1,
         });
       }
     });

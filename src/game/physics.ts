@@ -194,14 +194,20 @@ export class PhysicsEngine {
       sound.updateSkid(false);
     }
 
-    // 8. Damage smoke & fire emitter
-    if (vehicle.health < 50) {
-      vehicle.smokeTimer = (vehicle.smokeTimer || 0) + delta;
-      const interval = vehicle.health < 20 ? 0.04 : 0.08;
-      if (vehicle.smokeTimer > interval) {
-        vehicle.smokeTimer = 0;
-        this.emitDamageSmoke(vehicle, vehicle.health < 22);
-      }
+  }
+
+  /**
+   * Keep visible damage effects alive independently of who is driving. This
+   * is called for all active vehicles from the simulation loop, so a burning
+   * player vehicle continues to burn after the player steps out.
+   */
+  public updateVehicleDamageEffects(vehicle: VehicleInstance, delta: number) {
+    if (vehicle.health >= 50) return;
+    vehicle.smokeTimer = (vehicle.smokeTimer || 0) + delta;
+    const interval = vehicle.health < 20 ? 0.04 : 0.08;
+    if (vehicle.smokeTimer > interval) {
+      vehicle.smokeTimer = 0;
+      this.emitDamageSmoke(vehicle, vehicle.health < 22);
     }
   }
 
@@ -553,6 +559,16 @@ export class PhysicsEngine {
               const wallAlignment = -Math.sin(v1.angle) * wallNx + Math.cos(v1.angle) * wallNy;
               v1.angle -= wallAlignment * Math.min(1.6, (impactSpeed - 2.0) * 0.1);
               if (v1.isPlayer) v1.dazedTimer = Math.max(v1.dazedTimer || 0, Math.min(1.0, (impactSpeed - 2.0) * 0.07));
+              // A serious solo crash also leaves an NPC driver beside the
+              // wreck. Previously this callback only ran for vehicle-to-
+              // vehicle impacts, so drivers stayed inside cars embedded in a
+              // wall or a large roadside obstacle.
+              if (!v1.isPlayer && !v1.isCrashed && impactSpeed > 5.5) {
+                onVehicleCrash?.(
+                  { type: 'vehicle_building', impactSpeed, x: v1.x, y: v1.y },
+                  v1
+                );
+              }
             }
           }
           v1.speed = -v1.speed * 0.2;
@@ -631,15 +647,22 @@ export class PhysicsEngine {
         if (
           Math.abs(forward) < frontReach &&
           Math.abs(lateral) < sideReach &&
-          Math.abs(v1.speed) > 1.0
+          Math.abs(v1.speed) > 0.15
         ) {
-          // Knockback Pedestrian into Ragdoll
+          // Even a creeping vehicle must not phase through a person. Move the
+          // pedestrian just beyond the bumper before applying a gentle
+          // ragdoll impulse, then slow the vehicle sharply.
+          const travelDirection = v1.speed >= 0 ? 1 : -1;
+          const clearance = frontReach + 6;
+          ped.x = v1.x + Math.cos(v1.angle) * clearance * travelDirection;
+          ped.y = v1.y + Math.sin(v1.angle) * clearance * travelDirection;
           ped.state = 'ragdoll';
           ped.ragdollTimer = 3.5;
-          const angle = Math.atan2(pedDy, pedDx);
-          const pushForce = Math.min(20, Math.abs(v1.speed) * 1.8);
+          const angle = v1.angle + (travelDirection < 0 ? Math.PI : 0);
+          const pushForce = Math.min(20, Math.max(2.4, Math.abs(v1.speed) * 1.8));
           ped.vx = Math.cos(angle) * pushForce;
           ped.vy = Math.sin(angle) * pushForce;
+          v1.speed *= 0.25;
 
           ped.speechText = ['Ай!', 'Осторожно!', 'Куда летишь?!', 'Смотри на дорогу!', 'Вот это КАМАЗ!'][
             Math.floor(Math.random() * 5)

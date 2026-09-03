@@ -33,6 +33,7 @@ function main() {
     throw new Error('Pedestrian reacted without touching the vehicle body');
   }
 
+  vehicle.speed = 0.5;
   pedestrian.x = vehicle.x + 8;
   pedestrian.y = vehicle.y;
   physics.resolveAllCollisions(
@@ -44,11 +45,11 @@ function main() {
     1 / 60
   );
 
-  if (String(pedestrian.state) !== 'ragdoll' || !pedestrian.speechText) {
-    throw new Error('Pedestrian did not react to a real body contact');
+  if (String(pedestrian.state) !== 'ragdoll' || !pedestrian.speechText || vehicle.speed >= 0.5) {
+    throw new Error('Slow vehicle passed through a pedestrian instead of resolving the body contact');
   }
 
-  console.log('FIXED: pedestrian only reacted inside the vehicle body and hit cooldown is active.');
+  console.log('FIXED: a slow vehicle resolves a real pedestrian body contact without passing through.');
 }
 
 main();

@@ -518,6 +518,13 @@ export default function App() {
         }
         );
 
+        // Damage effects belong to the vehicle, not to the driver. Running
+        // this in the fixed simulation keeps smoke and fire active while the
+        // player is on foot as well as while NPC wrecks wait roadside.
+        for (const vehicle of [v, ...trafficRef.current.npcVehicles]) {
+          physicsRef.current.updateVehicleDamageEffects(vehicle, simulationStep);
+        }
+
       // 5. Update Particles
         physicsRef.current.updateParticles(simulationStep);
 

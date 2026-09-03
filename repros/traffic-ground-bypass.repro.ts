@@ -51,6 +51,12 @@ function main() {
     const ai = (traffic as unknown as { aiData: Map<string, { groundBypass?: unknown }> }).aiData.get(car.id);
     if (ai?.groundBypass) {
       bypassFrames += 1;
+      const reservations = (traffic as unknown as {
+        intersectionReservations: Map<string, string>;
+      }).intersectionReservations;
+      if (reservations.get(intersection.id) === car.id) {
+        throw new Error('NPC kept the intersection reservation after starting its bypass');
+      }
       if (previousBypassAngle !== undefined) {
         const angleDelta = Math.atan2(
           Math.sin(car.angle - previousBypassAngle),

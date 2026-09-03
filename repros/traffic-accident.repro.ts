@@ -59,7 +59,36 @@ function main() {
     throw new Error('NPC accident did not stop the car and release a speaking driver');
   }
 
-  console.log(`FIXED: NPC accident released a driver saying: ${driver.speechText}`);
+  const building = cityMap.buildings[0];
+  if (!building) throw new Error('Building fixture was not created');
+  const wallVictim: VehicleInstance = {
+    ...npc,
+    id: 'wall-crash-npc',
+    x: building.x,
+    y: building.y,
+    speed: 8,
+    angle: 0,
+    health: 100,
+    isCrashed: false,
+    crashTimer: undefined,
+  };
+  physics.resolveAllCollisions(
+    [wallVictim],
+    cityMap.destructibles,
+    traffic.pedestrians,
+    cityMap.buildings,
+    undefined,
+    1 / 60,
+    (event, firstVehicle, secondVehicle) => {
+      traffic.handleVehicleCrash(firstVehicle, secondVehicle, event.impactSpeed, event.x, event.y);
+    }
+  );
+  const wallDriver = traffic.pedestrians.find((ped) => ped.vehicleId === wallVictim.id);
+  if (!wallVictim.isCrashed || !wallDriver?.isDriver) {
+    throw new Error('NPC driver stayed inside after a serious building crash');
+  }
+
+  console.log(`FIXED: vehicle and building crashes release NPC drivers, including: ${driver.speechText}`);
 }
 
 main();
