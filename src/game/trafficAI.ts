@@ -1786,28 +1786,50 @@ export class TrafficAI {
   }
 
   /**
-   * Any vehicle - not just the honking player - bearing down on a
-   * pedestrian fast enough to be dangerous. Uses the same "velocity
-   * component toward the target" test as TrafficAI.isClosingFast, so an
-   * oncoming car passing at a safe distance or a slow one crawling nearby
-   * does not spook anyone, only a genuine close call does.
+   * Find a vehicle whose current, straight-line trajectory will overlap a
+   * pedestrian's personal space soon.  This deliberately uses time to the
+   * closest approach, rather than a simple proximity check: a car going
+   * alongside the pavement is harmless, while a fast car on a collision
+   * course is noticed before the physics body makes contact.
    */
   private findApproachingDanger(ped: Pedestrian, playerVehicle?: VehicleInstance | null) {
-    const dangerRadius = 130;
     const vehicles = playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles;
+    let nearestDanger: { x: number; y: number; timeToClosestApproach: number } | null = null;
+
     for (const vehicle of vehicles) {
       if (vehicle.health <= 0 && !vehicle.isPlayer) continue;
       const dx = ped.x - vehicle.x;
       const dy = ped.y - vehicle.y;
       const dist = Math.hypot(dx, dy);
-      if (dist > dangerRadius || dist < 0.001) continue;
-      const vx = Math.cos(vehicle.angle) * vehicle.speed;
-      const vy = Math.sin(vehicle.angle) * vehicle.speed;
-      if ((vx * dx + vy * dy) / dist > 7) {
-        return { x: vehicle.x, y: vehicle.y };
+      if (dist < 0.001) continue;
+
+      // Vehicle speed is stored in world units per simulation tick, while
+      // this prediction is expressed in seconds.
+      const speedPerSecond = Math.abs(vehicle.speed) * 60;
+      if (speedPerSecond < 270) continue; // slow parking/crawling is safe
+      const vx = Math.cos(vehicle.angle) * vehicle.speed * 60;
+      const vy = Math.sin(vehicle.angle) * vehicle.speed * 60;
+      const closingSpeed = (vx * dx + vy * dy) / dist;
+      if (closingSpeed < 270) continue;
+
+      const speedSquared = vx * vx + vy * vy;
+      const timeToClosestApproach = (vx * dx + vy * dy) / speedSquared;
+      // Do not react after an already-missed contact; give people enough
+      // time to visibly step away, without making them flee from traffic far
+      // down the road.
+      if (timeToClosestApproach < 0.18 || timeToClosestApproach > 1.4) continue;
+
+      const closestX = dx - vx * timeToClosestApproach;
+      const closestY = dy - vy * timeToClosestApproach;
+      const config = VEHICLE_CONFIGS[vehicle.type] || VEHICLE_CONFIGS.sedan;
+      const safeClearance = Math.max(32, config.width / 2 + 18);
+      if (Math.hypot(closestX, closestY) > safeClearance) continue;
+
+      if (!nearestDanger || timeToClosestApproach < nearestDanger.timeToClosestApproach) {
+        nearestDanger = { x: vehicle.x, y: vehicle.y, timeToClosestApproach };
       }
     }
-    return null;
+    return nearestDanger;
   }
 
   public updatePedestrians(delta: number, playerX: number, playerY: number, playerHonking: boolean, playerVehicle?: VehicleInstance | null) {

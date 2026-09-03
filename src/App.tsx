@@ -157,9 +157,20 @@ export default function App() {
   // Initialize Multiplayer Client
   useEffect(() => {
     const mp = new MultiplayerClient(playerName, {
-      onInit: (yourId, players, destructibles) => {
+      onInit: (yourId, players, destructibles, spawn) => {
         setMyPlayerId(yourId);
         setRemotePlayers(players);
+        // The authoritative server assigns a free multiplayer spawn. Apply it
+        // before the game loop sends its first position update, otherwise all
+        // fresh clients overwrite their reserved pads with the local default.
+        if (spawn) {
+          playerVehicleRef.current.x = spawn.x;
+          playerVehicleRef.current.y = spawn.y;
+          playerVehicleRef.current.angle = spawn.angle;
+          playerCharRef.current.x = spawn.x;
+          playerCharRef.current.y = spawn.y;
+          playerCharRef.current.angle = spawn.angle;
+        }
         // Sync destructible objects
         if (destructibles) {
           cityMapRef.current.destructibles.forEach((obj) => {

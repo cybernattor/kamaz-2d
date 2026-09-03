@@ -27,7 +27,7 @@ function main() {
   const oncoming: VehicleInstance = {
     id: 'danger-fixture',
     type: 'sedan',
-    x: 1000,
+    x: 600,
     y: 1000,
     angle: 0, // driving straight at the pedestrian (+x)
     speed: 18,
@@ -57,7 +57,22 @@ function main() {
     throw new Error('pedestrian entered fleeing state without picking an escape target');
   }
 
-  console.log('FIXED: a pedestrian flees a fast, silent vehicle closing in - not only an honking player.');
+  // A vehicle passing in the same direction but with a clear lateral gap
+  // must not cause the GTA-style danger reaction.
+  pedestrian.state = 'walking';
+  pedestrian.panicTimer = 0;
+  pedestrian.panicCooldown = 0;
+  pedestrian.speechText = undefined;
+  pedestrian.x = 1040;
+  pedestrian.y = 1000;
+  oncoming.x = 600;
+  oncoming.y = 1060;
+  traffic.updatePedestrians(DELTA, -5000, -5000, false);
+  if (String(pedestrian.state) === 'fleeing') {
+    throw new Error('Pedestrian fled from a vehicle that would safely pass alongside the sidewalk');
+  }
+
+  console.log('FIXED: pedestrians flee a predicted fast collision, but ignore a safe passing vehicle.');
 }
 
 main();

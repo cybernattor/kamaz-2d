@@ -83,6 +83,19 @@ async function main() {
     }
     if (!a.tickHz) failures.push('init did not advertise the snapshot tick rate');
 
+    // 1b. Joining players request the same client default location, but the
+    // server must allocate distinct pads so avatars never spawn inside each
+    // other before their first movement update.
+    const init = b.messages.find((message) => message.type === 'init');
+    const alphaSpawn = init?.players?.find((player) => player.id === a.id);
+    const betaSpawn = init?.players?.find((player) => player.id === b.id);
+    if (!alphaSpawn || !betaSpawn) {
+      failures.push('join init did not include both player spawn states');
+    } else {
+      const distance = Math.hypot(Number(alphaSpawn.x) - Number(betaSpawn.x), Number(alphaSpawn.y) - Number(betaSpawn.y));
+      if (distance < 150) failures.push(`players spawned too close together: ${distance.toFixed(1)}px`);
+    }
+
     // 2. A normal update reaches the other player in the room as a snapshot.
     b.messages.length = 0;
     alpha.send(JSON.stringify({

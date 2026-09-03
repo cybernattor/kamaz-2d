@@ -644,11 +644,26 @@ export class PhysicsEngine {
         const sideReach = cfg1.width / 2 + 5;
         if (Math.abs(pedDx) >= frontReach + sideReach || Math.abs(pedDy) >= frontReach + sideReach) continue;
 
-        if (
-          Math.abs(forward) < frontReach &&
-          Math.abs(lateral) < sideReach &&
-          Math.abs(v1.speed) > 0.15
-        ) {
+        if (Math.abs(forward) < frontReach && Math.abs(lateral) < sideReach) {
+          if (Math.abs(v1.speed) <= 0.15) {
+            // A parked or stopped vehicle is still solid. Previously this
+            // branch did nothing, so walkers could visibly pass through the
+            // player's stationary truck. Resolve along the nearest edge
+            // without treating it as an impact or producing an injury line.
+            const forwardClearance = frontReach - Math.abs(forward);
+            const lateralClearance = sideReach - Math.abs(lateral);
+            let resolvedForward = forward;
+            let resolvedLateral = lateral;
+            if (forwardClearance <= lateralClearance) {
+              resolvedForward = (forward >= 0 ? 1 : -1) * (frontReach + 2);
+            } else {
+              resolvedLateral = (lateral >= 0 ? 1 : -1) * (sideReach + 2);
+            }
+            ped.x = v1.x + Math.cos(v1.angle) * resolvedForward - Math.sin(v1.angle) * resolvedLateral;
+            ped.y = v1.y + Math.sin(v1.angle) * resolvedForward + Math.cos(v1.angle) * resolvedLateral;
+            ped.panicCooldown = Math.max(ped.panicCooldown || 0, 0.25);
+            continue;
+          }
           // Even a creeping vehicle must not phase through a person. Move the
           // pedestrian just beyond the bumper before applying a gentle
           // ragdoll impulse, then slow the vehicle sharply.

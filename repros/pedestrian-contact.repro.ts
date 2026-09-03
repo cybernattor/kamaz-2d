@@ -33,6 +33,20 @@ function main() {
     throw new Error('Pedestrian reacted without touching the vehicle body');
   }
 
+  vehicle.speed = 0;
+  pedestrian.x = vehicle.x + 4;
+  pedestrian.y = vehicle.y;
+  physics.resolveAllCollisions(
+    [vehicle], cityMap.destructibles, [pedestrian], cityMap.buildings, undefined, 1 / 60
+  );
+  if (
+    String(pedestrian.state) === 'ragdoll' ||
+    pedestrian.speechText ||
+    Math.hypot(pedestrian.x - vehicle.x, pedestrian.y - vehicle.y) < 17
+  ) {
+    throw new Error('A stationary vehicle did not remain solid to a walking pedestrian');
+  }
+
   vehicle.speed = 0.5;
   pedestrian.x = vehicle.x + 8;
   pedestrian.y = vehicle.y;

@@ -73,6 +73,25 @@ interface RoomData {
   dirty: Set<string>;
 }
 
+/** Allocate a deterministic free pad near the requested arrival point. */
+function findAvailableSpawn(room: RoomData, requestedX: number, requestedY: number) {
+  const minimumGap = 150;
+  const candidates = [{ x: requestedX, y: requestedY }];
+  for (let ring = 1; ring <= 4; ring += 1) {
+    const radius = ring * 170;
+    for (let step = 0; step < 8; step += 1) {
+      const angle = (Math.PI * 2 * step) / 8;
+      candidates.push({
+        x: Math.min(WORLD_SIZE - 100, Math.max(100, requestedX + Math.cos(angle) * radius)),
+        y: Math.min(WORLD_SIZE - 100, Math.max(100, requestedY + Math.sin(angle) * radius)),
+      });
+    }
+  }
+  return candidates.find((candidate) => Array.from(room.players.values()).every((player) =>
+    Math.hypot(player.x - candidate.x, player.y - candidate.y) >= minimumGap
+  )) || candidates[candidates.length - 1];
+}
+
 const rooms = new Map<string, RoomData>();
 const DEFAULT_PORT = 3000;
 const MAX_PORT_ATTEMPTS = 100;
@@ -218,13 +237,16 @@ async function startServer() {
             state.playerId = playerId;
             state.roomId = roomId;
             room.sockets.add(ws);
+            const requestedX = clampNumber(msg.x, 100, WORLD_SIZE - 100, 1200);
+            const requestedY = clampNumber(msg.y, 100, WORLD_SIZE - 100, 1200);
+            const spawn = findAvailableSpawn(room, requestedX, requestedY);
 
             const initialPlayer: PlayerState = {
               id: playerId,
               name: clampText(msg.name, MAX_NAME_LENGTH) || 'Дальнобойщик',
               room: roomId,
-              x: clampNumber(msg.x, 0, WORLD_SIZE, 1200),
-              y: clampNumber(msg.y, 0, WORLD_SIZE, 1200),
+              x: spawn.x,
+              y: spawn.y,
               angle: clampNumber(msg.angle, -Math.PI * 2, Math.PI * 2, 0),
               speed: 0,
               steering: 0,

@@ -1,7 +1,7 @@
 import { ChatMessage, RemotePlayer, VehicleCategory } from '../types';
 
 export interface MultiplayerCallbacks {
-  onInit?: (yourId: string, players: RemotePlayer[], destructibles: Record<string, { destroyed: boolean }>) => void;
+  onInit?: (yourId: string, players: RemotePlayer[], destructibles: Record<string, { destroyed: boolean }>, spawn?: RemotePlayer) => void;
   onPlayerJoined?: (player: RemotePlayer) => void;
   onPlayerLeft?: (playerId: string) => void;
   onObjectDestroyed?: (objectId: string) => void;
@@ -180,13 +180,16 @@ export class MultiplayerClient {
         if (msg.yourId) this.playerId = msg.yourId;
         this.remotePlayers.clear();
         this.buffers.clear();
-        (msg.players as RemotePlayer[] | undefined)?.forEach((p) => {
+        const initialPlayers = (msg.players as RemotePlayer[] | undefined) || [];
+        const spawn = initialPlayers.find((p) => p.id === this.playerId);
+        initialPlayers.forEach((p) => {
           if (p.id !== this.playerId) this.remotePlayers.set(p.id, p);
         });
         this.callbacks.onInit?.(
           this.playerId,
           Array.from(this.remotePlayers.values()),
-          msg.destructibles || {}
+          msg.destructibles || {},
+          spawn
         );
         break;
       }
