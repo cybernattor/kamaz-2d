@@ -1,5 +1,5 @@
 import React from 'react';
-import { Mission, PlayerCharacter, PointOfInterest, VehicleInstance } from '../types';
+import { Mission, PlayerCharacter, PointOfInterest, RemotePlayer, VehicleInstance } from '../types';
 import { VEHICLE_CONFIGS } from '../game/vehicleConfigs';
 import {
   Volume2,
@@ -37,6 +37,7 @@ interface HUDProps {
   inVehicle: boolean;
   cityMap: CityMap;
   trafficCars: VehicleInstance[];
+  remotePlayers: RemotePlayer[];
   activeMission: Mission | null;
   targetPoi: PointOfInterest | null;
   onOpenMap: () => void;
@@ -69,6 +70,7 @@ export const HUD: React.FC<HUDProps> = ({
   inVehicle,
   cityMap,
   trafficCars,
+  remotePlayers,
   activeMission,
   targetPoi,
   onOpenMap,
@@ -221,6 +223,7 @@ export const HUD: React.FC<HUDProps> = ({
             playerSpeed={inVehicle && playerVehicle ? playerVehicle.speed : playerChar.speed}
             cityMap={cityMap}
             trafficCars={trafficCars}
+            remotePlayers={remotePlayers}
             targetPoi={targetPoi}
             onOpenFullMap={onOpenMap}
           />

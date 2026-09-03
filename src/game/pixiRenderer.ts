@@ -78,12 +78,14 @@ export class PixiGameRenderer {
   private readonly staticBackground = new Graphics();
   private readonly skidLayer = new Container();
   private readonly propLayer = new Container();
-  private readonly lightLayer = new Container();
   private readonly vehicleLayer = new Container();
   private readonly pedestrianLayer = new Container();
+  private readonly nightOverlay = new Graphics();
+  private readonly lightLayer = new Container();
   private readonly particleLayer = new Container();
   private readonly beaconLayer = new Container();
   private readonly nameLabelLayer = new Container();
+  private readonly speechLayer = new Container();
 
   private readonly vehicleViews = new Map<string, EntityView>();
   private readonly pedestrianViews = new Map<string, EntityView>();
@@ -96,12 +98,17 @@ export class PixiGameRenderer {
   private readonly effectTextures = new Map<string, Texture>();
   private readonly skidSprites = new Map<string, Sprite>();
   private readonly nameLabels = new Map<string, Text>();
+  private readonly nameHealthBars = new Map<string, Graphics>();
+  private readonly speechBubbles = new Map<string, { bg: Graphics; text: Text }>();
   private readonly particleSprites = new Map<string, Sprite>();
   private readonly lightSprites = new Map<string, Sprite>();
   private readonly effectPool: Sprite[] = [];
   private beaconRing: Sprite | null = null;
   private beaconDot: Sprite | null = null;
   private pedestrianTexture: Texture | null = null;
+  private playerCharacterTexture: Texture | null = null;
+  private playerCharacterView: EntityView | null = null;
+  private static readonly PLAYER_CHARACTER_LABEL_ID = 'player-character';
 
   private staticCanvasRenderer: GameRenderer | null = null;
   private staticTexture: Texture | null = null;
@@ -163,17 +170,24 @@ export class PixiGameRenderer {
       return;
     }
 
+    // Order matches the Canvas renderer's own draw sequence: vehicles and
+    // pedestrians sit under the night overlay so they actually dim after
+    // dark, and the headlight/lamp glow layer draws last, in 'screen' blend
+    // mode, so lights still visibly punch through that darkness on top.
     this.world.addChild(
       this.staticLayer,
       this.skidLayer,
       this.propLayer,
-      this.lightLayer,
       this.vehicleLayer,
       this.pedestrianLayer,
+      this.nightOverlay,
+      this.lightLayer,
       this.particleLayer,
       this.nameLabelLayer,
+      this.speechLayer,
       this.beaconLayer
     );
+    this.lightLayer.blendMode = 'screen';
     this.staticBackground.rect(0, 0, WORLD_SIZE, WORLD_SIZE).fill(0x0f3822);
     this.staticLayer.addChildAt(this.staticBackground, 0);
     this.app.stage.addChild(this.world);
@@ -278,9 +292,19 @@ export class PixiGameRenderer {
     this.renderSkidMarks(skidMarks, bounds);
     this.renderProps(destructibles, bounds);
     this.renderTrafficLights(cityMap.trafficLights, bounds);
-    this.renderVehicles(trafficCars, playerVehicle && inVehicle ? [playerVehicle] : [], remotePlayers, bounds);
+    // The player's own vehicle keeps existing in the world after they step
+    // out of it — it stays parked where they left it, not vanish — so it
+    // renders regardless of inVehicle, same as any other vehicle.
+    const ownVehicle = playerVehicle ? [playerVehicle] : [];
+    this.renderVehicles(trafficCars, ownVehicle, remotePlayers, bounds);
     this.renderPedestrians(pedestrians, bounds);
-    this.renderLighting(trafficCars, playerVehicle && inVehicle ? [playerVehicle] : [], remotePlayers, destructibles, bounds);
+    if (!inVehicle) {
+      this.renderPlayerCharacter(playerChar, bounds);
+    } else {
+      this.hidePlayerCharacter();
+    }
+    this.renderNightOverlay(bounds);
+    this.renderLighting(trafficCars, ownVehicle, remotePlayers, destructibles, bounds);
     this.renderParticles(particles, bounds);
     this.renderBeacon(targetPoi, bounds);
     // Drive Pixi directly from the existing game loop. This avoids relying on
@@ -491,6 +515,8 @@ export class PixiGameRenderer {
     if (!this.isVisible(remote.x, remote.y, 140, 140, bounds)) {
       const existing = this.nameLabels.get(remote.id);
       if (existing) existing.visible = false;
+      const existingBar = this.nameHealthBars.get(remote.id);
+      if (existingBar) existingBar.visible = false;
       return;
     }
     let label = this.nameLabels.get(remote.id);
@@ -515,6 +541,22 @@ export class PixiGameRenderer {
     label.visible = true;
     const config = VEHICLE_CONFIGS[remote.vehicleType] || VEHICLE_CONFIGS.sedan;
     label.position.set(remote.x, remote.y - config.width / 2 - 14);
+
+    // The Canvas renderer draws a health bar above every remote player's
+    // name tag; this GPU path only ever drew the name.
+    let bar = this.nameHealthBars.get(remote.id);
+    if (!bar) {
+      bar = new Graphics();
+      this.nameLabelLayer.addChild(bar);
+      this.nameHealthBars.set(remote.id, bar);
+    }
+    bar.visible = true;
+    bar.position.set(remote.x - 20, remote.y - config.width / 2 - 10);
+    bar.clear();
+    bar.rect(0, 0, 40, 4).fill(0x334155);
+    const health = Math.max(0, remote.condition);
+    const healthColor = health > 50 ? 0x22c55e : health > 25 ? 0xeab308 : 0xef4444;
+    bar.rect(0, 0, (40 * health) / 100, 4).fill(healthColor);
   }
 
   private releaseNameLabels(active: Set<string>) {
@@ -524,6 +566,12 @@ export class PixiGameRenderer {
       this.nameLabelLayer.removeChild(label);
       label.destroy();
     }
+    for (const [id, bar] of this.nameHealthBars) {
+      if (active.has(id)) continue;
+      this.nameHealthBars.delete(id);
+      this.nameLabelLayer.removeChild(bar);
+      bar.destroy();
+    }
   }
 
   private updateVehicleView(view: EntityView, vehicle: VehicleInstance, bounds: Bounds) {
@@ -532,7 +580,7 @@ export class PixiGameRenderer {
     view.container.position.set(vehicle.x, vehicle.y);
     view.container.rotation = vehicle.angle;
     if (view.sprite) view.sprite.texture = this.getVehicleTexture(vehicle);
-    const indicatorKey = `${vehicle.type}:${vehicle.headlights}:${vehicle.isBraking}:${vehicle.turnSignal}:${vehicle.isCrashed ? 1 : 0}:${Math.floor(Date.now() / 350) % 2}`;
+    const indicatorKey = `${vehicle.type}:${vehicle.headlights}:${vehicle.isBraking}:${vehicle.turnSignal}:${vehicle.isCrashed ? 1 : 0}:${Math.floor(Date.now() / 350) % 2}:${Math.floor(Date.now() / 150) % 2}`;
     if (!view.indicator) {
       view.indicator = new Sprite(this.getVehicleIndicatorTexture(vehicle));
       view.indicator.anchor.set(0.5);
@@ -544,8 +592,90 @@ export class PixiGameRenderer {
     }
   }
 
+  /**
+   * The Canvas renderer darkens the whole scene at night (a full-screen
+   * rgba(5,10,20,0.78) overlay) before drawing headlights/lamp glows in
+   * 'screen' blend mode on top, so lights visibly punch through the dark.
+   * This GPU path never drew that overlay at all — headlights and street
+   * lamps just floated over a scene that stayed fully daylight-bright.
+   */
+  private renderNightOverlay(bounds: Bounds) {
+    this.nightOverlay.clear();
+    if (!this.isNightMode) {
+      this.nightOverlay.visible = false;
+      return;
+    }
+    this.nightOverlay.visible = true;
+    this.nightOverlay
+      .rect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top)
+      .fill({ color: 0x050a14, alpha: 0.78 });
+  }
+
+  /**
+   * The Canvas renderer has always drawn the on-foot player (a trucker
+   * figure + name tag), but this GPU path never did — stepping out of the
+   * vehicle just left nothing on screen. Mirrors the vehicle/pedestrian
+   * pooled-sprite pattern above instead of the Canvas immediate-mode draw.
+   */
+  private renderPlayerCharacter(playerChar: PlayerCharacter, bounds: Bounds) {
+    if (!this.isVisible(playerChar.x, playerChar.y, 40, 40, bounds)) {
+      this.hidePlayerCharacter();
+      return;
+    }
+    if (!this.playerCharacterView) {
+      this.playerCharacterView = createEntityView(this.pedestrianLayer, this.getPlayerCharacterTexture());
+    }
+    const view = this.playerCharacterView;
+    view.container.visible = true;
+    view.container.position.set(playerChar.x, playerChar.y);
+    view.container.rotation = playerChar.angle;
+
+    let label = this.nameLabels.get(PixiGameRenderer.PLAYER_CHARACTER_LABEL_ID);
+    if (!label) {
+      label = new Text({
+        text: playerChar.name,
+        style: {
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 12,
+          fontWeight: 'bold',
+          fill: 0x38bdf8,
+          stroke: { color: 0x0f172a, width: 3 },
+        },
+        resolution: this.spriteResolution,
+      });
+      label.anchor.set(0.5, 1);
+      this.nameLabelLayer.addChild(label);
+      this.nameLabels.set(PixiGameRenderer.PLAYER_CHARACTER_LABEL_ID, label);
+    } else if (label.text !== playerChar.name) {
+      label.text = playerChar.name;
+    }
+    label.visible = true;
+    label.position.set(playerChar.x, playerChar.y - 20);
+  }
+
+  private hidePlayerCharacter() {
+    if (this.playerCharacterView) this.playerCharacterView.container.visible = false;
+    const label = this.nameLabels.get(PixiGameRenderer.PLAYER_CHARACTER_LABEL_ID);
+    if (label) label.visible = false;
+  }
+
+  private getPlayerCharacterTexture() {
+    if (this.playerCharacterTexture) return this.playerCharacterTexture;
+    const template = new Graphics();
+    template.ellipse(0, 0, 9, 6).fill({ color: 0x000000, alpha: 0.4 });
+    template.ellipse(0, 0, 8, 6).fill(0xf97316); // High-vis vest
+    template.rect(-6, -4, 12, 2).fill(0xfef08a); // Reflective stripes
+    template.rect(-6, 2, 12, 2).fill(0xfef08a);
+    template.circle(3, 0, 5).fill(0xfed7ac); // Head
+    template.arc(6, 0, 4, -Math.PI / 2, Math.PI / 2).fill(0x0284c7); // Cap visor
+    this.playerCharacterTexture = this.generateSpriteTexture(template);
+    template.destroy();
+    return this.playerCharacterTexture;
+  }
+
   private renderPedestrians(pedestrians: Pedestrian[], bounds: Bounds) {
     const active = new Set<string>();
+    const activeSpeech = new Set<string>();
     for (const ped of pedestrians) {
       const view = this.getView(this.pedestrianViews, ped.id, this.pedestrianLayer, this.getPedestrianTexture(ped));
       view.container.visible = this.isVisible(ped.x, ped.y, 50, 50, bounds);
@@ -554,8 +684,60 @@ export class PixiGameRenderer {
       view.container.position.set(ped.x, ped.y);
       view.container.rotation = ped.angle;
       if (view.sprite) view.sprite.texture = this.getPedestrianTexture(ped);
+      if (ped.speechText) {
+        activeSpeech.add(ped.id);
+        this.updateSpeechBubble(ped.id, ped.x, ped.y, ped.speechText);
+      }
     }
     this.hideInactive(this.pedestrianViews, active);
+    this.releaseSpeechBubbles(activeSpeech);
+  }
+
+  /**
+   * The Canvas renderer shows a speech bubble whenever a pedestrian has
+   * reactive dialogue (ped.speechText) — this GPU path never read that
+   * field at all, so pedestrian reactions were silently invisible.
+   */
+  private updateSpeechBubble(id: string, x: number, y: number, text: string) {
+    let bubble = this.speechBubbles.get(id);
+    if (!bubble) {
+      const bg = new Graphics();
+      const label = new Text({
+        text,
+        style: {
+          fontFamily: '"Plus Jakarta Sans", sans-serif',
+          fontSize: 11,
+          fontWeight: 'bold',
+          fill: 0xf8fafc,
+        },
+        resolution: this.spriteResolution,
+      });
+      label.anchor.set(0.5, 1);
+      this.speechLayer.addChild(bg, label);
+      bubble = { bg, text: label };
+      this.speechBubbles.set(id, bubble);
+    } else if (bubble.text.text !== text) {
+      bubble.text.text = text;
+    }
+    bubble.bg.visible = true;
+    bubble.text.visible = true;
+    const padX = 6;
+    const boxH = 18;
+    const boxW = bubble.text.width + padX * 2;
+    bubble.text.position.set(x, y - 23);
+    bubble.bg.clear();
+    bubble.bg
+      .roundRect(x - boxW / 2, y - 18 - boxH, boxW, boxH, 6)
+      .fill({ color: 0x0f172a, alpha: 0.92 })
+      .stroke({ color: 0x64748b, width: 1.5 });
+  }
+
+  private releaseSpeechBubbles(active: Set<string>) {
+    for (const [id, bubble] of this.speechBubbles) {
+      if (active.has(id)) continue;
+      bubble.bg.visible = false;
+      bubble.text.visible = false;
+    }
   }
 
   private renderLighting(
@@ -679,20 +861,40 @@ export class PixiGameRenderer {
     const body = colorNumber(vehicle.color, 0x64748b);
     graphics.clear();
 
-    graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(body).stroke({ color: 0x0f172a, width: 2, alpha: 0.75 });
-    graphics.rect(halfLength * 0.25, -halfWidth + 3, Math.max(6, halfLength * 0.28), config.width - 6).fill(0x0284c7);
-    graphics.rect(-halfLength * 0.42, -halfWidth + 3, Math.max(5, halfLength * 0.18), config.width - 6).fill(0x075985);
-
     const wheelColor = 0x111827;
     graphics.rect(-halfLength * 0.58, -halfWidth - 3, 12, 6).fill(wheelColor);
     graphics.rect(halfLength * 0.38, -halfWidth - 3, 12, 6).fill(wheelColor);
     graphics.rect(-halfLength * 0.58, halfWidth - 3, 12, 6).fill(wheelColor);
     graphics.rect(halfLength * 0.38, halfWidth - 3, 12, 6).fill(wheelColor);
 
+    // Ambulance and police used to fall into the generic sedan body below —
+    // same rectangle and windshields as every other car, no cross, no
+    // lightbar livery — so they were visually indistinguishable from a taxi.
+    if (vehicle.type === 'ambulance') {
+      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(0xffffff).stroke({ color: 0xe2e8f0, width: 1.5 });
+      graphics.rect(-halfLength, -halfWidth + 4, config.length, 3).fill(0xdc2626);
+      graphics.rect(-halfLength, halfWidth - 7, config.length, 3).fill(0xdc2626);
+      graphics.rect(-6, -2, 12, 4).fill(0xdc2626);
+      graphics.rect(-2, -6, 4, 12).fill(0xdc2626);
+      graphics.rect(halfLength * 0.45, -halfWidth + 3, 5, config.width - 6).fill(0x0284c7);
+    } else if (vehicle.type === 'police') {
+      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(0x0f172a);
+      graphics.rect(-halfLength * 0.2, -halfWidth + 2, halfLength * 0.8, config.width - 4).fill(0xffffff);
+      graphics.rect(halfLength * 0.35, -halfWidth + 3, 5, config.width - 6).fill(0x0284c7);
+      graphics.rect(-halfLength * 0.55, -halfWidth + 3, 4, config.width - 6).fill(0x0284c7);
+    } else {
+      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(body).stroke({ color: 0x0f172a, width: 2, alpha: 0.75 });
+      graphics.rect(halfLength * 0.25, -halfWidth + 3, Math.max(6, halfLength * 0.28), config.width - 6).fill(0x0284c7);
+      graphics.rect(-halfLength * 0.42, -halfWidth + 3, Math.max(5, halfLength * 0.18), config.width - 6).fill(0x075985);
+    }
+
     if (vehicle.type === 'kamaz_dump' || vehicle.type === 'kamaz_flatbed') {
       graphics.rect(-halfLength * 0.9, -halfWidth + 4, halfLength * 0.72, config.width - 8).fill(0xd97706);
       graphics.rect(halfLength * 0.28, -halfWidth, halfLength * 0.5, config.width).fill(body);
     }
+    // The flashing lightbar is dynamic (it alternates color on a timer) so it
+    // belongs on the indicator overlay in drawVehicleIndicators, not on this
+    // cached-per-type-and-color body texture.
     graphics.rect(halfLength - 4, -halfWidth + 2, 4, 5).fill(vehicle.headlights > 0 ? 0xfef08a : 0x94a3b8);
     graphics.rect(halfLength - 4, halfWidth - 7, 4, 5).fill(vehicle.headlights > 0 ? 0xfef08a : 0x94a3b8);
     graphics.rect(-halfLength - 1, -halfWidth + 2, 3, 5).fill(vehicle.isBraking ? 0xef4444 : 0x7f1d1d);
@@ -719,7 +921,27 @@ export class PixiGameRenderer {
       if (vehicle.turnSignal === 'left' || vehicle.turnSignal === 'hazard') graphics.circle(halfLength - 2, -halfWidth + 2, 4).fill(0xf59e0b);
       if (vehicle.turnSignal === 'right' || vehicle.turnSignal === 'hazard') graphics.circle(halfLength - 2, halfWidth - 2, 4).fill(0xf59e0b);
     }
-    if (vehicle.isCrashed) graphics.rect(-halfLength - 4, -halfWidth - 4, config.length + 8, config.width + 8).stroke({ color: 0xf97316, width: 3 });
+    // Emergency lightbar. Ambulance/police used to render as a plain sedan
+    // with no siren livery at all — this is what actually identifies them
+    // as emergency vehicles at a glance, flashing on the same 150ms cadence
+    // as the Canvas renderer.
+    const flash = Math.floor(Date.now() / 150) % 2 === 0;
+    if (vehicle.type === 'ambulance') {
+      graphics.rect(halfLength * 0.1, -8, 8, 16).fill(flash ? 0xef4444 : 0x3b82f6);
+    } else if (vehicle.type === 'police') {
+      graphics.rect(-2, -7, 6, 7).fill(flash ? 0xef4444 : 0x3b82f6);
+      graphics.rect(-2, 0, 6, 7).fill(flash ? 0x3b82f6 : 0xef4444);
+    }
+    if (vehicle.isCrashed) {
+      graphics.rect(-halfLength - 4, -halfWidth - 4, config.length + 8, config.width + 8).stroke({ color: 0xf97316, width: 3 });
+      // "!" warning marker above the vehicle, approximated without a Text
+      // object (this graphic is cached/regenerated as a texture, so a glyph
+      // would need to be baked in some other way): a triangle plus a stem
+      // and dot standing in for the exclamation mark.
+      graphics.poly([0, -halfWidth - 19, 10, -halfWidth - 4, -10, -halfWidth - 4]).fill(0xfacc15);
+      graphics.rect(-1.5, -halfWidth - 17, 3, 8).fill(0x111827);
+      graphics.circle(0, -halfWidth - 6, 1.6).fill(0x111827);
+    }
   }
 
   /** Indicators are regenerated only when their state changes, then rendered as a Sprite. */
@@ -738,7 +960,8 @@ export class PixiGameRenderer {
 
   private getVehicleIndicatorTexture(vehicle: VehicleInstance) {
     const blink = Math.floor(Date.now() / 350) % 2;
-    const key = `${vehicle.type}:${vehicle.headlights}:${vehicle.isBraking}:${vehicle.turnSignal}:${vehicle.isCrashed ? 1 : 0}:${blink}`;
+    const lightbarBlink = Math.floor(Date.now() / 150) % 2;
+    const key = `${vehicle.type}:${vehicle.headlights}:${vehicle.isBraking}:${vehicle.turnSignal}:${vehicle.isCrashed ? 1 : 0}:${blink}:${lightbarBlink}`;
     const existing = this.indicatorTextures.get(key);
     if (existing) return existing;
     const template = new Graphics();

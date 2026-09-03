@@ -347,12 +347,15 @@ export class PhysicsEngine {
         const cfg2 = VEHICLE_CONFIGS[v2.type] || VEHICLE_CONFIGS.sedan;
 
         // NPC traffic is coordinated by TrafficAI (lights, following distance
-        // and lane keeping). Applying the player collision response to every
-        // NPC pair made crossing traffic exchange momentum, reverse direction
-        // and accumulate damage until an entire junction locked up. Let the
-        // AI resolve NPC-to-NPC spacing and keep physics collisions for the
-        // player, where impact feedback is meaningful.
-        if (!v1.isPlayer && !v2.isPlayer) continue;
+        // and lane keeping), which used to be the only thing keeping two NPCs
+        // apart — nothing stopped them physically overlapping, e.g. crossing
+        // traffic at a junction or two cars in adjacent lanes. Every pair now
+        // gets the plain mass-ratio push-apart below so no two vehicles can
+        // occupy the same space; only a pair that includes the player also
+        // gets the momentum/damage exchange further down. Giving that same
+        // violent exchange to every NPC pair is what previously made crossing
+        // traffic reverse direction and pile up until a junction locked up.
+        const isPlayerPair = v1.isPlayer || v2.isPlayer;
 
         const dx = v2.x - v1.x;
         const dy = v2.y - v1.y;
@@ -387,6 +390,13 @@ export class PhysicsEngine {
             v2.x += nx * overlap * ratio2;
             v2.y += ny * overlap * ratio2;
           }
+
+          // The momentum/damage exchange below is what actually launches a
+          // vehicle and can reverse its direction — appropriate for a player
+          // impact, but two NPCs already separated by the push above have
+          // nothing left to resolve; TrafficAI's own speed control keeps them
+          // from re-overlapping next frame.
+          if (!isPlayerPair) continue;
 
           // Compute velocities in Cartesian plane
           const vx1 = Math.cos(v1.angle) * v1.speed;

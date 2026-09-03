@@ -15,7 +15,6 @@ import { CityMap } from './game/cityMap';
 import { PhysicsEngine } from './game/physics';
 import { TrafficAI } from './game/trafficAI';
 import { MissionManager } from './game/missions';
-import { GameRenderer } from './game/renderer';
 import type { PixiGameRenderer } from './game/pixiRenderer';
 import { MultiplayerClient } from './network/multiplayerClient';
 import { sound } from './audio/soundEngine';
@@ -72,8 +71,9 @@ export default function App() {
   const physicsRef = useLazyRef<PhysicsEngine>(() => new PhysicsEngine());
   const trafficRef = useLazyRef<TrafficAI>(() => new TrafficAI(cityMapRef.current));
   const missionsRef = useLazyRef<MissionManager>(() => new MissionManager());
-  const rendererRef = useRef<GameRenderer | PixiGameRenderer | null>(null);
+  const rendererRef = useRef<PixiGameRenderer | null>(null);
   const multiplayerRef = useRef<MultiplayerClient | null>(null);
+  const [webglUnavailable, setWebglUnavailable] = useState(false);
 
   // Player State
   const playerVehicleRef = useRef<VehicleInstance>({
@@ -377,79 +377,27 @@ export default function App() {
     if (!canvas) return;
 
     let disposed = false;
-    let pixiCanvas: HTMLCanvasElement | null = null;
     let pixiRenderer: PixiGameRenderer | null = null;
-    let pixiFallbackTimer: number | null = null;
-    const requestedRenderer = import.meta.env.VITE_RENDERER === 'canvas' ? 'canvas' : 'pixi';
 
-    const installCanvasFallback = () => {
-      if (disposed || rendererRef.current instanceof GameRenderer) return;
-      try {
-        if (pixiFallbackTimer !== null) {
-          window.clearTimeout(pixiFallbackTimer);
-          pixiFallbackTimer = null;
-        }
-        if (pixiCanvas) {
-          pixiCanvas.remove();
-          pixiCanvas = null;
-        }
-        canvas.style.display = '';
-        const context = canvas.getContext('2d');
-        if (!context) return;
-        const fallback = new GameRenderer(context);
-        fallback.resize(window.innerWidth, window.innerHeight);
-        rendererRef.current = fallback;
-        // Which renderer is live is the first thing to check when the game
-        // feels slow or soft: the Canvas path is the low-end fallback.
-        document.body.dataset.renderer = 'canvas';
-      } catch {
-        rendererRef.current = null;
-      }
-    };
+    // Pixi's WebGL clear color is opaque black; revealing the canvas before
+    // it has actually painted a frame reads as a black flash on every load.
+    // Stays hidden until the render loop below sees pixiStatus flip to
+    // 'rendered', then it's shown once and left alone.
+    canvas.style.visibility = 'hidden';
 
-    // Always start with the lightweight Canvas renderer. Pixi is loaded only
-    // after a usable first frame exists, keeping the large WebGL bundle off the
-    // critical path and providing a reliable fallback on constrained GPUs.
-    installCanvasFallback();
-    if (requestedRenderer !== 'canvas') {
-      const probeCanvas = document.createElement('canvas');
-      const webglAvailable = Boolean(
-        probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl')
-      );
-      if (!webglAvailable) {
-        installCanvasFallback();
-      } else {
-        void import('./game/pixiRenderer').then(({ PixiGameRenderer }) => {
-          if (disposed) return;
-          pixiCanvas = document.createElement('canvas');
-          pixiCanvas.className = canvas.className;
-          pixiCanvas.setAttribute('aria-hidden', 'true');
-          // Stay invisible - and leave the still-working Canvas fallback
-          // showing - until Pixi has actually drawn a frame. Hiding the
-          // fallback immediately (as before) revealed Pixi's WebGL clear
-          // color (opaque black, set for the health probe below) for
-          // however long init and the first draw took: a black flash on
-          // every load.
-          pixiCanvas.style.visibility = 'hidden';
-          canvas.parentElement?.insertBefore(pixiCanvas, canvas);
-          pixiRenderer = new PixiGameRenderer(pixiCanvas);
-          rendererRef.current = pixiRenderer;
-          document.body.dataset.renderer = 'pixi';
-          void pixiRenderer.ready.then(() => {
-            if (pixiFallbackTimer !== null) {
-              window.clearTimeout(pixiFallbackTimer);
-              pixiFallbackTimer = null;
-            }
-          }).catch(() => installCanvasFallback());
-          pixiFallbackTimer = window.setTimeout(() => {
-            if (rendererRef.current === pixiRenderer && !pixiRenderer.hasVisibleFrame()) {
-              pixiRenderer.destroy();
-              rendererRef.current = null;
-              installCanvasFallback();
-            }
-          }, 2500);
-        }).catch(() => installCanvasFallback());
-      }
+    const probeCanvas = document.createElement('canvas');
+    const webglAvailable = Boolean(
+      probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl')
+    );
+    if (!webglAvailable) {
+      setWebglUnavailable(true);
+    } else {
+      void import('./game/pixiRenderer').then(({ PixiGameRenderer }) => {
+        if (disposed) return;
+        pixiRenderer = new PixiGameRenderer(canvas);
+        rendererRef.current = pixiRenderer;
+        void pixiRenderer.ready.catch(() => setWebglUnavailable(true));
+      }).catch(() => setWebglUnavailable(true));
     }
 
     let animationFrameId: number;
@@ -547,8 +495,11 @@ export default function App() {
         trafficRef.current.updatePedestrians(simulationStep, playerPos.x, playerPos.y, v.isHonking, isCar ? v : undefined);
 
       // 4. Resolve Collisions (Vehicles vs Props vs Pedestrians vs Buildings)
+        // The player's own vehicle stays a solid obstacle (and a valid crash
+        // target) even after they step out of it and it's parked, not
+        // dropped from the simulation entirely.
         physicsRef.current.resolveAllCollisions(
-        isCar ? [v, ...trafficRef.current.npcVehicles] : trafficRef.current.npcVehicles,
+        [v, ...trafficRef.current.npcVehicles],
         cityMapRef.current.destructibles,
         trafficRef.current.pedestrians,
         cityMapRef.current.buildings,
@@ -646,28 +597,21 @@ export default function App() {
         });
       }
 
-      // Reveal Pixi only once it has actually painted a frame, and hide the
-      // Canvas fallback in that same tick - two always-valid pictures swap
-      // places, instead of a black WebGL clear color showing through early.
-      if (
-        pixiCanvas &&
-        pixiCanvas.style.visibility === 'hidden' &&
-        pixiCanvas.dataset.pixiStatus === 'rendered'
-      ) {
-        pixiCanvas.style.visibility = '';
-        canvas.style.display = 'none';
+      // Reveal the canvas only once Pixi has actually painted a frame,
+      // instead of showing its black WebGL clear color while it loads.
+      // visibility:hidden (unlike display:none) still reports real layout
+      // dimensions, so sizing below is accurate even before this reveal.
+      if (canvas.style.visibility === 'hidden' && canvas.dataset.pixiStatus === 'rendered') {
+        canvas.style.visibility = '';
       }
 
-      // 9. Render Canvas Scene
-      // visibility:hidden (unlike display:none) still reports real layout
-      // dimensions, so this is accurate even before the reveal above.
-      const activeCanvas = pixiCanvas || canvas;
+      // 9. Render Scene
       if (rendererRef.current) {
         rendererRef.current.zoom = zoomRef.current;
         rendererRef.current.frameDelta = delta;
         rendererRef.current.render(
-          activeCanvas.clientWidth || window.innerWidth,
-          activeCanvas.clientHeight || window.innerHeight,
+          canvas.clientWidth || window.innerWidth,
+          canvas.clientHeight || window.innerHeight,
           cityMapRef.current,
           v,
           char,
@@ -702,12 +646,9 @@ export default function App() {
 
     return () => {
       disposed = true;
-      if (pixiFallbackTimer !== null) window.clearTimeout(pixiFallbackTimer);
       cancelAnimationFrame(animationFrameId);
       rendererRef.current?.destroy();
       rendererRef.current = null;
-      pixiCanvas?.remove();
-      canvas.style.display = '';
     };
   }, []);
 
@@ -723,12 +664,11 @@ export default function App() {
   useEffect(() => {
     const handleResize = () => {
       if (canvasRef.current) {
-        const canvas = canvasRef.current;
-        const width = window.innerWidth;
-        const height = window.innerHeight;
-        canvas.width = width;
-        canvas.height = height;
-        rendererRef.current?.resize(width, height);
+        // The canvas's own CSS layout size (w-full h-full) already tracks
+        // the window; Pixi reads that and sizes its WebGL surface itself
+        // (with the correct device pixel ratio), so it doesn't need this
+        // effect to also poke canvas.width/height directly.
+        rendererRef.current?.resize(window.innerWidth, window.innerHeight);
       }
     };
 
@@ -807,8 +747,21 @@ export default function App() {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-950 select-none">
-      {/* 2D Top-Down Canvas */}
+      {/* GPU (Pixi/WebGL) Canvas — the sole renderer now that the Canvas 2D
+          fallback engine has been retired. */}
       <canvas ref={canvasRef} className="absolute inset-0 block w-full h-full cursor-crosshair" />
+
+      {webglUnavailable && (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950 text-center p-6 z-[100]">
+          <div className="max-w-sm space-y-2">
+            <p className="text-slate-100 font-bold text-lg">WebGL недоступен</p>
+            <p className="text-slate-400 text-sm">
+              Игре нужен WebGL для отрисовки. Обновите браузер, включите аппаратное ускорение
+              или попробуйте другое устройство.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Primary Game HUD (Exact match to screenshots) */}
       <HUD
@@ -832,6 +785,7 @@ export default function App() {
         inVehicle={inVehicle}
         cityMap={cityMapRef.current}
         trafficCars={trafficRef.current.npcVehicles}
+        remotePlayers={remotePlayers}
         activeMission={activeMission}
         targetPoi={targetPoi}
         onOpenMap={() => setShowFullMap(true)}
@@ -906,6 +860,7 @@ export default function App() {
           playerSpeed={inVehicle ? playerVehicleRef.current.speed : playerCharRef.current.speed}
           cityMap={cityMapRef.current}
           trafficCars={trafficRef.current.npcVehicles}
+          remotePlayers={remotePlayers}
           targetPoi={targetPoi}
           onClose={() => setShowFullMap(false)}
         />

@@ -1265,13 +1265,31 @@ export class TrafficAI {
             const playerConfig = VEHICLE_CONFIGS[playerVehicle.type] || VEHICLE_CONFIGS.sedan;
             const safeGap = (config.length + playerConfig.length) * 0.5 + 24;
             blockedByPlayer = true;
-            shouldStop = true;
             blockedObstacle = playerVehicle;
-            if (aheadDistance <= safeGap + 30) {
+            // One frame's worth of coasting at the car's current speed can
+            // cross straight through a gap that still looked safe when this
+            // frame started (world units move ~car.speed per frame), so the
+            // clamp below checks where the car will actually be after this
+            // frame's move, not where it already is.
+            const projectedAheadDistance = aheadDistance - Math.max(0, car.speed);
+            if (projectedAheadDistance <= safeGap) {
+              // Hard safety clamp: a last resort for when the gap is about
+              // to be violated, not a routine way to hold position.
+              shouldStop = true;
               car.x = playerVehicle.x - forwardX * safeGap;
               car.y = playerVehicle.y - forwardY * safeGap;
               car.speed = 0;
             } else {
+              // Let the car actually drive itself: no position override at
+              // all, just match the player's speed and lean on the hard
+              // clamp above as the safety net — exactly the same pattern the
+              // general same-lane obstacle scan already uses for one NPC
+              // following another (below). Overriding car.x/y every frame —
+              // first as a hard snap, then as an eased lerp toward the same
+              // fixed offset — was never really "braking", it was the AI
+              // puppeting the car's position off the player every frame,
+              // which reads as magnetically glued to the player no matter
+              // how smooth the easing is.
               targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92));
             }
           }
@@ -1317,8 +1335,13 @@ export class TrafficAI {
       // Recover from a genuine deadlock without breaking a normal red-light
       // queue. A traffic phase is shorter than this timeout, so a car that has
       // waited through a full phase is safe to re-seed behind the stop line.
+      // Every other reader of cityMap.intersections filters out uncontrolled
+      // landmarks (roundabouts, T-junctions) since NPCs never queue at them;
+      // this one didn't, so a map with more landmark markers than signalled
+      // crossings made most of the road network "near an intersection" and
+      // gave cars a 12s stuck tolerance almost everywhere instead of 2.5s.
       const nearIntersection = this.cityMap.intersections.some(
-        (inter) => Math.hypot(inter.x - car.x, inter.y - car.y) < 150
+        (inter) => inter.trafficControlled !== false && Math.hypot(inter.x - car.x, inter.y - car.y) < 150
       );
       if (ai.progressTimer > 0.75 && !ai.isTurning) {
         ai.stuckTimer += delta;

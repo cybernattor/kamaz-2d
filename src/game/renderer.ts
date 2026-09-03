@@ -128,8 +128,11 @@ export class GameRenderer {
     this.renderTrafficLights(ctx, cityMap.trafficLights);
 
     // 9. Render Vehicles (NPC + Player + Remote Players)
+    // The player's own vehicle stays parked in the world after they step
+    // out of it instead of vanishing, so it renders regardless of inVehicle,
+    // same as any other vehicle.
     const allVehicles = [...trafficCars];
-    if (playerVehicle && inVehicle) {
+    if (playerVehicle) {
       allVehicles.push(playerVehicle);
     }
     this.renderVehicles(ctx, allVehicles, remotePlayers);
@@ -434,8 +437,99 @@ export class GameRenderer {
     });
   }
 
+  /**
+   * Bridge/tunnel roads share on-screen space with whatever they cross at
+   * grade, so paint order decides which one reads as "above". Sorting only
+   * the draw pass (never CityMap.roads itself, which other systems iterate
+   * order-independently) keeps tunnels underneath the road that crosses them
+   * and bridges on top of it, regardless of which was generated first.
+   */
+  private roadZOrder(road: RoadSegment) {
+    return road.feature === 'tunnel' ? -1 : road.feature === 'bridge' ? 1 : 0;
+  }
+
+  /** Local tangent direction of a road's polyline nearest to `at`. */
+  private tangentNear(road: RoadSegment, at: { x: number; y: number }) {
+    let best = Infinity;
+    let tangent = { x: 1, y: 0 };
+    for (let i = 1; i < road.points.length; i++) {
+      const a = road.points[i - 1];
+      const b = road.points[i];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const lengthSquared = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((at.x - a.x) * dx + (at.y - a.y) * dy) / lengthSquared));
+      const px = a.x + t * dx;
+      const py = a.y + t * dy;
+      const distance = Math.hypot(at.x - px, at.y - py);
+      if (distance < best) {
+        best = distance;
+        tangent = { x: dx, y: dy };
+      }
+    }
+    const length = Math.hypot(tangent.x, tangent.y) || 1;
+    return { x: tangent.x / length, y: tangent.y / length };
+  }
+
+  /**
+   * Grade-separation cues at a bridge/tunnel road's crossing points. Without
+   * these, a bridge and the road it passes over just look like two flat
+   * carriageways painted on top of each other; with them, the bridge reads
+   * as elevated (drop shadow + pier stubs) and the tunnel reads as sunken
+   * (dark portal mouths either side of the crossing).
+   */
+  private renderGradeCrossings(ctx: CanvasRenderingContext2D, road: RoadSegment) {
+    if (!road.gradeCrossings?.length) return;
+    // Every bridge/tunnel on this map only ever crosses a full arterial
+    // (110 half-width + 24 sidewalk halo = 134px reach), so a fixed
+    // clearance keeps these cues outside that halo without needing to look
+    // up which road is actually being crossed.
+    const arterialHaloReach = 134;
+
+    road.gradeCrossings.forEach((point) => {
+      const tangent = this.tangentNear(road, point);
+      ctx.save();
+      ctx.translate(point.x, point.y);
+      ctx.rotate(Math.atan2(tangent.y, tangent.x));
+
+      if (road.feature === 'bridge') {
+        // Soft drop shadow the deck casts on the road passing underneath,
+        // plus a pier stub planted at each shoulder of that road.
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.4)';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, arterialHaloReach, road.width / 2 + 14, 0, 0, Math.PI * 2);
+        ctx.fill();
+        [-90, 90].forEach((offset) => {
+          ctx.fillStyle = '#1e293b';
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(offset - 9, -(road.width / 2) - 6, 18, road.width + 12, 4);
+          ctx.fill();
+          ctx.stroke();
+        });
+      } else {
+        // Dark portal mouths where the tunnel dives under the crossing
+        // road, joined by a dim strip so nothing shows through the gap.
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.88)';
+        ctx.fillRect(-arterialHaloReach, -road.width / 2, arterialHaloReach * 2, road.width);
+        [-arterialHaloReach, arterialHaloReach].forEach((offset) => {
+          ctx.fillStyle = '#020617';
+          ctx.strokeStyle = '#334155';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(offset - 14, -(road.width / 2) - 6, 28, road.width + 12, 6);
+          ctx.fill();
+          ctx.stroke();
+        });
+      }
+      ctx.restore();
+    });
+  }
+
   private renderRoads(ctx: CanvasRenderingContext2D, roads: RoadSegment[]) {
-    roads.forEach((road) => {
+    const drawOrder = [...roads].sort((a, b) => this.roadZOrder(a) - this.roadZOrder(b));
+    drawOrder.forEach((road) => {
       ctx.save();
       const points = road.points.length > 1 ? road.points : [{ x: road.x1, y: road.y1 }, { x: road.x2, y: road.y2 }];
       const draw = (offset = 0) => {
@@ -500,6 +594,8 @@ export class GameRenderer {
 
       ctx.setLineDash([]);
       ctx.restore();
+
+      this.renderGradeCrossings(ctx, road);
     });
   }
 

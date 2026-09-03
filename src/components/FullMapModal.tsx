@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { PointOfInterest, VehicleInstance } from '../types';
+import { PointOfInterest, RemotePlayer, VehicleInstance } from '../types';
 import { CityMap, WORLD_SIZE } from '../game/cityMap';
 import { GameRenderer } from '../game/renderer';
 import { X, Compass } from 'lucide-react';
@@ -13,6 +13,7 @@ interface FullMapCanvasProps {
   playerSpeed: number;
   cityMap: CityMap;
   trafficCars: VehicleInstance[];
+  remotePlayers: RemotePlayer[];
   targetPoi: PointOfInterest | null;
 }
 
@@ -23,12 +24,14 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
   playerSpeed,
   cityMap,
   trafficCars,
+  remotePlayers,
   targetPoi,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const playerRef = useRef({ x: playerX, y: playerY, angle: playerAngle, speed: playerSpeed, updatedAt: performance.now() });
   const cityMapRef = useRef(cityMap);
   const trafficCarsRef = useRef(trafficCars);
+  const remotePlayersRef = useRef(remotePlayers);
   const targetPoiRef = useRef(targetPoi);
 
   // Props are refreshed by React at HUD cadence, but the simulation mutates
@@ -37,6 +40,7 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
   playerRef.current = { x: playerX, y: playerY, angle: playerAngle, speed: playerSpeed, updatedAt: performance.now() };
   cityMapRef.current = cityMap;
   trafficCarsRef.current = trafficCars;
+  remotePlayersRef.current = remotePlayers;
   targetPoiRef.current = targetPoi;
 
   useEffect(() => {
@@ -118,6 +122,33 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
         ctx.fill();
       }
 
+      // Other online players get their own marker + name tag so a squadmate
+      // is easy to spot next to NPC traffic and the mission target.
+      for (const rp of remotePlayersRef.current) {
+        const x = toMapCoord(rp.x);
+        const y = toMapCoord(rp.y);
+        if (x < -20 || x > FULL_MAP_SIZE + 20 || y < -20 || y > FULL_MAP_SIZE + 20) continue;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(rp.angle + Math.PI / 2);
+        ctx.fillStyle = '#e879f9';
+        ctx.shadowColor = '#e879f9';
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.moveTo(0, -9);
+        ctx.lineTo(6, 6);
+        ctx.lineTo(0, 3);
+        ctx.lineTo(-6, 6);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        ctx.fillStyle = '#f5d0fe';
+        ctx.font = 'bold 10px "JetBrains Mono", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(rp.name, x, y - 14);
+      }
+
       // Extrapolate the player between HUD snapshots using its current
       // velocity, then ease the visible marker to the estimate.
       const player = playerRef.current;
@@ -173,6 +204,7 @@ interface FullMapModalProps {
   playerSpeed: number;
   cityMap: CityMap;
   trafficCars: VehicleInstance[];
+  remotePlayers: RemotePlayer[];
   targetPoi: PointOfInterest | null;
   onClose: () => void;
 }
@@ -184,6 +216,7 @@ export const FullMapModal: React.FC<FullMapModalProps> = ({
   playerSpeed,
   cityMap,
   trafficCars,
+  remotePlayers,
   targetPoi,
   onClose,
 }) => {
@@ -231,6 +264,7 @@ export const FullMapModal: React.FC<FullMapModalProps> = ({
                 playerSpeed={playerSpeed}
                 cityMap={cityMap}
                 trafficCars={trafficCars}
+                remotePlayers={remotePlayers}
                 targetPoi={targetPoi}
               />
             </div>

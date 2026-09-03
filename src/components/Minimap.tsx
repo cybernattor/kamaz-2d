@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { PointOfInterest, VehicleInstance } from '../types';
+import { PointOfInterest, RemotePlayer, VehicleInstance } from '../types';
 import { CityMap, WORLD_SIZE } from '../game/cityMap';
 
 interface MinimapProps {
@@ -9,6 +9,7 @@ interface MinimapProps {
   playerSpeed: number;
   cityMap: CityMap;
   trafficCars: VehicleInstance[];
+  remotePlayers: RemotePlayer[];
   targetPoi: PointOfInterest | null;
   onOpenFullMap: () => void;
 }
@@ -23,6 +24,7 @@ export const Minimap: React.FC<MinimapProps> = ({
   playerSpeed,
   cityMap,
   trafficCars,
+  remotePlayers,
   targetPoi,
   onOpenFullMap,
 }) => {
@@ -30,6 +32,7 @@ export const Minimap: React.FC<MinimapProps> = ({
   const playerRef = useRef({ x: playerX, y: playerY, angle: playerAngle, speed: playerSpeed, updatedAt: performance.now() });
   const cityMapRef = useRef(cityMap);
   const trafficCarsRef = useRef(trafficCars);
+  const remotePlayersRef = useRef(remotePlayers);
   const targetPoiRef = useRef(targetPoi);
 
   // Keep the animation loop independent from React's HUD updates. The game
@@ -37,6 +40,7 @@ export const Minimap: React.FC<MinimapProps> = ({
   playerRef.current = { x: playerX, y: playerY, angle: playerAngle, speed: playerSpeed, updatedAt: performance.now() };
   cityMapRef.current = cityMap;
   trafficCarsRef.current = trafficCars;
+  remotePlayersRef.current = remotePlayers;
   targetPoiRef.current = targetPoi;
 
   useEffect(() => {
@@ -184,6 +188,27 @@ export const Minimap: React.FC<MinimapProps> = ({
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, 2.2, 0, Math.PI * 2);
         ctx.fill();
+      }
+
+      // Other online players, distinct from NPC traffic and the mission
+      // marker so a squadmate reads at a glance on a busy radar.
+      for (const rp of remotePlayersRef.current) {
+        const pos = toRadar(rp.x, rp.y);
+        if (pos.x < -6 || pos.x > MAP_SIZE + 6 || pos.y < -6 || pos.y > MAP_SIZE + 6) continue;
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        ctx.rotate(rp.angle + Math.PI / 2);
+        ctx.fillStyle = '#e879f9';
+        ctx.shadowColor = '#e879f9';
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.moveTo(0, -7);
+        ctx.lineTo(4, 4);
+        ctx.lineTo(0, 2);
+        ctx.lineTo(-4, 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
       }
 
       // Mission target.
