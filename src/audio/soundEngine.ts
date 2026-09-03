@@ -550,6 +550,40 @@ class SoundEngine {
     osc.start(now);
     osc.stop(now + 0.04);
   }
+
+  // Soft two-note chime for the on-screen network feed (chat lines, players
+  // joining/leaving). Direction of the interval hints at what happened without
+  // needing to glance at the toast: rising for someone arriving, falling for
+  // someone leaving, a flat neutral blip for a chat message.
+  public playNotification(kind: 'chat' | 'join' | 'leave' = 'chat') {
+    if (!this.initialized || this.isMuted || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+
+    const [f1, f2] =
+      kind === 'join' ? [523.25, 783.99] // C5 -> G5, rising
+      : kind === 'leave' ? [659.25, 440.0] // E5 -> A4, falling
+      : [740.0, 740.0]; // F#5, flat
+
+    [
+      { freq: f1, at: 0 },
+      { freq: f2, at: 0.09 },
+    ].forEach(({ freq, at }) => {
+      if (!this.ctx || !this.masterGain) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + at);
+
+      gain.gain.setValueAtTime(0, now + at);
+      gain.gain.linearRampToValueAtTime(0.12, now + at + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + at + 0.18);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now + at);
+      osc.stop(now + at + 0.2);
+    });
+  }
 }
 
 export const sound = new SoundEngine();

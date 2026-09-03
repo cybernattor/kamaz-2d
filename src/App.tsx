@@ -179,6 +179,7 @@ export default function App() {
   const pushFeedEvent = useCallback((entry: Omit<FeedEvent, 'id'>) => {
     const id = `feed_${Date.now()}_${Math.random()}`;
     setFeedEvents((prev) => [...prev.slice(-5), { ...entry, id }]);
+    sound.playNotification(entry.type);
     setTimeout(() => {
       setFeedEvents((prev) => prev.filter((ev) => ev.id !== id));
     }, FEED_EVENT_TTL_MS);

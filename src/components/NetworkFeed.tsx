@@ -26,7 +26,10 @@ export const NetworkFeed: React.FC<NetworkFeedProps> = ({ events }) => {
   return (
     <div
       id="network-feed"
-      className="pointer-events-none absolute top-20 right-3 z-30 w-64 max-w-[80vw] flex flex-col gap-1.5"
+      // Below the HUD's top bar (street name + toggle row, minimap on the
+      // right) so it doesn't get buried under those — top-right was tried
+      // first but sat right behind the minimap radar there.
+      className="pointer-events-none absolute top-40 sm:top-36 left-3 z-30 w-64 max-w-[80vw] flex flex-col gap-1.5"
       aria-live="polite"
     >
       {events.map((ev) => {
