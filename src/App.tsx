@@ -19,6 +19,7 @@ import type { PixiGameRenderer } from './game/pixiRenderer';
 import { MultiplayerClient } from './network/multiplayerClient';
 import { sound } from './audio/soundEngine';
 import { HUD } from './components/HUD';
+import { MainMenu } from './components/MainMenu';
 import { GarageModal } from './components/GarageModal';
 import { MissionsModal } from './components/MissionsModal';
 import { MultiplayerModal } from './components/MultiplayerModal';
@@ -133,6 +134,15 @@ export default function App() {
   const [inVehicle, setInVehicle] = useState<boolean>(true);
   const isTouchDevice = useIsTouchDevice();
   const inVehicleStateRef = useRef<boolean>(true);
+
+  // Start screen: the game keeps simulating behind it (nice moving-city
+  // backdrop, and it means nothing needs restructuring to pause/resume), but
+  // keyboard/touch input stays gated until the player presses Play.
+  const [gameStarted, setGameStarted] = useState(false);
+  const gameStartedRef = useRef(false);
+  useEffect(() => {
+    gameStartedRef.current = gameStarted;
+  }, [gameStarted]);
 
   // Input states
   const keysRef = useRef<{ [key: string]: boolean }>({});
@@ -304,6 +314,8 @@ export default function App() {
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!gameStartedRef.current) return; // Start screen still up — ignore game input
+
       // Un-mute Audio on first interaction
       sound.init();
 
@@ -384,6 +396,7 @@ export default function App() {
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
+      if (!gameStartedRef.current) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
       }
@@ -919,6 +932,18 @@ export default function App() {
         </div>
       )}
 
+      {/* Start screen: game keeps simulating behind it, input stays gated
+          (see handleKeyDown/handleKeyUp) until Play is pressed */}
+      {!gameStarted && !webglUnavailable && (
+        <MainMenu
+          isTouchDevice={isTouchDevice}
+          onPlay={() => {
+            sound.init();
+            setGameStarted(true);
+          }}
+        />
+      )}
+
       {/* Primary Game HUD (Exact match to screenshots) */}
       <HUD
         streetName={streetName}
@@ -957,7 +982,7 @@ export default function App() {
       />
 
       {/* Virtual Controls for mobile touch */}
-      {isTouchDevice && <VirtualControls onInput={handleVirtualInput} />}
+      {gameStarted && isTouchDevice && <VirtualControls onInput={handleVirtualInput} />}
 
       {/* Modals */}
       {showGarage && (
