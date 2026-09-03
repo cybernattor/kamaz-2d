@@ -288,7 +288,16 @@ export default function App() {
     });
 
     multiplayerRef.current = mp;
-    mp.connect(mpRoomId);
+    // Ask the server to spawn us where we actually start locally (the depot),
+    // not a hardcoded fallback point — otherwise the very first frame snaps
+    // the player from the depot onto wherever that fallback landed.
+    mp.connect(mpRoomId, {
+      x: playerVehicleRef.current.x,
+      y: playerVehicleRef.current.y,
+      angle: playerVehicleRef.current.angle,
+      vehicleType: playerVehicleRef.current.type,
+      vehicleColor: playerVehicleRef.current.color,
+    });
 
     return () => {
       mp.disconnect();

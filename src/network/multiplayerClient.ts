@@ -60,6 +60,17 @@ export class MultiplayerClient {
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionallyClosed = false;
+  /** Where to ask the server to spawn us — set via connect(), reused across
+   * reconnects. Defaults matched nothing on the client's own map, so the
+   * very first frame after connecting snapped the player from their actual
+   * starting spot onto whatever this fallback pointed at. */
+  private spawnRequest: { x: number; y: number; angle: number; vehicleType: VehicleCategory; vehicleColor: string } = {
+    x: 1200,
+    y: 1200,
+    angle: 0,
+    vehicleType: 'kamaz_dump',
+    vehicleColor: '#f97316',
+  };
   private lastJoinPayload: Record<string, unknown> | null = null;
 
   constructor(playerName: string = 'Дальнобойщик', callbacks: MultiplayerCallbacks = {}) {
@@ -67,9 +78,13 @@ export class MultiplayerClient {
     this.callbacks = callbacks;
   }
 
-  public connect(roomId: string = 'default') {
+  public connect(
+    roomId: string = 'default',
+    spawn?: Partial<{ x: number; y: number; angle: number; vehicleType: VehicleCategory; vehicleColor: string }>
+  ) {
     this.currentRoomId = roomId;
     this.intentionallyClosed = false;
+    if (spawn) this.spawnRequest = { ...this.spawnRequest, ...spawn };
     this.openSocket();
   }
 
@@ -98,10 +113,11 @@ export class MultiplayerClient {
           type: 'join',
           name: this.playerName,
           roomId: this.currentRoomId,
-          x: 1200,
-          y: 1200,
-          vehicleType: 'kamaz_dump',
-          vehicleColor: '#f97316',
+          x: this.spawnRequest.x,
+          y: this.spawnRequest.y,
+          angle: this.spawnRequest.angle,
+          vehicleType: this.spawnRequest.vehicleType,
+          vehicleColor: this.spawnRequest.vehicleColor,
         };
         this.send(this.lastJoinPayload);
       };
