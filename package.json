@@ -36,6 +36,7 @@
     "test:app:lazy-engines": "tsx repros/app-lazy-engines.repro.ts",
     "test:app:key-repeat": "tsx repros/app-key-repeat.repro.ts",
     "test:app:modal-input": "tsx repros/app-modal-input.repro.ts",
+    "test:user-preferences": "tsx repros/user-preferences.repro.ts",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

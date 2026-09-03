@@ -27,6 +27,7 @@ import { VirtualControls } from './components/VirtualControls';
 import { VEHICLE_CONFIGS } from './game/vehicleConfigs';
 import { FixedStepAccumulator } from './game/fixedStep';
 import { randomDriverName } from './game/nameGenerator';
+import { loadUserPreferences, saveUserPreferences } from './game/userPreferences';
 
 /**
  * A ref argument is evaluated on every render even though React keeps only the
@@ -128,7 +129,7 @@ export default function App() {
   const [carCount, setCarCount] = useState<number>(45);
   const [pedCount, setPedCount] = useState<number>(40);
   const [isNight, setIsNight] = useState<boolean>(false);
-  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [isMuted, setIsMuted] = useState<boolean>(() => loadUserPreferences().muted);
   const [zoom, setZoom] = useState<number>(1.0);
   // The render loop reads these through refs. Putting them in the effect's
   // dependency list would tear down the WebGL renderer - and re-upload the
@@ -153,6 +154,13 @@ export default function App() {
   const [myPlayerId, setMyPlayerId] = useState<string | null>(null);
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayer[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+
+  // Keep the audio preference across browser restarts. Applying it before
+  // AudioContext creation also prevents a short audible blip on first input.
+  useEffect(() => {
+    sound.setMuted(isMuted);
+    saveUserPreferences({ muted: isMuted });
+  }, [isMuted]);
 
   // Initialize Multiplayer Client
   useEffect(() => {
@@ -814,9 +822,7 @@ export default function App() {
         onToggleDayNight={toggleDayNight}
         isMuted={isMuted}
         onToggleMute={() => {
-          const next = !isMuted;
-          setIsMuted(next);
-          sound.setMuted(next);
+          setIsMuted((current) => !current);
         }}
         zoom={zoom}
         onZoomIn={() => setZoom((prev) => Math.min(1.5, prev + 0.1))}
