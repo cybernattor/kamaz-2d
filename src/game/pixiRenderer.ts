@@ -678,11 +678,14 @@ export class PixiGameRenderer {
     const activeSpeech = new Set<string>();
     for (const ped of pedestrians) {
       const view = this.getView(this.pedestrianViews, ped.id, this.pedestrianLayer, this.getPedestrianTexture(ped));
-      view.container.visible = this.isVisible(ped.x, ped.y, 50, 50, bounds);
+      view.container.visible = ped.state !== 'indoors' && this.isVisible(ped.x, ped.y, 50, 50, bounds);
       if (!view.container.visible) continue;
       active.add(ped.id);
       view.container.position.set(ped.x, ped.y);
-      view.container.rotation = ped.angle;
+      // Pedestrian textures face up in local coordinates, while simulation
+      // angles point along +X. The missing quarter turn made walkers appear
+      // to travel sideways.
+      view.container.rotation = ped.angle + Math.PI / 2;
       if (view.sprite) view.sprite.texture = this.getPedestrianTexture(ped);
       if (ped.speechText) {
         activeSpeech.add(ped.id);

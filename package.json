@@ -28,6 +28,8 @@
     "test:pedestrian-horn": "tsx repros/pedestrian-horn.repro.ts",
     "test:pedestrian-sidewalk": "tsx repros/pedestrian-sidewalk.repro.ts",
     "test:pedestrian-danger": "tsx repros/pedestrian-vehicle-danger.repro.ts",
+    "test:pedestrian:building-life": "tsx repros/pedestrian-building-life.repro.ts",
+    "test:pedestrian:orientation": "tsx repros/pedestrian-orientation.repro.ts",
     "test:physics-particles": "tsx repros/physics-particle-api.repro.ts",
     "test:physics-crash": "tsx repros/physics-crash-consequences.repro.ts",
     "test:fixed-step": "tsx repros/fixed-step.repro.ts",

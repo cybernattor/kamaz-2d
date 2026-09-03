@@ -63,6 +63,9 @@ export class TrafficAI {
   private gridY: number[];
   private laneOffset = 34;
   private laneSpacing = 54;
+  // Arterials are 220px wide. Keeping people another 32px beyond the curb
+  // makes their corridor unambiguously a sidewalk, not the outer traffic lane.
+  private readonly sidewalkOffset = 142;
 
   constructor(cityMap: CityMap) {
     this.cityMap = cityMap;
@@ -92,7 +95,7 @@ export class TrafficAI {
   private choosePedestrianWaypoint(ped: Pedestrian) {
     const roadType = ped.walkRoadType || 'vertical';
     const roadCoord = ped.walkRoadCoord ?? this.gridX[0];
-    const side = ped.walkSide ?? 108;
+    const side = ped.walkSide ?? this.sidewalkOffset;
     const current = roadType === 'vertical' ? ped.y : ped.x;
     const bounds = this.getPedestrianAxisBounds(
       current,
@@ -118,15 +121,66 @@ export class TrafficAI {
     }
   }
 
+  private getNpcCruiseSpeed(car: VehicleInstance, ai: NPCAIExtra) {
+    const config = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const road = this.cityMap.roads.find((candidate) =>
+      candidate.roadClass === 'arterial' &&
+      Boolean(candidate.isVertical) === (ai.roadType === 'vertical') &&
+      Math.abs((ai.roadType === 'vertical' ? candidate.x1 : candidate.y1) - ai.roadCoord) < 2
+    );
+    // Retain the stable city-flow baseline, while respecting a lower posted
+    // limit whenever a mapped arterial supplies one. Tight turns are capped
+    // independently below, rather than slowing every straight-road queue.
+    const baseline = Math.min(15, Math.max(8, config.maxSpeed * KMH_TO_WORLD_SPEED * 0.58));
+    const postedLimit = road?.speedLimit;
+    return postedLimit === undefined ? baseline : Math.min(baseline, postedLimit * KMH_TO_WORLD_SPEED * 0.9);
+  }
+
+  private getBuildingEntrance(buildingId: string, roadType: 'vertical' | 'horizontal', roadCoord: number, side: number) {
+    const building = this.cityMap.buildings.find((candidate) => candidate.id === buildingId);
+    if (!building) return null;
+    const sign = side >= 0 ? 1 : -1;
+    if (roadType === 'vertical') {
+      return {
+        sidewalkX: roadCoord + side,
+        sidewalkY: Math.max(120, Math.min(WORLD_SIZE - 120, building.y)),
+        doorX: building.x - sign * (building.width / 2 + 8),
+        doorY: Math.max(building.y - building.height / 2 + 16, Math.min(building.y + building.height / 2 - 16, building.y)),
+      };
+    }
+    return {
+      sidewalkX: Math.max(120, Math.min(WORLD_SIZE - 120, building.x)),
+      sidewalkY: roadCoord + side,
+      doorX: Math.max(building.x - building.width / 2 + 16, Math.min(building.x + building.width / 2 - 16, building.x)),
+      doorY: building.y - sign * (building.height / 2 + 8),
+    };
+  }
+
+  private assignBuildingTrip(ped: Pedestrian) {
+    if (this.cityMap.buildings.length === 0) return false;
+    const seed = Number(ped.id.replace(/\D/g, '')) || 0;
+    const building = this.cityMap.buildings[(seed * 7 + Math.floor(ped.x + ped.y)) % this.cityMap.buildings.length];
+    const roadType = ped.walkRoadType || 'vertical';
+    const roadCoord = ped.walkRoadCoord ?? (roadType === 'vertical' ? this.gridX[0] : this.gridY[0]);
+    const side = ped.walkSide ?? this.sidewalkOffset;
+    const entrance = this.getBuildingEntrance(building.id, roadType, roadCoord, side);
+    if (!entrance) return false;
+    ped.buildingId = building.id;
+    ped.lifeStage = 'toSidewalk';
+    ped.targetX = entrance.sidewalkX;
+    ped.targetY = entrance.sidewalkY;
+    return true;
+  }
+
   private getPedestrianAxisBounds(value: number, crossingRoads: number[]) {
     let lower = 100;
     let upper = WORLD_SIZE - 100;
     for (const road of crossingRoads) {
       if (value < road) {
-        upper = Math.min(upper, road - 110);
+        upper = Math.min(upper, road - this.sidewalkOffset);
         break;
       }
-      lower = Math.max(lower, road + 110);
+      lower = Math.max(lower, road + this.sidewalkOffset);
     }
 
     // If a legacy save placed a pedestrian in the 220px crossing buffer,
@@ -137,8 +191,8 @@ export class TrafficAI {
         Math.abs(candidate - value) < Math.abs(nearest - value) ? candidate : nearest
       );
       return value < road
-        ? { lower: Math.max(100, road - 170), upper: road - 110 }
-        : { lower: road + 110, upper: Math.min(WORLD_SIZE - 100, road + 170) };
+        ? { lower: Math.max(100, road - this.sidewalkOffset - 60), upper: road - this.sidewalkOffset }
+        : { lower: road + this.sidewalkOffset, upper: Math.min(WORLD_SIZE - 100, road + this.sidewalkOffset + 60) };
     }
     return { lower, upper };
   }
@@ -795,7 +849,7 @@ export class TrafficAI {
     for (let i = 0; i < this.maxPedestrians; i++) {
       const isVert = i % 2 === 0;
       const roadCoord = isVert ? this.gridX[i % this.gridX.length] : this.gridY[i % this.gridY.length];
-      const side = (i % 4 < 2 ? 1 : -1) * 108; // Outside the road + sidewalk edge
+      const side = (i % 4 < 2 ? 1 : -1) * this.sidewalkOffset;
       const spread = 280 + (i * 240) % (WORLD_SIZE - 560);
 
       const px = isVert ? roadCoord + side : spread;
@@ -823,7 +877,11 @@ export class TrafficAI {
         walkSide: side,
         walkDirection: i % 2 === 0 ? 1 : -1,
       });
-      this.choosePedestrianWaypoint(this.pedestrians[this.pedestrians.length - 1]);
+      const pedestrian = this.pedestrians[this.pedestrians.length - 1];
+      // Most residents have a destination instead of pacing the same block;
+      // a small remainder keeps streets visibly populated between visits.
+      if (i % 4 !== 0) this.assignBuildingTrip(pedestrian);
+      else this.choosePedestrianWaypoint(pedestrian);
     }
   }
 
@@ -953,7 +1011,7 @@ export class TrafficAI {
       }
 
       const config = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
-      const cruiseSpeed = Math.min(15, Math.max(8, config.maxSpeed * KMH_TO_WORLD_SPEED * 0.58));
+      const cruiseSpeed = this.getNpcCruiseSpeed(car, ai);
       if (this.updateGroundBypass(car, ai, delta, cruiseSpeed)) {
         ai.lastX = car.x;
         ai.lastY = car.y;
@@ -1453,6 +1511,9 @@ export class TrafficAI {
                 ai.targetRoadCoord = turnResult.targetRoadCoord;
                 ai.targetDirection = turnResult.targetDirection;
                 car.turnSignal = isRightTurn ? 'right' : 'left';
+                // Commit to the turn before the car reaches the Bezier arc,
+                // giving the normal brake integrator time to shed speed.
+                targetSpeed = Math.min(targetSpeed, 8);
               }
             } else {
               // Straight
@@ -1465,7 +1526,9 @@ export class TrafficAI {
 
       // 8. Execute Smooth Bezier Intersection Turn
       if (ai.isTurning && ai.turnStartPos && ai.turnEndPos && ai.turnControlPos) {
-        targetSpeed = Math.min(targetSpeed, 12.0);
+        // ~23 km/h on the tight city turn; the same cap governs every model
+        // so buses and sport coupes do not slide around corners alike.
+        targetSpeed = Math.min(targetSpeed, 6.5);
         ai.turnProgress += Math.max(0.012, (car.speed * 0.12) * delta);
 
         if (ai.turnProgress >= 1.0) {
@@ -1584,6 +1647,11 @@ export class TrafficAI {
       }
     }
 
+    // Cars may have crossed the seamless world edge during this tick. The
+    // broad-phase built at tick start then has stale cells, so rebuild before
+    // the final queue-separation pass instead of missing a newly adjacent pair.
+    this.vehicleIndex.clear();
+    this.vehicleIndex.insertAll(this.npcVehicles);
     this.resolveNpcSpacing();
   }
 
@@ -1795,6 +1863,28 @@ export class TrafficAI {
         }
       }
 
+      if (ped.state === 'indoors') {
+        ped.indoorTimer = Math.max(0, (ped.indoorTimer || 0) - delta);
+        if (ped.indoorTimer <= 0) {
+          const entrance = ped.buildingId
+            ? this.getBuildingEntrance(ped.buildingId, ped.walkRoadType || 'vertical', ped.walkRoadCoord ?? this.gridX[0], ped.walkSide ?? this.sidewalkOffset)
+            : null;
+          if (entrance) {
+            ped.state = 'leaving';
+            ped.lifeStage = 'toDoor';
+            ped.x = entrance.doorX;
+            ped.y = entrance.doorY;
+            ped.targetX = entrance.sidewalkX;
+            ped.targetY = entrance.sidewalkY;
+          } else {
+            ped.state = 'walking';
+            ped.lifeStage = 'sidewalk';
+            this.choosePedestrianWaypoint(ped);
+          }
+        }
+        continue;
+      }
+
       // Ragdoll Physics Recovery
       if (ped.state === 'ragdoll') {
         ped.ragdollTimer -= delta;
@@ -1863,7 +1953,31 @@ export class TrafficAI {
 
       // Standard sidewalk pathfinding
       const distToTarget = Math.hypot(ped.targetX - ped.x, ped.targetY - ped.y);
-      if (distToTarget < 25) {
+      if (distToTarget < 18) {
+        if (ped.lifeStage === 'toSidewalk' && ped.buildingId) {
+          const entrance = this.getBuildingEntrance(ped.buildingId, ped.walkRoadType || 'vertical', ped.walkRoadCoord ?? this.gridX[0], ped.walkSide ?? this.sidewalkOffset);
+          if (entrance) {
+            ped.lifeStage = 'toDoor';
+            ped.state = 'entering';
+            ped.targetX = entrance.doorX;
+            ped.targetY = entrance.doorY;
+            continue;
+          }
+        }
+        if (ped.lifeStage === 'toDoor' && ped.state === 'entering') {
+          ped.state = 'indoors';
+          ped.lifeStage = 'indoors';
+          ped.indoorTimer = 7 + (Number(ped.id.replace(/\D/g, '')) % 12);
+          ped.speed = 0;
+          continue;
+        }
+        if (ped.lifeStage === 'toDoor' && ped.state === 'leaving') {
+          ped.state = 'walking';
+          ped.lifeStage = 'sidewalk';
+          ped.speed = 1.1;
+          if (!this.assignBuildingTrip(ped)) this.choosePedestrianWaypoint(ped);
+          continue;
+        }
         // Pick new waypoint along sidewalks
         this.choosePedestrianWaypoint(ped);
       } else {
@@ -1871,11 +1985,11 @@ export class TrafficAI {
         ped.angle = moveAngle;
         ped.x += Math.cos(moveAngle) * ped.speed * 60 * delta;
         ped.y += Math.sin(moveAngle) * ped.speed * 60 * delta;
-        if (ped.walkRoadType === 'vertical') {
+        if (ped.lifeStage !== 'toDoor' && ped.walkRoadType === 'vertical') {
           const bounds = this.getPedestrianAxisBounds(ped.y, this.gridY);
           ped.x = (ped.walkRoadCoord ?? ped.x) + (ped.walkSide ?? 108);
           ped.y = Math.max(bounds.lower, Math.min(bounds.upper, ped.y));
-        } else {
+        } else if (ped.lifeStage !== 'toDoor') {
           const bounds = this.getPedestrianAxisBounds(ped.x, this.gridX);
           ped.y = (ped.walkRoadCoord ?? ped.y) + (ped.walkSide ?? 108);
           ped.x = Math.max(bounds.lower, Math.min(bounds.upper, ped.x));

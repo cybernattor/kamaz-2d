@@ -81,7 +81,7 @@ export interface Pedestrian {
   speed: number;
   targetX: number;
   targetY: number;
-  state: 'walking' | 'waiting' | 'fleeing' | 'ragdoll' | 'talking';
+  state: 'walking' | 'waiting' | 'fleeing' | 'ragdoll' | 'talking' | 'entering' | 'indoors' | 'leaving';
   health: number;
   skinColor: string;
   shirtColor: string;
@@ -103,6 +103,10 @@ export interface Pedestrian {
   walkSide?: number;
   /** Current sidewalk travel direction; pedestrians reverse only at a block end. */
   walkDirection?: -1 | 1;
+  /** Lightweight city-life cycle: a resident walks to a real building entrance, stays inside, then leaves. */
+  buildingId?: string;
+  indoorTimer?: number;
+  lifeStage?: 'sidewalk' | 'toSidewalk' | 'toDoor' | 'indoors';
 }
 
 export type DestructibleType =
