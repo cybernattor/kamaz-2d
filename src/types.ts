@@ -64,6 +64,13 @@ export interface VehicleInstance {
   crashTimer?: number;
   crashSpeech?: string;
   crashSpeechTimer?: number;
+  /**
+   * Seconds remaining of reduced steering/throttle response after a hard
+   * impact - the player's lighter equivalent of an NPC's isCrashed
+   * roadside stop, since fully immobilizing the player's car would be too
+   * punishing for an ordinary collision.
+   */
+  dazedTimer?: number;
 }
 
 export interface Pedestrian {

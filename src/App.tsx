@@ -544,7 +544,7 @@ export default function App() {
         // avoiding a CPU spike whenever the display refresh is higher.
         cityMapRef.current.updateTrafficLights(simulationStep);
         trafficRef.current.updateTraffic(simulationStep, isCar ? v : undefined);
-        trafficRef.current.updatePedestrians(simulationStep, playerPos.x, playerPos.y, v.isHonking);
+        trafficRef.current.updatePedestrians(simulationStep, playerPos.x, playerPos.y, v.isHonking, isCar ? v : undefined);
 
       // 4. Resolve Collisions (Vehicles vs Props vs Pedestrians vs Buildings)
         physicsRef.current.resolveAllCollisions(

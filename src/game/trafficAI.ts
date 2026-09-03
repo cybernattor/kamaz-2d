@@ -1244,21 +1244,36 @@ export class TrafficAI {
         const sameLane = ai.roadType === 'vertical'
           ? Math.abs(playerVehicle.x - lane.x!) < 58
           : Math.abs(playerVehicle.y - lane.y!) < 58;
-        if (
-          sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58 &&
-          !TrafficAI.isClosingFast(playerVehicle, car)
-        ) {
-          const playerConfig = VEHICLE_CONFIGS[playerVehicle.type] || VEHICLE_CONFIGS.sedan;
-          const safeGap = (config.length + playerConfig.length) * 0.5 + 24;
-          blockedByPlayer = true;
-          shouldStop = true;
-          blockedObstacle = playerVehicle;
-          if (aheadDistance <= safeGap + 30) {
-            car.x = playerVehicle.x - forwardX * safeGap;
-            car.y = playerVehicle.y - forwardY * safeGap;
-            car.speed = 0;
+        if (sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58) {
+          if (TrafficAI.isClosingFast(playerVehicle, car)) {
+            // A player closing fast from behind is a ram, not ordinary
+            // traffic to queue behind - a real driver swerves or brakes,
+            // rather than holding a textbook gap and waiting to be hit.
+            if (!ai.isTurning && this.startAdaptiveBypass(car, ai, playerVehicle, playerVehicle)) {
+              if (!car.isHonking) {
+                car.isHonking = true;
+                setTimeout(() => {
+                  car.isHonking = false;
+                }, 400);
+              }
+              continue;
+            }
+            targetSpeed = 0;
+            shouldStop = true;
+            blockedByPlayer = true;
           } else {
-            targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92));
+            const playerConfig = VEHICLE_CONFIGS[playerVehicle.type] || VEHICLE_CONFIGS.sedan;
+            const safeGap = (config.length + playerConfig.length) * 0.5 + 24;
+            blockedByPlayer = true;
+            shouldStop = true;
+            blockedObstacle = playerVehicle;
+            if (aheadDistance <= safeGap + 30) {
+              car.x = playerVehicle.x - forwardX * safeGap;
+              car.y = playerVehicle.y - forwardY * safeGap;
+              car.speed = 0;
+            } else {
+              targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92));
+            }
           }
         }
       }
@@ -1633,7 +1648,53 @@ export class TrafficAI {
   }
 
   // Update Pedestrians ("человечки")
-  public updatePedestrians(delta: number, playerX: number, playerY: number, playerHonking: boolean) {
+  /**
+   * Shared by the honk reaction and the new proactive danger check: pick one
+   * stable point along the sidewalk to run to, away from (fromX, fromY).
+   */
+  private triggerPedestrianPanic(ped: Pedestrian, fromX: number, fromY: number) {
+    const angleAway = Math.atan2(ped.y - fromY, ped.x - fromX);
+    if (ped.walkRoadType === 'vertical') {
+      const bounds = this.getPedestrianAxisBounds(ped.y, this.gridY);
+      ped.panicTargetX = (ped.walkRoadCoord ?? ped.x) + (ped.walkSide ?? 108);
+      ped.panicTargetY = ped.y >= fromY ? bounds.upper : bounds.lower;
+    } else {
+      const bounds = this.getPedestrianAxisBounds(ped.x, this.gridX);
+      ped.panicTargetX = ped.x >= fromX ? bounds.upper : bounds.lower;
+      ped.panicTargetY = (ped.walkRoadCoord ?? ped.y) + (ped.walkSide ?? 108);
+    }
+    ped.panicTimer = 0.9;
+    ped.panicCooldown = 1.5;
+    ped.state = 'fleeing';
+    ped.angle = angleAway;
+  }
+
+  /**
+   * Any vehicle - not just the honking player - bearing down on a
+   * pedestrian fast enough to be dangerous. Uses the same "velocity
+   * component toward the target" test as TrafficAI.isClosingFast, so an
+   * oncoming car passing at a safe distance or a slow one crawling nearby
+   * does not spook anyone, only a genuine close call does.
+   */
+  private findApproachingDanger(ped: Pedestrian, playerVehicle?: VehicleInstance | null) {
+    const dangerRadius = 130;
+    const vehicles = playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles;
+    for (const vehicle of vehicles) {
+      if (vehicle.health <= 0 && !vehicle.isPlayer) continue;
+      const dx = ped.x - vehicle.x;
+      const dy = ped.y - vehicle.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > dangerRadius || dist < 0.001) continue;
+      const vx = Math.cos(vehicle.angle) * vehicle.speed;
+      const vy = Math.sin(vehicle.angle) * vehicle.speed;
+      if ((vx * dx + vy * dy) / dist > 7) {
+        return { x: vehicle.x, y: vehicle.y };
+      }
+    }
+    return null;
+  }
+
+  public updatePedestrians(delta: number, playerX: number, playerY: number, playerHonking: boolean, playerVehicle?: VehicleInstance | null) {
     const dialogPhrases = [
       'Привет, КАМАЗист!',
       'Хороший денёк!',
@@ -1733,23 +1794,23 @@ export class TrafficAI {
           ped.speechText = dialogPhrases[Math.floor(Math.random() * dialogPhrases.length)];
           ped.speechTimer = 3.2;
         }
-
-        // Choose one stable escape point along the pedestrian's sidewalk.
-        const angleAway = Math.atan2(ped.y - playerY, ped.x - playerX);
-        if (ped.walkRoadType === 'vertical') {
-          const bounds = this.getPedestrianAxisBounds(ped.y, this.gridY);
-          ped.panicTargetX = (ped.walkRoadCoord ?? ped.x) + (ped.walkSide ?? 108);
-          ped.panicTargetY = ped.y >= playerY ? bounds.upper : bounds.lower;
-        } else {
-          const bounds = this.getPedestrianAxisBounds(ped.x, this.gridX);
-          ped.panicTargetX = ped.x >= playerX ? bounds.upper : bounds.lower;
-          ped.panicTargetY = (ped.walkRoadCoord ?? ped.y) + (ped.walkSide ?? 108);
-        }
-        ped.panicTimer = 0.9;
-        ped.panicCooldown = 1.5;
-        ped.state = 'fleeing';
-        ped.angle = angleAway;
+        this.triggerPedestrianPanic(ped, playerX, playerY);
         continue;
+      }
+
+      // Proactive danger reaction: any vehicle (not only an honking player)
+      // closing in fast enough to be a real near-miss. Silent traffic used
+      // to be invisible to pedestrians even bearing straight down on them.
+      if ((ped.panicCooldown || 0) <= 0) {
+        const danger = this.findApproachingDanger(ped, playerVehicle);
+        if (danger) {
+          if (ped.speechTimer <= 0) {
+            ped.speechText = 'Куда прёшь?!';
+            ped.speechTimer = 2.2;
+          }
+          this.triggerPedestrianPanic(ped, danger.x, danger.y);
+          continue;
+        }
       }
 
       // Standard sidewalk pathfinding

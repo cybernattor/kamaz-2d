@@ -77,10 +77,16 @@ export class PhysicsEngine {
     const config = VEHICLE_CONFIGS[vehicle.type] || VEHICLE_CONFIGS.kamaz_dump;
     const isDestroyed = vehicle.health <= 0;
 
+    // Dazed window after a hard hit: reduced steering authority and torque,
+    // fading back to normal instead of snapping straight back to full
+    // control the instant you tap a key.
+    vehicle.dazedTimer = Math.max(0, (vehicle.dazedTimer || 0) - delta);
+    const dazeFactor = vehicle.dazedTimer > 0 ? 0.45 + 0.55 * (1 - vehicle.dazedTimer / 1.2) : 1;
+
     // 1. Dynamic Steering Kinematics (Responsive & Speed-sensitive)
     const speedKmh = Math.abs(vehicle.speed) * 3.6;
     const speedFactor = Math.max(0.55, 1.0 - (speedKmh / (config.maxSpeed * 1.4)) * 0.45);
-    const maxSteerAngle = 0.72 * speedFactor; // Up to ~41 degrees at low/medium speeds
+    const maxSteerAngle = 0.72 * speedFactor * dazeFactor; // Up to ~41 degrees at low/medium speeds
     const steerSpeed = 6.8;
     let targetSteer = 0;
 
@@ -105,7 +111,7 @@ export class PhysicsEngine {
       if (inputs.throttle) {
         // High torque pull at low-mid range for heavy trucks
         const torque = Math.max(0.2, 1.0 - Math.pow(speedRatio, 1.3));
-        accel = config.acceleration * KMH_TO_WORLD_SPEED * torque * healthPowerFactor;
+        accel = config.acceleration * KMH_TO_WORLD_SPEED * torque * healthPowerFactor * dazeFactor;
       } else if (inputs.reverse || (inputs.brake && vehicle.speed <= 0.3)) {
         accel = -config.reverseSpeed * KMH_TO_WORLD_SPEED * 0.9 * healthPowerFactor;
       }
@@ -408,6 +414,24 @@ export class PhysicsEngine {
               v1.health = Math.max(0, v1.health - dmg1);
               v2.health = Math.max(0, v2.health - dmg2);
 
+              // A glancing/off-center hit should spin the car, not just push
+              // it in a straight line. How "sideways" the contact normal is
+              // relative to each vehicle's own heading decides how much of
+              // the impact turns into rotation instead of a straight shove;
+              // a heavier vehicle resists spinning more, matching the mass
+              // ratio already used for the straight-line push above.
+              const spinMagnitude = Math.min(2.4, impactExcess * 0.14);
+              const v1LateralAlignment = -Math.sin(v1.angle) * nx + Math.cos(v1.angle) * ny;
+              const v2LateralAlignment = -Math.sin(v2.angle) * nx + Math.cos(v2.angle) * ny;
+              v1.angle -= v1LateralAlignment * spinMagnitude * (cfg2.mass / totalMass);
+              v2.angle += v2LateralAlignment * spinMagnitude * (cfg1.mass / totalMass);
+
+              // The player gets a brief window of dulled steering/throttle
+              // response instead of an NPC's full roadside stop - enough to
+              // feel like losing control for a moment, not a hard stop.
+              if (v1.isPlayer) v1.dazedTimer = Math.max(v1.dazedTimer || 0, Math.min(1.2, impactExcess * 0.09));
+              if (v2.isPlayer) v2.dazedTimer = Math.max(v2.dazedTimer || 0, Math.min(1.2, impactExcess * 0.09));
+
               this.emitSparks(v1.x + nx * (dist * 0.5), v1.y + ny * (dist * 0.5), 14);
               sound.playCrash(Math.min(1.0, impactExcess / 8));
 
@@ -510,6 +534,15 @@ export class PhysicsEngine {
               v1.health = Math.max(0, v1.health - dmg);
               this.emitSparks(v1.x, v1.y, 14);
               sound.playCrash(Math.min(1.0, impactSpeed / 7));
+
+              // Same off-center-spin idea as the vehicle-vehicle case: hit a
+              // wall at an angle and the car should kick sideways, not just
+              // bounce straight back.
+              const wallNx = overlapX < overlapY ? (v1.x > b.x ? 1 : -1) : 0;
+              const wallNy = overlapX < overlapY ? 0 : (v1.y > b.y ? 1 : -1);
+              const wallAlignment = -Math.sin(v1.angle) * wallNx + Math.cos(v1.angle) * wallNy;
+              v1.angle -= wallAlignment * Math.min(1.6, (impactSpeed - 2.0) * 0.1);
+              if (v1.isPlayer) v1.dazedTimer = Math.max(v1.dazedTimer || 0, Math.min(1.0, (impactSpeed - 2.0) * 0.07));
             }
           }
           v1.speed = -v1.speed * 0.2;
