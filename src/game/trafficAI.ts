@@ -147,6 +147,26 @@ export class TrafficAI {
     return ai.direction === 'east' ? inter.x - car.x : car.x - inter.x;
   }
 
+  /**
+   * Straight-line closing speed between two vehicles, in the same units and
+   * formula physics.ts uses to decide whether an impact is a "hard" one. AI
+   * gap-keeping below uses this to step aside for a genuine ram instead of
+   * teleporting the NPC clear of a collision the player was trying to make.
+   */
+  private static isClosingFast(mover: VehicleInstance, target: VehicleInstance, threshold = 5.5) {
+    const dx = target.x - mover.x;
+    const dy = target.y - mover.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 0.001) return Math.abs(mover.speed) > threshold;
+    const vx = Math.cos(mover.angle) * mover.speed;
+    const vy = Math.sin(mover.angle) * mover.speed;
+    // Velocity component along the line to the target - not raw relative
+    // speed, which would also flag a fast NPC closing on a stationary
+    // player (normal queueing) as a "ram". This only fires when the mover
+    // itself is driving toward the target.
+    return (vx * dx + vy * dy) / dist > threshold;
+  }
+
   private getActiveIntersection(car: VehicleInstance, ai: NPCAIExtra) {
     if (ai.isTurning && ai.lastIntersectionId) {
       const turningIntersection = this.cityMap.intersections.find((inter) => inter.id === ai.lastIntersectionId);
@@ -1149,7 +1169,13 @@ export class TrafficAI {
               const safeFollowingDistance = other.isPlayer
                 ? (config.length + otherConfig.length) * 0.5 + 24
                 : (config.length + otherConfig.length) * 0.38 + 6;
-              if (dist < safeFollowingDistance) {
+              // A player closing in hard enough to count as a hit (physics.ts
+              // uses the same 5.5 threshold to trigger crash damage) should
+              // land one - not get dodged by the AI teleporting itself to a
+              // clean gap every step, which made the player unable to ever
+              // actually hit a car ahead of it.
+              const isPlayerRam = other.isPlayer && TrafficAI.isClosingFast(other, car);
+              if (dist < safeFollowingDistance && !isPlayerRam) {
                 shouldStop = true;
                 blockedBySameLaneTraffic = true;
                 if (other.isPlayer) blockedByPlayer = true;
@@ -1174,7 +1200,7 @@ export class TrafficAI {
                     car.isHonking = false;
                   }, 500);
                 }
-              } else {
+              } else if (!isPlayerRam) {
                 const followingSpeed = other.isPlayer
                   ? Math.max(0, (other.speed || 0) * 0.92)
                   : Math.max(0, (other.speed || 0) * 0.85);
@@ -1218,7 +1244,10 @@ export class TrafficAI {
         const sameLane = ai.roadType === 'vertical'
           ? Math.abs(playerVehicle.x - lane.x!) < 58
           : Math.abs(playerVehicle.y - lane.y!) < 58;
-        if (sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58) {
+        if (
+          sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58 &&
+          !TrafficAI.isClosingFast(playerVehicle, car)
+        ) {
           const playerConfig = VEHICLE_CONFIGS[playerVehicle.type] || VEHICLE_CONFIGS.sedan;
           const safeGap = (config.length + playerConfig.length) * 0.5 + 24;
           blockedByPlayer = true;
