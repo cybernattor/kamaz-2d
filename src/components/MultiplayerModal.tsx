@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { ChatMessage, RemotePlayer } from '../types';
 import { X, Users, MessageSquare, Send, Globe, Wifi, Radio, UserCheck } from 'lucide-react';
+import { nameColorForId } from '../game/nameGenerator';
 
 interface MultiplayerModalProps {
   status: 'disconnected' | 'connecting' | 'connected';
   playerName: string;
+  myPlayerId: string | null;
   onUpdatePlayerName: (name: string) => void;
   currentRoomId: string;
   onJoinRoom: (roomId: string) => void;
@@ -17,6 +19,7 @@ interface MultiplayerModalProps {
 export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
   status,
   playerName,
+  myPlayerId,
   onUpdatePlayerName,
   currentRoomId,
   onJoinRoom,
@@ -158,7 +161,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
                 {/* You */}
                 <div className="p-2 rounded-lg bg-cyan-950/40 border border-cyan-500/30 flex items-center justify-between text-xs font-mono">
-                  <span className="text-cyan-300 font-bold">★ {playerName} (Вы)</span>
+                  <span className="font-bold" style={{ color: nameColorForId(myPlayerId) }}>★ {playerName} (Вы)</span>
                   <span className="text-emerald-400 font-mono">0 ms</span>
                 </div>
 
@@ -166,9 +169,9 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
                 {remotePlayers.map((rp) => (
                   <div
                     key={rp.id}
-                    className="p-2 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between text-xs font-mono text-slate-300"
+                    className="p-2 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between text-xs font-mono"
                   >
-                    <span>{rp.name}</span>
+                    <span className="font-bold" style={{ color: nameColorForId(rp.id) }}>{rp.name}</span>
                     <span className="text-slate-400">{rp.vehicleType}</span>
                   </div>
                 ))}
@@ -194,7 +197,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
               ) : (
                 chatMessages.map((msg) => (
                   <div key={msg.id} className="p-2 rounded-lg bg-slate-900/90 border border-slate-800 font-mono">
-                    <span className="text-cyan-400 font-bold mr-1.5">{msg.name}:</span>
+                    <span className="font-bold mr-1.5" style={{ color: nameColorForId(msg.playerId) }}>{msg.name}:</span>
                     <span className="text-slate-200">{msg.text}</span>
                   </div>
                 ))

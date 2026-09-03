@@ -3,6 +3,7 @@ import {
   Container,
   Graphics,
   Sprite,
+  Text,
   Texture,
 } from 'pixi.js';
 import {
@@ -19,6 +20,7 @@ import {
 import { GameRenderer } from './renderer';
 import { CityMap, WORLD_SIZE } from './cityMap';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
+import { nameColorForId } from './nameGenerator';
 
 type EntityView = {
   container: Container;
@@ -81,6 +83,7 @@ export class PixiGameRenderer {
   private readonly pedestrianLayer = new Container();
   private readonly particleLayer = new Container();
   private readonly beaconLayer = new Container();
+  private readonly nameLabelLayer = new Container();
 
   private readonly vehicleViews = new Map<string, EntityView>();
   private readonly pedestrianViews = new Map<string, EntityView>();
@@ -92,6 +95,7 @@ export class PixiGameRenderer {
   private readonly indicatorTextures = new Map<string, Texture>();
   private readonly effectTextures = new Map<string, Texture>();
   private readonly skidSprites = new Map<string, Sprite>();
+  private readonly nameLabels = new Map<string, Text>();
   private readonly particleSprites = new Map<string, Sprite>();
   private readonly lightSprites = new Map<string, Sprite>();
   private readonly effectPool: Sprite[] = [];
@@ -167,6 +171,7 @@ export class PixiGameRenderer {
       this.vehicleLayer,
       this.pedestrianLayer,
       this.particleLayer,
+      this.nameLabelLayer,
       this.beaconLayer
     );
     this.staticBackground.rect(0, 0, WORLD_SIZE, WORLD_SIZE).fill(0x0f3822);
@@ -435,6 +440,7 @@ export class PixiGameRenderer {
     bounds: Bounds
   ) {
     const active = new Set<string>();
+    const activeLabels = new Set<string>();
     for (const vehicle of [...npcVehicles, ...playerVehicles]) {
       active.add(vehicle.id);
       this.updateVehicleView(
@@ -474,8 +480,50 @@ export class PixiGameRenderer {
         dummy,
         bounds
       );
+      activeLabels.add(remote.id);
+      this.updateNameLabel(remote, bounds);
     }
     this.hideInactive(this.vehicleViews, active);
+    this.releaseNameLabels(activeLabels);
+  }
+
+  private updateNameLabel(remote: RemotePlayer, bounds: Bounds) {
+    if (!this.isVisible(remote.x, remote.y, 140, 140, bounds)) {
+      const existing = this.nameLabels.get(remote.id);
+      if (existing) existing.visible = false;
+      return;
+    }
+    let label = this.nameLabels.get(remote.id);
+    if (!label) {
+      label = new Text({
+        text: remote.name,
+        style: {
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 13,
+          fontWeight: 'bold',
+          fill: nameColorForId(remote.id),
+          stroke: { color: 0x0f172a, width: 3 },
+        },
+        resolution: this.spriteResolution,
+      });
+      label.anchor.set(0.5, 1);
+      this.nameLabelLayer.addChild(label);
+      this.nameLabels.set(remote.id, label);
+    } else if (label.text !== remote.name) {
+      label.text = remote.name;
+    }
+    label.visible = true;
+    const config = VEHICLE_CONFIGS[remote.vehicleType] || VEHICLE_CONFIGS.sedan;
+    label.position.set(remote.x, remote.y - config.width / 2 - 14);
+  }
+
+  private releaseNameLabels(active: Set<string>) {
+    for (const [id, label] of this.nameLabels) {
+      if (active.has(id)) continue;
+      this.nameLabels.delete(id);
+      this.nameLabelLayer.removeChild(label);
+      label.destroy();
+    }
   }
 
   private updateVehicleView(view: EntityView, vehicle: VehicleInstance, bounds: Bounds) {
@@ -867,6 +915,8 @@ export class PixiGameRenderer {
     for (const texture of this.effectTextures.values()) texture.destroy(true);
     this.effectTextures.clear();
     this.skidSprites.clear();
+    for (const label of this.nameLabels.values()) label.destroy();
+    this.nameLabels.clear();
     this.particleSprites.clear();
     this.lightSprites.clear();
     this.effectPool.length = 0;

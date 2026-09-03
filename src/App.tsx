@@ -27,6 +27,7 @@ import { FullMapModal } from './components/FullMapModal';
 import { VirtualControls } from './components/VirtualControls';
 import { VEHICLE_CONFIGS } from './game/vehicleConfigs';
 import { FixedStepAccumulator } from './game/fixedStep';
+import { randomDriverName } from './game/nameGenerator';
 
 /**
  * A ref argument is evaluated on every render even though React keeps only the
@@ -147,7 +148,8 @@ export default function App() {
   // Multiplayer UI State
   const [mpStatus, setMpStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [mpRoomId, setMpRoomId] = useState<string>('default');
-  const [playerName, setPlayerName] = useState<string>('Дальнобойщик');
+  const [playerName, setPlayerName] = useState<string>(() => randomDriverName());
+  const [myPlayerId, setMyPlayerId] = useState<string | null>(null);
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayer[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 
@@ -155,6 +157,7 @@ export default function App() {
   useEffect(() => {
     const mp = new MultiplayerClient(playerName, {
       onInit: (yourId, players, destructibles) => {
+        setMyPlayerId(yourId);
         setRemotePlayers(players);
         // Sync destructible objects
         if (destructibles) {
@@ -852,6 +855,7 @@ export default function App() {
         <MultiplayerModal
           status={mpStatus}
           playerName={playerName}
+          myPlayerId={myPlayerId}
           onUpdatePlayerName={(name) => {
             setPlayerName(name);
             playerCharRef.current.name = name;

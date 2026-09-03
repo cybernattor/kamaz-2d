@@ -12,6 +12,7 @@ import {
 import { Building, CityDistrict, CityMap, RoadSegment, WORLD_SIZE } from './cityMap';
 import { MapDecoration, MapTrail } from '../types';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
+import { nameColorForId } from './nameGenerator';
 
 export class GameRenderer {
   private ctx: CanvasRenderingContext2D;
@@ -1075,7 +1076,7 @@ export class GameRenderer {
     // REMOTE PLAYER NAME TAG & HEALTH BAR
     if (v.isRemotePlayer && v.playerName) {
       ctx.rotate(-v.angle); // counter-rotate so text is upright
-      ctx.fillStyle = '#38bdf8';
+      ctx.fillStyle = nameColorForId(v.id);
       ctx.font = 'bold 12px "JetBrains Mono", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(v.playerName, 0, -halfW - 14);
