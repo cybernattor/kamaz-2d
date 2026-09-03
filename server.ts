@@ -40,10 +40,16 @@ const clampNumber = (value: unknown, min: number, max: number, fallback: number)
 const clampText = (value: unknown, maxLength: number) =>
   typeof value === 'string' ? value.slice(0, maxLength) : '';
 
+/** Strips one or more trailing " #<n>" tags this function itself appended
+ * earlier (e.g. "Ковалёв #2 #2 #2" -> "Ковалёв"). Reconnecting clients resend
+ * their last server-assigned name as their new "requested" name, so without
+ * this a flaky connection stacked a fresh suffix on every retry. */
+const stripAutoSuffix = (name: string) => name.replace(/(?:\s+#\d+)+$/, '');
+
 /** Display names are cosmetic, but unique within a room so chat, minimap and
  * speech bubbles always identify one active player unambiguously. */
 const allocateDisplayName = (room: RoomData, requested: unknown, excludePlayerId?: string) => {
-  const preferred = clampText(requested, MAX_NAME_LENGTH).trim() || 'Дальнобойщик';
+  const preferred = stripAutoSuffix(clampText(requested, MAX_NAME_LENGTH).trim()) || 'Дальнобойщик';
   const namesInUse = new Set(
     Array.from(room.players.values())
       .filter((player) => player.id !== excludePlayerId)
