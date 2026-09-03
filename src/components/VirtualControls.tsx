@@ -7,7 +7,7 @@ interface VirtualControlsProps {
 
 export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput }) => {
   return (
-    <div id="virtual-controls-container" className="md:hidden fixed inset-x-0 bottom-4 pointer-events-none flex justify-between px-4 z-40">
+    <div id="virtual-controls-container" className="fixed inset-x-0 bottom-4 pointer-events-none flex justify-between px-4 z-40">
       {/* Left Steering Pad */}
       <div className="flex items-center gap-2 pointer-events-auto">
         <button

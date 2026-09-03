@@ -49,6 +49,7 @@ interface HUDProps {
   onToggleEnterExitVehicle: () => void;
   multiplayerStatus: 'disconnected' | 'connecting' | 'connected';
   onlineCount: number;
+  isTouchDevice: boolean;
 }
 
 export const HUD: React.FC<HUDProps> = ({
@@ -80,6 +81,7 @@ export const HUD: React.FC<HUDProps> = ({
   onToggleEnterExitVehicle,
   multiplayerStatus,
   onlineCount,
+  isTouchDevice,
 }) => {
   // Speedometer calculation
   const speedKmH = playerVehicle ? Math.round(Math.abs(playerVehicle.speed) * 3.6) : Math.round(playerChar.speed * 3.6);
@@ -272,6 +274,12 @@ export const HUD: React.FC<HUDProps> = ({
           className="bg-slate-950/95 border border-slate-800/80 rounded-xl p-2.5 sm:p-3 shadow-xl w-full sm:max-w-md max-h-24 sm:max-h-none overflow-y-auto sm:overflow-visible text-[11px] font-mono text-slate-300 space-y-1"
         >
           <div className="text-xs font-bold text-cyan-400 mb-1 tracking-wider uppercase">Управление</div>
+          {isTouchDevice ? (
+            <div className="grid grid-cols-1 gap-y-1">
+              <div>Джойстик снизу — руль, газ и тормоз</div>
+              <div>Кнопка <span className="text-amber-400 font-bold">[E]</span> в HUD — сесть / выйти</div>
+            </div>
+          ) : (
           <div className="grid grid-cols-2 gap-x-3 gap-y-1">
             <div>
               <span className="text-amber-400 font-bold">WASD / 🠹🠸🠺🠻</span> Управление
@@ -304,6 +312,7 @@ export const HUD: React.FC<HUDProps> = ({
               <span className="text-amber-400 font-bold">[T]</span> День / Ночь
             </div>
           </div>
+          )}
         </div>
 
         {/* Bottom-Right Driving Actions + Instrument Pod */}

@@ -40,6 +40,29 @@ function useLazyRef<T>(create: () => T) {
   return ref as React.MutableRefObject<T>;
 }
 
+/**
+ * `md:hidden` on the virtual joystick gated on viewport width, not on
+ * whether the device has touch input. Most tablets are wider than the 768px
+ * breakpoint in landscape (and plenty in portrait too), so they lost the
+ * on-screen controls entirely while the keyboard-shortcut legend kept
+ * showing regardless - a touch-only device with no way to drive.
+ */
+function useIsTouchDevice() {
+  const [isTouch, setIsTouch] = useState(
+    () => typeof window !== 'undefined' && (window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0)
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia('(pointer: coarse)');
+    const update = () => setIsTouch(query.matches || navigator.maxTouchPoints > 0);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  return isTouch;
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -91,6 +114,7 @@ export default function App() {
   });
 
   const [inVehicle, setInVehicle] = useState<boolean>(true);
+  const isTouchDevice = useIsTouchDevice();
   const inVehicleStateRef = useRef<boolean>(true);
 
   // Input states
@@ -796,10 +820,11 @@ export default function App() {
         onToggleEnterExitVehicle={toggleEnterExitVehicle}
         multiplayerStatus={mpStatus}
         onlineCount={remotePlayers.length}
+        isTouchDevice={isTouchDevice}
       />
 
       {/* Virtual Controls for mobile touch */}
-      <VirtualControls onInput={handleVirtualInput} />
+      {isTouchDevice && <VirtualControls onInput={handleVirtualInput} />}
 
       {/* Modals */}
       {showGarage && (
