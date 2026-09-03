@@ -210,8 +210,12 @@ export default function App() {
     });
   }, [isMuted, zoom, isNight, playerName, mpRoomId]);
 
-  // Initialize Multiplayer Client
+  // Initialize Multiplayer Client — deferred until Play is pressed, so
+  // sitting on the start screen doesn't spawn the player into the room for
+  // everyone else to see standing still.
   useEffect(() => {
+    if (!gameStarted) return;
+
     const mp = new MultiplayerClient(playerName, {
       onInit: (yourId, players, destructibles, spawn, assignedName) => {
         setMyPlayerId(yourId);
@@ -289,7 +293,7 @@ export default function App() {
     return () => {
       mp.disconnect();
     };
-  }, []);
+  }, [gameStarted]);
 
   // Update InVehicle ref
   useEffect(() => {
