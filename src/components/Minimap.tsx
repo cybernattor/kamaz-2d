@@ -14,7 +14,7 @@ interface MinimapProps {
   onOpenFullMap: () => void;
 }
 
-const MAP_SIZE = 150;
+const MAP_SIZE = 118;
 const RADAR_RANGE = 700;
 
 export const Minimap: React.FC<MinimapProps> = ({
