@@ -26,10 +26,10 @@ export const NetworkFeed: React.FC<NetworkFeedProps> = ({ events }) => {
   return (
     <div
       id="network-feed"
-      // Below the HUD's top bar (street name + toggle row, minimap on the
-      // right) so it doesn't get buried under those — top-right was tried
-      // first but sat right behind the minimap radar there.
-      className="pointer-events-none absolute top-40 sm:top-36 left-3 z-30 w-64 max-w-[80vw] flex flex-col gap-1.5"
+      // Sits in the HUD's normal flex flow, directly above the controls-legend
+      // panel (see HUD.tsx) — anchored there instead of at a guessed pixel
+      // offset so it never overlaps it or the minimap, at any screen size.
+      className="pointer-events-none w-full sm:max-w-md flex flex-col gap-1.5"
       aria-live="polite"
     >
       {events.map((ev) => {

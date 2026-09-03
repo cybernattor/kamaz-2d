@@ -23,7 +23,7 @@ import { GarageModal } from './components/GarageModal';
 import { MissionsModal } from './components/MissionsModal';
 import { MultiplayerModal } from './components/MultiplayerModal';
 import { FullMapModal } from './components/FullMapModal';
-import { NetworkFeed, FeedEvent } from './components/NetworkFeed';
+import type { FeedEvent } from './components/NetworkFeed';
 import { VirtualControls } from './components/VirtualControls';
 import { VEHICLE_CONFIGS } from './game/vehicleConfigs';
 import { FixedStepAccumulator } from './game/fixedStep';
@@ -953,10 +953,8 @@ export default function App() {
         multiplayerStatus={mpStatus}
         onlineCount={remotePlayers.length}
         isTouchDevice={isTouchDevice}
+        feedEvents={feedEvents}
       />
-
-      {/* Radio feed: chat lines and join/leave, visible without opening the multiplayer modal */}
-      <NetworkFeed events={feedEvents} />
 
       {/* Virtual Controls for mobile touch */}
       {isTouchDevice && <VirtualControls onInput={handleVirtualInput} />}

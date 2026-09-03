@@ -18,6 +18,7 @@ import {
   Lightbulb,
 } from 'lucide-react';
 import { Minimap } from './Minimap';
+import { NetworkFeed, FeedEvent } from './NetworkFeed';
 import { CityMap } from '../game/cityMap';
 
 interface HUDProps {
@@ -51,6 +52,7 @@ interface HUDProps {
   multiplayerStatus: 'disconnected' | 'connecting' | 'connected';
   onlineCount: number;
   isTouchDevice: boolean;
+  feedEvents: FeedEvent[];
 }
 
 export const HUD: React.FC<HUDProps> = ({
@@ -84,6 +86,7 @@ export const HUD: React.FC<HUDProps> = ({
   multiplayerStatus,
   onlineCount,
   isTouchDevice,
+  feedEvents,
 }) => {
   // Speedometer calculation
   const speedKmH = playerVehicle ? Math.round(Math.abs(playerVehicle.speed) * 3.6) : Math.round(playerChar.speed * 3.6);
@@ -273,6 +276,12 @@ export const HUD: React.FC<HUDProps> = ({
           </div>
         )}
 
+      </div>
+
+      {/* Radio feed: chat lines + join/leave, directly above the controls
+          legend so it never overlaps it or the minimap regardless of screen size */}
+      <div className="pointer-events-none w-full">
+        <NetworkFeed events={feedEvents} />
       </div>
 
       {/* 3. BOTTOM ROW: Controls Legend (Left) + Driving Instrument Pod (Right - Exact Screenshot Match!) */}
