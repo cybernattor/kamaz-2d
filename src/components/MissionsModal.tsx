@@ -28,6 +28,9 @@ export const MissionsModal: React.FC<MissionsModalProps> = ({
     >
       <div
         id="modal-missions-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-missions-title"
         className="bg-slate-900 border-2 border-cyan-500/80 rounded-2xl max-w-3xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
       >
         {/* Header */}
@@ -37,7 +40,7 @@ export const MissionsModal: React.FC<MissionsModalProps> = ({
               <Briefcase className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-100">Биржа Заказов и Рейсов</h3>
+              <h3 id="modal-missions-title" className="text-lg font-bold text-slate-100">Биржа Заказов и Рейсов</h3>
               <p className="text-xs text-slate-400">Перевозка грузов на КАМАЗе, спецвызовы и задания в открытом мире</p>
             </div>
           </div>
@@ -53,6 +56,7 @@ export const MissionsModal: React.FC<MissionsModalProps> = ({
             <button
               id="btn-close-missions"
               onClick={onClose}
+              aria-label="Закрыть задания"
               className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
@@ -95,7 +99,7 @@ export const MissionsModal: React.FC<MissionsModalProps> = ({
                     </span>
 
                     {isActive && (
-                      <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-amber-500 text-slate-950">
+                      <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-amber-500 text-amber-950">
                         Выполняется Сейчас
                       </span>
                     )}
@@ -154,7 +158,7 @@ export const MissionsModal: React.FC<MissionsModalProps> = ({
                       className={`px-4 py-2 rounded-lg text-xs font-bold font-mono transition-all flex items-center gap-1.5 cursor-pointer ${
                         isCompleted
                           ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                          : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-lg active:scale-95'
+                          : 'bg-cyan-500 hover:bg-cyan-400 text-cyan-950 shadow-lg active:scale-95'
                       }`}
                     >
                       <span>Принять рейс</span>

@@ -227,6 +227,9 @@ export const FullMapModal: React.FC<FullMapModalProps> = ({
     >
       <div
         id="modal-fullmap-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-fullmap-title"
         className="my-0.5 sm:my-4 bg-slate-900 border-2 border-slate-700 rounded-2xl max-w-4xl w-full max-h-[calc(100vh-0.5rem)] sm:max-h-[calc(100vh-2rem)] overflow-hidden shadow-2xl flex flex-col"
       >
         {/* Header */}
@@ -236,7 +239,7 @@ export const FullMapModal: React.FC<FullMapModalProps> = ({
               <Compass className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-100">Карта Города и Логистических Зон</h3>
+              <h3 id="modal-fullmap-title" className="text-lg font-bold text-slate-100">Карта Города и Логистических Зон</h3>
               <p className="text-xs text-slate-400">6 районов · трассы, порт, ж/д, аэропорт, карьер и лесные маршруты</p>
             </div>
           </div>
@@ -244,6 +247,7 @@ export const FullMapModal: React.FC<FullMapModalProps> = ({
           <button
             id="btn-close-fullmap"
             onClick={onClose}
+            aria-label="Закрыть карту"
             className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />

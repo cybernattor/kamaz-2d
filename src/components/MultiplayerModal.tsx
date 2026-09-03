@@ -55,6 +55,9 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
     >
       <div
         id="modal-multiplayer-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-multiplayer-title"
         className="bg-slate-900 border-2 border-emerald-500/80 rounded-2xl max-w-4xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
       >
         {/* Header */}
@@ -64,7 +67,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
               <Users className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-100">Мультиплеер (Сетевой Город)</h3>
+              <h3 id="modal-multiplayer-title" className="text-lg font-bold text-slate-100">Мультиплеер (Сетевой Город)</h3>
               <p className="text-xs text-slate-400">
                 Катайтесь с друзьями в реальном времени, возите грузы вместе и общайтесь по рации
               </p>
@@ -86,6 +89,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
             <button
               id="btn-close-multiplayer"
               onClick={onClose}
+              aria-label="Закрыть мультиплеер"
               className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
