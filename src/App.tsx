@@ -27,7 +27,7 @@ import { VirtualControls } from './components/VirtualControls';
 import { VEHICLE_CONFIGS } from './game/vehicleConfigs';
 import { FixedStepAccumulator } from './game/fixedStep';
 import { randomDriverName } from './game/nameGenerator';
-import { loadUserPreferences, saveUserPreferences } from './game/userPreferences';
+import { loadUserPreferences, saveUserPreferences, UserPreferences } from './game/userPreferences';
 
 /**
  * A ref argument is evaluated on every render even though React keeps only the
@@ -66,6 +66,7 @@ function useIsTouchDevice() {
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const preferencesRef = useLazyRef<UserPreferences>(loadUserPreferences);
 
   // Core Engine instances in refs to prevent React state re-render bottlenecks during 60 FPS loop
   const cityMapRef = useLazyRef<CityMap>(() => new CityMap());
@@ -79,14 +80,16 @@ export default function App() {
   // Player State
   const playerVehicleRef = useRef<VehicleInstance>({
     id: 'player_kamaz_primary',
-    type: 'kamaz_dump',
+    type: preferencesRef.current.vehicleType && VEHICLE_CONFIGS[preferencesRef.current.vehicleType as VehicleCategory]
+      ? preferencesRef.current.vehicleType as VehicleCategory
+      : 'kamaz_dump',
     x: 1000,
     y: 1000,
     angle: 0,
     speed: 0,
     steeringAngle: 0,
     angularVelocity: 0,
-    color: '#f97316',
+    color: preferencesRef.current.vehicleColor || '#f97316',
     health: 100,
     maxHealth: 100,
     headlights: 1, // low beam by default
@@ -108,7 +111,7 @@ export default function App() {
     maxHealth: 100,
     inVehicleId: 'player_kamaz_primary',
     isRunning: false,
-    name: 'Дальнобойщик',
+    name: preferencesRef.current.playerName || 'Дальнобойщик',
     money: 25000,
     xp: 150,
     level: 1,
@@ -128,13 +131,13 @@ export default function App() {
   const [, setHudTick] = useState(0);
   const [carCount, setCarCount] = useState<number>(45);
   const [pedCount, setPedCount] = useState<number>(40);
-  const [isNight, setIsNight] = useState<boolean>(false);
-  const [isMuted, setIsMuted] = useState<boolean>(() => loadUserPreferences().muted);
-  const [zoom, setZoom] = useState<number>(1.0);
+  const [isNight, setIsNight] = useState<boolean>(preferencesRef.current.isNight);
+  const [isMuted, setIsMuted] = useState<boolean>(preferencesRef.current.muted);
+  const [zoom, setZoom] = useState<number>(preferencesRef.current.zoom);
   // The render loop reads these through refs. Putting them in the effect's
   // dependency list would tear down the WebGL renderer - and re-upload the
   // whole city texture - every time the player zooms or picks a mission.
-  const zoomRef = useRef(1.0);
+  const zoomRef = useRef(preferencesRef.current.zoom);
   const targetPoiRef = useRef<PointOfInterest | null>(null);
 
   const [activeMission, setActiveMission] = useState<Mission | null>(null);
@@ -149,25 +152,38 @@ export default function App() {
 
   // Multiplayer UI State
   const [mpStatus, setMpStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
-  const [mpRoomId, setMpRoomId] = useState<string>('default');
-  const [playerName, setPlayerName] = useState<string>(() => randomDriverName());
+  const [mpRoomId, setMpRoomId] = useState<string>(preferencesRef.current.roomId || 'default');
+  const [playerName, setPlayerName] = useState<string>(() => preferencesRef.current.playerName || randomDriverName());
   const [myPlayerId, setMyPlayerId] = useState<string | null>(null);
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayer[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 
-  // Keep the audio preference across browser restarts. Applying it before
-  // AudioContext creation also prevents a short audible blip on first input.
+  // Cosmetic settings stay on this device only. Multiplayer identity remains
+  // server-assigned; the saved nickname is merely a preferred display name.
   useEffect(() => {
     sound.setMuted(isMuted);
-    saveUserPreferences({ muted: isMuted });
-  }, [isMuted]);
+    saveUserPreferences({
+      muted: isMuted,
+      zoom,
+      isNight,
+      playerName,
+      roomId: mpRoomId,
+      vehicleType: playerVehicleRef.current.type,
+      vehicleColor: playerVehicleRef.current.color,
+    });
+  }, [isMuted, zoom, isNight, playerName, mpRoomId]);
 
   // Initialize Multiplayer Client
   useEffect(() => {
     const mp = new MultiplayerClient(playerName, {
-      onInit: (yourId, players, destructibles, spawn) => {
+      onInit: (yourId, players, destructibles, spawn, assignedName) => {
         setMyPlayerId(yourId);
         setRemotePlayers(players);
+        if (assignedName) {
+          setPlayerName(assignedName);
+          playerCharRef.current.name = assignedName;
+          mp.playerName = assignedName;
+        }
         // The authoritative server assigns a free multiplayer spawn. Apply it
         // before the game loop sends its first position update, otherwise all
         // fresh clients overwrite their reserved pads with the local default.
@@ -216,10 +232,14 @@ export default function App() {
       onStatusChange: (status) => {
         setMpStatus(status);
       },
+      onNameAssigned: (name) => {
+        setPlayerName(name);
+        playerCharRef.current.name = name;
+      },
     });
 
     multiplayerRef.current = mp;
-    mp.connect('default');
+    mp.connect(mpRoomId);
 
     return () => {
       mp.disconnect();
@@ -706,6 +726,10 @@ export default function App() {
   }, [zoom]);
 
   useEffect(() => {
+    if (rendererRef.current) rendererRef.current.isNightMode = isNight;
+  }, [isNight]);
+
+  useEffect(() => {
     targetPoiRef.current = targetPoi;
   }, [targetPoi]);
 
@@ -738,6 +762,15 @@ export default function App() {
       turnSignal: 'none',
       isSiren: false,
     };
+    saveUserPreferences({
+      muted: isMuted,
+      zoom,
+      isNight,
+      playerName,
+      roomId: mpRoomId,
+      vehicleType: type,
+      vehicleColor: color,
+    });
     setInVehicle(true);
   };
 
@@ -879,11 +912,7 @@ export default function App() {
           playerName={playerName}
           myPlayerId={myPlayerId}
           onUpdatePlayerName={(name) => {
-            setPlayerName(name);
-            playerCharRef.current.name = name;
-            if (multiplayerRef.current) {
-              multiplayerRef.current.playerName = name;
-            }
+            multiplayerRef.current?.rename(name);
           }}
           currentRoomId={mpRoomId}
           onJoinRoom={(roomId) => {

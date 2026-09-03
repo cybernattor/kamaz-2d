@@ -1,7 +1,8 @@
 import { ChatMessage, RemotePlayer, VehicleCategory } from '../types';
 
 export interface MultiplayerCallbacks {
-  onInit?: (yourId: string, players: RemotePlayer[], destructibles: Record<string, { destroyed: boolean }>, spawn?: RemotePlayer) => void;
+  onInit?: (yourId: string, players: RemotePlayer[], destructibles: Record<string, { destroyed: boolean }>, spawn?: RemotePlayer, assignedName?: string) => void;
+  onNameAssigned?: (name: string) => void;
   onPlayerJoined?: (player: RemotePlayer) => void;
   onPlayerLeft?: (playerId: string) => void;
   onObjectDestroyed?: (objectId: string) => void;
@@ -170,6 +171,7 @@ export class MultiplayerClient {
     objectId?: string;
     destructibles?: Record<string, { destroyed: boolean }>;
     name?: string;
+    assignedName?: string;
     text?: string;
     timestamp?: number;
     vehicleType?: VehicleCategory;
@@ -189,7 +191,8 @@ export class MultiplayerClient {
           this.playerId,
           Array.from(this.remotePlayers.values()),
           msg.destructibles || {},
-          spawn
+          spawn,
+          msg.assignedName
         );
         break;
       }
@@ -230,6 +233,14 @@ export class MultiplayerClient {
           if (msg.vehicleType) player.vehicleType = msg.vehicleType;
           if (msg.vehicleColor) player.vehicleColor = msg.vehicleColor;
           if (msg.name) player.name = msg.name;
+        }
+        break;
+      }
+
+      case 'name_assigned': {
+        if (msg.name) {
+          this.playerName = msg.name;
+          this.callbacks.onNameAssigned?.(msg.name);
         }
         break;
       }
@@ -366,6 +377,10 @@ export class MultiplayerClient {
 
   public sendChat(text: string) {
     this.send({ type: 'chat', text });
+  }
+
+  public rename(name: string) {
+    this.send({ type: 'rename', name });
   }
 
   private send(data: object) {

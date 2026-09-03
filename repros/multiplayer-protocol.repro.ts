@@ -83,6 +83,14 @@ async function main() {
     }
     if (!a.tickHz) failures.push('init did not advertise the snapshot tick rate');
 
+    // 1c. A persisted nickname is only a preference: the server assigns a
+    // unique display name in the room and keeps player identity separate.
+    const duplicate = await connect(port, 'protocol-test', 'Alpha');
+    const duplicateInit = duplicate.messages.find((message) => message.type === 'init');
+    const duplicateName = duplicateInit?.players?.find((player) => player.id === duplicate.id)?.name;
+    if (duplicateName !== 'Alpha #2') failures.push(`duplicate nickname was not disambiguated: ${String(duplicateName)}`);
+    duplicate.socket.close();
+
     // 1b. Joining players request the same client default location, but the
     // server must allocate distinct pads so avatars never spawn inside each
     // other before their first movement update.

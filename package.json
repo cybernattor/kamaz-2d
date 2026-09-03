@@ -13,6 +13,7 @@
     "test:traffic:ground-bypass": "tsx repros/traffic-ground-bypass.repro.ts",
     "test:traffic:player-following": "tsx repros/traffic-player-following.repro.ts",
     "test:traffic:player-ram": "tsx repros/traffic-player-ram.repro.ts",
+    "test:traffic:head-on": "tsx repros/traffic-head-on-response.repro.ts",
     "test:traffic:adaptive-route": "tsx repros/traffic-adaptive-route.repro.ts",
     "test:traffic:intersection": "tsx repros/traffic-intersection-collision.repro.ts",
     "test:map:lanes": "tsx repros/map-lane-direction.repro.ts",

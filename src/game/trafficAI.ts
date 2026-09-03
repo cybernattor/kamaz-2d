@@ -375,7 +375,8 @@ export class TrafficAI {
     car: VehicleInstance,
     ai: NPCAIExtra,
     obstacle: VehicleInstance,
-    playerVehicle?: VehicleInstance | null
+    playerVehicle?: VehicleInstance | null,
+    preferredSide?: -1 | 1
   ) {
     if (ai.adaptiveBypass || ai.groundBypass || ai.isTurning) return false;
 
@@ -414,7 +415,7 @@ export class TrafficAI {
     });
 
     const selected = options
-      .filter((option) => option.clearance >= 0)
+      .filter((option) => option.clearance >= 0 && (preferredSide === undefined || option.side === preferredSide))
       .sort((first, second) => second.clearance - first.clearance)[0];
     if (!selected) return false;
 
@@ -1214,7 +1215,11 @@ export class TrafficAI {
           // the stop line brake for a vehicle crossing in front of it, which
           // could freeze both approaches for an entire light cycle.
           const otherAi = other.isPlayer ? undefined : this.aiData.get(other.id);
-          const sameTrafficLane = other.isPlayer || Boolean(otherAi && this.areSameTrafficLane(ai, otherAi));
+          const sameTrafficLane = Boolean(
+            otherAi && this.areSameTrafficLane(ai, otherAi)
+          ) || Boolean(
+            other.isPlayer && Math.cos(other.angle - car.angle) > 0.35
+          );
           if (!sameTrafficLane) {
             const otherInConflictZone = Boolean(
               activeIntersection &&
@@ -1327,7 +1332,28 @@ export class TrafficAI {
         const sameLane = ai.roadType === 'vertical'
           ? Math.abs(playerVehicle.x - lane.x!) < 58
           : Math.abs(playerVehicle.y - lane.y!) < 58;
-        if (sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58) {
+        const headingOpposition = Math.cos(playerVehicle.angle - car.angle);
+        const isHeadOnThreat = sameLane && aheadDistance > 0 && aheadDistance < 240 && lateralDistance < 58 && headingOpposition < -0.65;
+
+        if (isHeadOnThreat) {
+          // A head-on vehicle is neither a leader to follow nor a general
+          // obstacle to weave around. Commit to a single, legal-looking move
+          // to the driver's right. If that shoulder is occupied, brake hard
+          // and let physics resolve a deliberate impact instead of switching
+          // left/right targets every frame and visibly shaking.
+          if (this.startAdaptiveBypass(car, ai, playerVehicle, playerVehicle, -1)) {
+            if (!car.isHonking) {
+              car.isHonking = true;
+              setTimeout(() => { car.isHonking = false; }, 400);
+            }
+            continue;
+          }
+          targetSpeed = 0;
+          shouldStop = true;
+          blockedByPlayer = true;
+        }
+
+        if (!isHeadOnThreat && sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58) {
           if (TrafficAI.isClosingFast(playerVehicle, car)) {
             // A player closing fast from behind is a ram, not ordinary
             // traffic to queue behind - a real driver swerves or brakes,

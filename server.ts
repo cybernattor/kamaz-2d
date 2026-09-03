@@ -40,6 +40,25 @@ const clampNumber = (value: unknown, min: number, max: number, fallback: number)
 const clampText = (value: unknown, maxLength: number) =>
   typeof value === 'string' ? value.slice(0, maxLength) : '';
 
+/** Display names are cosmetic, but unique within a room so chat, minimap and
+ * speech bubbles always identify one active player unambiguously. */
+const allocateDisplayName = (room: RoomData, requested: unknown, excludePlayerId?: string) => {
+  const preferred = clampText(requested, MAX_NAME_LENGTH).trim() || 'Дальнобойщик';
+  const namesInUse = new Set(
+    Array.from(room.players.values())
+      .filter((player) => player.id !== excludePlayerId)
+      .map((player) => player.name.toLocaleLowerCase())
+  );
+  if (!namesInUse.has(preferred.toLocaleLowerCase())) return preferred;
+
+  for (let ordinal = 2; ordinal < 1000; ordinal += 1) {
+    const suffix = ` #${ordinal}`;
+    const candidate = `${preferred.slice(0, MAX_NAME_LENGTH - suffix.length)}${suffix}`;
+    if (!namesInUse.has(candidate.toLocaleLowerCase())) return candidate;
+  }
+  return `${preferred.slice(0, MAX_NAME_LENGTH - 5)} #999`;
+};
+
 interface PlayerState {
   id: string;
   name: string;
@@ -243,7 +262,7 @@ async function startServer() {
 
             const initialPlayer: PlayerState = {
               id: playerId,
-              name: clampText(msg.name, MAX_NAME_LENGTH) || 'Дальнобойщик',
+              name: allocateDisplayName(room, msg.name),
               room: roomId,
               x: spawn.x,
               y: spawn.y,
@@ -270,10 +289,23 @@ async function startServer() {
                 tickHz: TICK_HZ,
                 players: Array.from(room.players.values()),
                 destructibles: room.destructiblesState,
+                assignedName: initialPlayer.name,
               })
             );
 
             broadcastToRoom(roomId, { type: 'player_joined', player: initialPlayer }, ws);
+            break;
+          }
+
+          case 'rename': {
+            if (!state.playerId) return;
+            const room = rooms.get(state.roomId);
+            const player = room?.players.get(state.playerId);
+            if (!room || !player) return;
+            const name = allocateDisplayName(room, msg.name, player.id);
+            player.name = name;
+            ws.send(JSON.stringify({ type: 'name_assigned', name }));
+            broadcastToRoom(state.roomId, { type: 'player_meta', playerId: player.id, name }, ws);
             break;
           }
 
