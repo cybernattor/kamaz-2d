@@ -23,11 +23,23 @@ import { GarageModal } from './components/GarageModal';
 import { MissionsModal } from './components/MissionsModal';
 import { MultiplayerModal } from './components/MultiplayerModal';
 import { FullMapModal } from './components/FullMapModal';
+import { NetworkFeed, FeedEvent } from './components/NetworkFeed';
 import { VirtualControls } from './components/VirtualControls';
 import { VEHICLE_CONFIGS } from './game/vehicleConfigs';
 import { FixedStepAccumulator } from './game/fixedStep';
 import { randomDriverName } from './game/nameGenerator';
 import { loadUserPreferences, saveUserPreferences, UserPreferences } from './game/userPreferences';
+
+// Distance (world units) at which a remote player's horn/siren fades to
+// silence, and the volume it plays at right next to the local player. A
+// siren carries further than a horn, matching how it reads in real traffic.
+const REMOTE_HORN_MAX_DIST = 900;
+const REMOTE_HORN_BASE_VOLUME = 0.28;
+const REMOTE_SIREN_MAX_DIST = 1400;
+const REMOTE_SIREN_BASE_VOLUME = 0.18;
+
+// How long a chat/join/leave toast stays on screen before it auto-dismisses.
+const FEED_EVENT_TTL_MS = 6000;
 
 /**
  * A ref argument is evaluated on every render even though React keeps only the
@@ -149,6 +161,9 @@ export default function App() {
   const [showMultiplayer, setShowMultiplayer] = useState<boolean>(false);
   const [showFullMap, setShowFullMap] = useState<boolean>(false);
   const modalOpenRef = useRef(false);
+  const showFullMapRef = useRef(false);
+  const showGarageRef = useRef(false);
+  const showMissionsRef = useRef(false);
 
   // Multiplayer UI State
   const [mpStatus, setMpStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
@@ -157,6 +172,17 @@ export default function App() {
   const [myPlayerId, setMyPlayerId] = useState<string | null>(null);
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayer[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [feedEvents, setFeedEvents] = useState<FeedEvent[]>([]);
+
+  // Pushes a toast onto the on-screen radio feed and schedules its own
+  // removal — callers don't need to track timers themselves.
+  const pushFeedEvent = useCallback((entry: Omit<FeedEvent, 'id'>) => {
+    const id = `feed_${Date.now()}_${Math.random()}`;
+    setFeedEvents((prev) => [...prev.slice(-5), { ...entry, id }]);
+    setTimeout(() => {
+      setFeedEvents((prev) => prev.filter((ev) => ev.id !== id));
+    }, FEED_EVENT_TTL_MS);
+  }, []);
 
   // Cosmetic settings stay on this device only. Multiplayer identity remains
   // server-assigned; the saved nickname is merely a preferred display name.
@@ -209,9 +235,15 @@ export default function App() {
       // app; the render loop reads positions straight off the client instead.
       onPlayerJoined: (player) => {
         setRemotePlayers((prev) => [...prev.filter((p) => p.id !== player.id), player]);
+        pushFeedEvent({ type: 'join', playerId: player.id, name: player.name });
       },
       onPlayerLeft: (playerId) => {
-        setRemotePlayers((prev) => prev.filter((p) => p.id !== playerId));
+        setRemotePlayers((prev) => {
+          const left = prev.find((p) => p.id === playerId);
+          if (left) pushFeedEvent({ type: 'leave', playerId: left.id, name: left.name });
+          return prev.filter((p) => p.id !== playerId);
+        });
+        sound.clearRemotePlayerSounds(playerId);
       },
       onObjectDestroyed: (objectId) => {
         const obj = cityMapRef.current.destructibles.find((d) => d.id === objectId);
@@ -228,9 +260,11 @@ export default function App() {
       },
       onChatMessage: (msg) => {
         setChatMessages((prev) => [...prev.slice(-40), msg]);
+        pushFeedEvent({ type: 'chat', playerId: msg.playerId, name: msg.name, text: msg.text });
       },
       onStatusChange: (status) => {
         setMpStatus(status);
+        if (status !== 'connected') sound.clearAllRemoteSounds();
       },
       onNameAssigned: (name) => {
         setPlayerName(name);
@@ -255,6 +289,9 @@ export default function App() {
   // mirror that state in a ref for the stable keyboard listener below.
   useEffect(() => {
     modalOpenRef.current = showGarage || showMissions || showMultiplayer || showFullMap;
+    showFullMapRef.current = showFullMap;
+    showGarageRef.current = showGarage;
+    showMissionsRef.current = showMissions;
   }, [showGarage, showMissions, showMultiplayer, showFullMap]);
 
   // Handle Keyboard Input
@@ -279,6 +316,22 @@ export default function App() {
           setShowMissions(false);
           setShowMultiplayer(false);
           setShowFullMap(false);
+        } else if (
+          !e.repeat &&
+          (e.code === 'KeyM' || e.code === 'KeyG' || (e.code === 'KeyJ' && !e.ctrlKey))
+        ) {
+          // Each modal's shortcut also closes it, mirroring Escape — but if a
+          // *different* modal is open, the key switches straight to its own
+          // modal instead of requiring a close-then-reopen. Multiplayer has no
+          // shortcut of its own, so it always yields to one here.
+          const wasOpen =
+            e.code === 'KeyM' ? showFullMapRef.current
+            : e.code === 'KeyG' ? showGarageRef.current
+            : showMissionsRef.current;
+          setShowFullMap(!wasOpen && e.code === 'KeyM');
+          setShowGarage(!wasOpen && e.code === 'KeyG');
+          setShowMissions(!wasOpen && e.code === 'KeyJ');
+          setShowMultiplayer(false);
         }
         return;
       }
@@ -675,6 +728,27 @@ export default function App() {
       }
 
       // 9. Render Scene
+      // Interpolated: the network stream is 20Hz, the display is not.
+      const interpolatedRemotePlayers = multiplayerRef.current?.getInterpolatedPlayers() || [];
+
+      // Spatialized horn/siren for remote players: volume falls off with
+      // distance from the local player so a honk on the other side of the map
+      // isn't as loud as one right next to you.
+      const listenerX = isCar ? v.x : char.x;
+      const listenerY = isCar ? v.y : char.y;
+      interpolatedRemotePlayers.forEach((p) => {
+        const dist = Math.hypot(p.x - listenerX, p.y - listenerY);
+        const isKamaz = p.vehicleType?.startsWith('kamaz') ?? false;
+
+        const hornFalloff = Math.max(0, 1 - dist / REMOTE_HORN_MAX_DIST);
+        const hornVolume = REMOTE_HORN_BASE_VOLUME * hornFalloff * hornFalloff;
+        sound.updateRemoteHorn(p.id, p.isHonking && p.inVehicle, isKamaz, hornVolume);
+
+        const sirenFalloff = Math.max(0, 1 - dist / REMOTE_SIREN_MAX_DIST);
+        const sirenVolume = REMOTE_SIREN_BASE_VOLUME * sirenFalloff * sirenFalloff;
+        sound.updateRemoteSiren(p.id, p.isSiren && p.inVehicle, sirenVolume);
+      });
+
       if (rendererRef.current) {
         rendererRef.current.zoom = zoomRef.current;
         rendererRef.current.frameDelta = delta;
@@ -686,8 +760,7 @@ export default function App() {
           char,
           isCar,
           trafficRef.current.npcVehicles,
-          // Interpolated: the network stream is 20Hz, the display is not.
-          multiplayerRef.current?.getInterpolatedPlayers() || [],
+          interpolatedRemotePlayers,
           trafficRef.current.pedestrians,
           cityMapRef.current.destructibles,
           physicsRef.current.particles,
@@ -880,6 +953,9 @@ export default function App() {
         onlineCount={remotePlayers.length}
         isTouchDevice={isTouchDevice}
       />
+
+      {/* Radio feed: chat lines and join/leave, visible without opening the multiplayer modal */}
+      <NetworkFeed events={feedEvents} />
 
       {/* Virtual Controls for mobile touch */}
       {isTouchDevice && <VirtualControls onInput={handleVirtualInput} />}

@@ -23,6 +23,13 @@ class SoundEngine {
   private skidGain: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
 
+  // Spatialized horns/sirens for remote multiplayer vehicles, keyed by player id.
+  // Kept separate from the local player's own horn/siren nodes above so several
+  // remote players can honk or run their siren at once, each at its own
+  // distance-based volume.
+  private remoteHorns: Map<string, { osc1: OscillatorNode; osc2: OscillatorNode; gain: GainNode }> = new Map();
+  private remoteSirens: Map<string, { osc: OscillatorNode; lfo: OscillatorNode; gain: GainNode }> = new Map();
+
   private initialized: boolean = false;
 
   public init() {
@@ -186,6 +193,136 @@ class SoundEngine {
         this.hornGain = null;
       }, 100);
     }
+  }
+
+  // Spatialized horn for a remote multiplayer vehicle. `volume` is the
+  // distance-attenuated gain (0 = inaudible, computed by the caller from
+  // distance to the local player) rather than a fixed level like the local horn.
+  public updateRemoteHorn(id: string, active: boolean, isKamaz: boolean, volume: number) {
+    if (!this.initialized || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const existing = this.remoteHorns.get(id);
+
+    if (!active || this.isMuted || volume <= 0.001) {
+      if (existing) {
+        existing.gain.gain.linearRampToValueAtTime(0.001, now + 0.08);
+        setTimeout(() => {
+          try {
+            existing.osc1.stop();
+            existing.osc2.stop();
+            existing.osc1.disconnect();
+            existing.osc2.disconnect();
+          } catch (_) {
+            // ignore
+          }
+        }, 100);
+        this.remoteHorns.delete(id);
+      }
+      return;
+    }
+
+    if (!existing) {
+      const osc1 = this.ctx.createOscillator();
+      const osc2 = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      if (isKamaz) {
+        osc1.type = 'sawtooth';
+        osc2.type = 'triangle';
+        osc1.frequency.setValueAtTime(164.8, now);
+        osc2.frequency.setValueAtTime(220.0, now);
+      } else {
+        osc1.type = 'sawtooth';
+        osc2.type = 'triangle';
+        osc1.frequency.setValueAtTime(349.23, now);
+        osc2.frequency.setValueAtTime(440.0, now);
+      }
+
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(volume, now + 0.05);
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(this.masterGain);
+
+      osc1.start(now);
+      osc2.start(now);
+
+      this.remoteHorns.set(id, { osc1, osc2, gain });
+    } else {
+      existing.gain.gain.setTargetAtTime(volume, now, 0.05);
+    }
+  }
+
+  // Spatialized siren for a remote emergency vehicle. Same volume contract as
+  // updateRemoteHorn above.
+  public updateRemoteSiren(id: string, active: boolean, volume: number) {
+    if (!this.initialized || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const existing = this.remoteSirens.get(id);
+
+    if (!active || this.isMuted || volume <= 0.001) {
+      if (existing) {
+        existing.gain.gain.linearRampToValueAtTime(0.001, now + 0.1);
+        setTimeout(() => {
+          try {
+            existing.osc.stop();
+            existing.lfo.stop();
+          } catch (_) {
+            // ignore
+          }
+        }, 120);
+        this.remoteSirens.delete(id);
+      }
+      return;
+    }
+
+    if (!existing) {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(650, now);
+
+      const lfo = this.ctx.createOscillator();
+      lfo.type = 'triangle';
+      lfo.frequency.setValueAtTime(0.8, now);
+
+      const lfoGain = this.ctx.createGain();
+      lfoGain.gain.setValueAtTime(300, now);
+      lfo.connect(lfoGain);
+      lfoGain.connect(osc.frequency);
+
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(volume, now);
+
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(1400, now);
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.masterGain);
+
+      osc.start(now);
+      lfo.start(now);
+
+      this.remoteSirens.set(id, { osc, lfo, gain });
+    } else {
+      existing.gain.gain.setTargetAtTime(volume, now, 0.1);
+    }
+  }
+
+  // Stop and clean up any remote horn/siren nodes for a player who left
+  // (disconnected, or otherwise dropped out of range permanently).
+  public clearRemotePlayerSounds(id: string) {
+    this.updateRemoteHorn(id, false, false, 0);
+    this.updateRemoteSiren(id, false, 0);
+  }
+
+  // Stop every remote player's horn/siren, e.g. when the whole multiplayer
+  // session drops (the server connection resets, or the socket closes).
+  public clearAllRemoteSounds() {
+    Array.from(this.remoteHorns.keys()).forEach((id) => this.updateRemoteHorn(id, false, false, 0));
+    Array.from(this.remoteSirens.keys()).forEach((id) => this.updateRemoteSiren(id, false, 0));
   }
 
   // Siren for Emergency Vehicles
