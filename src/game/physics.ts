@@ -485,10 +485,19 @@ export class PhysicsEngine {
           const overlapX = halfW - Math.abs(v1.x - b.x);
           const overlapY = halfH - Math.abs(v1.y - b.y);
 
+          // Resolved instantly, this could snap the vehicle several units in
+          // a single step whenever the overlap starts out large - most
+          // visibly when a mission swaps in a bigger truck, or a multiplayer
+          // sync/spawn drops a vehicle deep into a wall's padding. The
+          // camera follows the vehicle, so a big instant snap reads as the
+          // whole view jerking. Capping the per-step correction spreads a
+          // large overlap across a few frames instead, which still clears
+          // the wall in well under a second at 30Hz but never teleports.
+          const maxCorrection = 90 * delta;
           if (overlapX < overlapY) {
-            v1.x += (v1.x > b.x ? 1 : -1) * overlapX;
+            v1.x += (v1.x > b.x ? 1 : -1) * Math.min(overlapX, maxCorrection);
           } else {
-            v1.y += (v1.y > b.y ? 1 : -1) * overlapY;
+            v1.y += (v1.y > b.y ? 1 : -1) * Math.min(overlapY, maxCorrection);
           }
 
           const impactSpeed = Math.abs(v1.speed);

@@ -424,8 +424,14 @@ export default function App() {
           pixiCanvas = document.createElement('canvas');
           pixiCanvas.className = canvas.className;
           pixiCanvas.setAttribute('aria-hidden', 'true');
+          // Stay invisible - and leave the still-working Canvas fallback
+          // showing - until Pixi has actually drawn a frame. Hiding the
+          // fallback immediately (as before) revealed Pixi's WebGL clear
+          // color (opaque black, set for the health probe below) for
+          // however long init and the first draw took: a black flash on
+          // every load.
+          pixiCanvas.style.visibility = 'hidden';
           canvas.parentElement?.insertBefore(pixiCanvas, canvas);
-          canvas.style.display = 'none';
           pixiRenderer = new PixiGameRenderer(pixiCanvas);
           rendererRef.current = pixiRenderer;
           document.body.dataset.renderer = 'pixi';
@@ -640,13 +646,28 @@ export default function App() {
         });
       }
 
+      // Reveal Pixi only once it has actually painted a frame, and hide the
+      // Canvas fallback in that same tick - two always-valid pictures swap
+      // places, instead of a black WebGL clear color showing through early.
+      if (
+        pixiCanvas &&
+        pixiCanvas.style.visibility === 'hidden' &&
+        pixiCanvas.dataset.pixiStatus === 'rendered'
+      ) {
+        pixiCanvas.style.visibility = '';
+        canvas.style.display = 'none';
+      }
+
       // 9. Render Canvas Scene
+      // visibility:hidden (unlike display:none) still reports real layout
+      // dimensions, so this is accurate even before the reveal above.
+      const activeCanvas = pixiCanvas || canvas;
       if (rendererRef.current) {
         rendererRef.current.zoom = zoomRef.current;
         rendererRef.current.frameDelta = delta;
         rendererRef.current.render(
-          canvas.clientWidth || window.innerWidth,
-          canvas.clientHeight || window.innerHeight,
+          activeCanvas.clientWidth || window.innerWidth,
+          activeCanvas.clientHeight || window.innerHeight,
           cityMapRef.current,
           v,
           char,
