@@ -1,8 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Truck, Users, Wrench, Briefcase, Moon, Volume2, Loader2 } from 'lucide-react';
+import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Loader2 } from 'lucide-react';
 
 interface MainMenuProps {
   isTouchDevice: boolean;
+  isMuted: boolean;
+  volume: number;
+  onToggleMute: () => void;
+  onVolumeChange: (volume: number) => void;
   onPlay: () => void;
 }
 
@@ -73,7 +77,14 @@ function useHumanCheck() {
   return { ready, blocked };
 }
 
-export const MainMenu: React.FC<MainMenuProps> = ({ isTouchDevice, onPlay }) => {
+export const MainMenu: React.FC<MainMenuProps> = ({
+  isTouchDevice,
+  isMuted,
+  volume,
+  onToggleMute,
+  onVolumeChange,
+  onPlay,
+}) => {
   const { ready, blocked } = useHumanCheck();
   const tips = isTouchDevice ? TIPS_TOUCH : TIPS_DESKTOP;
   const [tipIndex, setTipIndex] = useState(0);
@@ -140,6 +151,37 @@ export const MainMenu: React.FC<MainMenuProps> = ({ isTouchDevice, onPlay }) => 
             </>
           )}
         </button>
+
+        {/* Sound settings */}
+        <section className="w-full max-w-xs rounded-2xl border border-slate-800 bg-slate-900/80 p-4 text-left">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-slate-200">
+              {isMuted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4 text-cyan-400" />}
+              Звук
+            </h2>
+            <button
+              type="button"
+              onClick={onToggleMute}
+              className="rounded-lg border border-slate-700 px-2 py-1 text-xs font-mono text-slate-300 transition hover:border-cyan-500 hover:text-cyan-300"
+              aria-pressed={isMuted}
+            >
+              {isMuted ? 'Включить' : 'Выключить'}
+            </button>
+          </div>
+          <label className="block text-xs text-slate-400" htmlFor="main-menu-volume">
+            Громкость: <span className="font-mono text-slate-200">{Math.round(volume * 100)}%</span>
+          </label>
+          <input
+            id="main-menu-volume"
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={volume}
+            onChange={(event) => onVolumeChange(Number(event.target.value))}
+            className="mt-2 w-full accent-cyan-400"
+          />
+        </section>
 
         {/* Rotating tip */}
         <div

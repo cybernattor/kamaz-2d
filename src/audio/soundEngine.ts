@@ -3,6 +3,7 @@
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
+  private volume: number = 1;
   private masterGain: GainNode | null = null;
   
   // Continuous sound nodes
@@ -38,7 +39,7 @@ class SoundEngine {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AudioCtx();
       this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 0.35, this.ctx.currentTime);
+      this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 0.35 * this.volume, this.ctx.currentTime);
       this.masterGain.connect(this.ctx.destination);
 
       // Create white noise buffer for tire squeals, crashes, and hydrants
@@ -58,7 +59,18 @@ class SoundEngine {
   public setMuted(muted: boolean) {
     this.isMuted = muted;
     if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setValueAtTime(muted ? 0 : 0.35, this.ctx.currentTime);
+      this.masterGain.gain.setValueAtTime(muted ? 0 : 0.35 * this.volume, this.ctx.currentTime);
+    }
+  }
+
+  public setVolume(volume: number) {
+    this.volume = Math.min(1, Math.max(0, volume));
+    if (this.masterGain && this.ctx) {
+      this.masterGain.gain.setTargetAtTime(
+        this.isMuted ? 0 : 0.35 * this.volume,
+        this.ctx.currentTime,
+        0.03,
+      );
     }
   }
 

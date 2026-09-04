@@ -155,6 +155,7 @@ export default function App() {
   const [pedCount, setPedCount] = useState<number>(40);
   const [isNight, setIsNight] = useState<boolean>(preferencesRef.current.isNight);
   const [isMuted, setIsMuted] = useState<boolean>(preferencesRef.current.muted);
+  const [volume, setVolume] = useState<number>(preferencesRef.current.volume);
   const [zoom, setZoom] = useState<number>(preferencesRef.current.zoom);
   // The render loop reads these through refs. Putting them in the effect's
   // dependency list would tear down the WebGL renderer - and re-upload the
@@ -199,8 +200,10 @@ export default function App() {
   // server-assigned; the saved nickname is merely a preferred display name.
   useEffect(() => {
     sound.setMuted(isMuted);
+    sound.setVolume(volume);
     saveUserPreferences({
       muted: isMuted,
+      volume,
       zoom,
       isNight,
       playerName,
@@ -208,7 +211,7 @@ export default function App() {
       vehicleType: playerVehicleRef.current.type,
       vehicleColor: playerVehicleRef.current.color,
     });
-  }, [isMuted, zoom, isNight, playerName, mpRoomId]);
+  }, [isMuted, volume, zoom, isNight, playerName, mpRoomId]);
 
   // Initialize Multiplayer Client — deferred until Play is pressed, so
   // sitting on the start screen doesn't spawn the player into the room for
@@ -864,6 +867,7 @@ export default function App() {
     };
     saveUserPreferences({
       muted: isMuted,
+      volume,
       zoom,
       isNight,
       playerName,
@@ -950,6 +954,10 @@ export default function App() {
       {!gameStarted && !webglUnavailable && (
         <MainMenu
           isTouchDevice={isTouchDevice}
+          isMuted={isMuted}
+          volume={volume}
+          onToggleMute={() => setIsMuted((current) => !current)}
+          onVolumeChange={setVolume}
           onPlay={() => {
             sound.init();
             setGameStarted(true);

@@ -2,6 +2,7 @@ export const USER_PREFERENCES_STORAGE_KEY = 'kamaz-city-simulator.preferences.v1
 
 export interface UserPreferences {
   muted: boolean;
+  volume: number;
   zoom: number;
   isNight: boolean;
   playerName?: string;
@@ -10,7 +11,7 @@ export interface UserPreferences {
   vehicleColor?: string;
 }
 
-const DEFAULT_PREFERENCES: UserPreferences = { muted: false, zoom: 1, isNight: false };
+const DEFAULT_PREFERENCES: UserPreferences = { muted: false, volume: 1, zoom: 1, isNight: false };
 
 function getStorage(): Storage | null {
   try {
@@ -30,11 +31,15 @@ export function loadUserPreferences(): UserPreferences {
     if (typeof value !== 'object' || value === null) return DEFAULT_PREFERENCES;
     const muted = (value as { muted?: unknown }).muted;
     const savedValue = value as Record<string, unknown>;
+    const volume = typeof savedValue.volume === 'number' && Number.isFinite(savedValue.volume)
+      ? Math.min(1, Math.max(0, savedValue.volume))
+      : DEFAULT_PREFERENCES.volume;
     const zoom = typeof savedValue.zoom === 'number' && Number.isFinite(savedValue.zoom)
       ? Math.min(1.5, Math.max(0.6, savedValue.zoom))
       : DEFAULT_PREFERENCES.zoom;
     return {
       muted: typeof muted === 'boolean' ? muted : DEFAULT_PREFERENCES.muted,
+      volume,
       zoom,
       isNight: typeof savedValue.isNight === 'boolean' ? savedValue.isNight : DEFAULT_PREFERENCES.isNight,
       playerName: typeof savedValue.playerName === 'string' ? savedValue.playerName.slice(0, 18) : undefined,
