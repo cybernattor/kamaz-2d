@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Loader2 } from 'lucide-react';
+import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Loader2, Settings } from 'lucide-react';
 
 interface MainMenuProps {
   isTouchDevice: boolean;
@@ -88,6 +88,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const { ready, blocked } = useHumanCheck();
   const tips = isTouchDevice ? TIPS_TOUCH : TIPS_DESKTOP;
   const [tipIndex, setTipIndex] = useState(0);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     const id = setInterval(() => setTipIndex((i) => (i + 1) % tips.length), 4000);
@@ -152,37 +153,6 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           )}
         </button>
 
-        {/* Sound settings */}
-        <section className="w-full max-w-xs rounded-2xl border border-slate-800 bg-slate-900/80 p-4 text-left">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-bold text-slate-200">
-              {isMuted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4 text-cyan-400" />}
-              Звук
-            </h2>
-            <button
-              type="button"
-              onClick={onToggleMute}
-              className="rounded-lg border border-slate-700 px-2 py-1 text-xs font-mono text-slate-300 transition hover:border-cyan-500 hover:text-cyan-300"
-              aria-pressed={isMuted}
-            >
-              {isMuted ? 'Включить' : 'Выключить'}
-            </button>
-          </div>
-          <label className="block text-xs text-slate-400" htmlFor="main-menu-volume">
-            Громкость: <span className="font-mono text-slate-200">{Math.round(volume * 100)}%</span>
-          </label>
-          <input
-            id="main-menu-volume"
-            type="range"
-            min="0"
-            max="1"
-            step="0.05"
-            value={volume}
-            onChange={(event) => onVolumeChange(Number(event.target.value))}
-            className="mt-2 w-full accent-cyan-400"
-          />
-        </section>
-
         {/* Rotating tip */}
         <div
           key={tipIndex}
@@ -195,6 +165,49 @@ export const MainMenu: React.FC<MainMenuProps> = ({
         <p className="text-[10px] text-slate-600 font-mono">
           Работает прямо в браузере — ничего скачивать не нужно
         </p>
+      </div>
+
+      <div className="absolute bottom-4 right-4 flex flex-col items-end gap-2 sm:bottom-6 sm:right-6">
+        {showSettings && (
+          <section className="w-64 rounded-2xl border border-slate-700 bg-slate-900/95 p-4 text-left shadow-2xl shadow-black/40">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="flex items-center gap-2 text-sm font-bold text-slate-200">
+                {isMuted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4 text-cyan-400" />}
+                Звук
+              </h2>
+              <button
+                type="button"
+                onClick={onToggleMute}
+                className="rounded-lg border border-slate-700 px-2 py-1 text-xs font-mono text-slate-300 transition hover:border-cyan-500 hover:text-cyan-300"
+                aria-pressed={isMuted}
+              >
+                {isMuted ? 'Включить' : 'Выключить'}
+              </button>
+            </div>
+            <label className="block text-xs text-slate-400" htmlFor="main-menu-volume">
+              Громкость: <span className="font-mono text-slate-200">{Math.round(volume * 100)}%</span>
+            </label>
+            <input
+              id="main-menu-volume"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={volume}
+              onChange={(event) => onVolumeChange(Number(event.target.value))}
+              className="mt-2 w-full accent-cyan-400"
+            />
+          </section>
+        )}
+        <button
+          type="button"
+          onClick={() => setShowSettings((current) => !current)}
+          aria-expanded={showSettings}
+          className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-2 text-sm font-bold text-slate-300 shadow-lg transition hover:border-cyan-500 hover:text-cyan-300"
+        >
+          <Settings className="h-4 w-4" />
+          Настройки
+        </button>
       </div>
     </div>
   );
