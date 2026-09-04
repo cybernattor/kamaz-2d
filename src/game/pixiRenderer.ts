@@ -25,6 +25,7 @@ import { nameColorForId } from './nameGenerator';
 type EntityView = {
   container: Container;
   sprite?: Sprite;
+  steeringWheels?: Container;
   indicator?: Sprite;
   indicatorKey?: string;
 };
@@ -53,6 +54,13 @@ const createEntityView = (layer: Container, texture?: Texture): EntityView => {
   if (sprite) container.addChild(sprite);
   layer.addChild(container);
   return { container, sprite };
+};
+
+const createSteeringWheelLayer = (layer: Container) => {
+  const steeringWheels = new Container();
+  steeringWheels.addChild(new Graphics(), new Graphics());
+  layer.addChild(steeringWheels);
+  return steeringWheels;
 };
 
 /**
@@ -580,6 +588,8 @@ export class PixiGameRenderer {
     view.container.position.set(vehicle.x, vehicle.y);
     view.container.rotation = vehicle.angle;
     if (view.sprite) view.sprite.texture = this.getVehicleTexture(vehicle);
+    if (!view.steeringWheels) view.steeringWheels = createSteeringWheelLayer(view.container);
+    this.updateSteeringWheels(view.steeringWheels, vehicle);
     const indicatorKey = `${vehicle.type}:${vehicle.headlights}:${vehicle.isBraking}:${vehicle.turnSignal}:${vehicle.isCrashed ? 1 : 0}:${Math.floor(Date.now() / 350) % 2}:${Math.floor(Date.now() / 150) % 2}`;
     if (!view.indicator) {
       view.indicator = new Sprite(this.getVehicleIndicatorTexture(vehicle));
@@ -589,6 +599,19 @@ export class PixiGameRenderer {
     } else if (view.indicatorKey !== indicatorKey) {
       view.indicator.texture = this.getVehicleIndicatorTexture(vehicle);
       view.indicatorKey = indicatorKey;
+    }
+  }
+
+  private updateSteeringWheels(layer: Container, vehicle: VehicleInstance) {
+    const config = VEHICLE_CONFIGS[vehicle.type] || VEHICLE_CONFIGS.sedan;
+    const frontAxleX = (config.length / 2) * 0.65;
+    const halfWidth = config.width / 2;
+    const wheels = layer.children as Graphics[];
+    for (const [index, wheel] of wheels.entries()) {
+      wheel.clear();
+      wheel.rect(-5, -2, 10, 4).fill(0x090d16);
+      wheel.position.set(frontAxleX, index === 0 ? -halfWidth - 1 : halfWidth + 1);
+      wheel.rotation = vehicle.steeringAngle;
     }
   }
 
@@ -866,9 +889,7 @@ export class PixiGameRenderer {
 
     const wheelColor = 0x111827;
     graphics.rect(-halfLength * 0.58, -halfWidth - 3, 12, 6).fill(wheelColor);
-    graphics.rect(halfLength * 0.38, -halfWidth - 3, 12, 6).fill(wheelColor);
     graphics.rect(-halfLength * 0.58, halfWidth - 3, 12, 6).fill(wheelColor);
-    graphics.rect(halfLength * 0.38, halfWidth - 3, 12, 6).fill(wheelColor);
 
     // Each class gets one strong top-down cue that survives the normal game
     // zoom. The scene is too dense for fussy detail: silhouette and livery

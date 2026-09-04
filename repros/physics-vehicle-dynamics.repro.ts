@@ -1,5 +1,7 @@
 import { VEHICLE_CONFIGS } from '../src/game/vehicleConfigs';
 import { integrateVehicleSpeed } from '../src/game/vehicleDynamics';
+import { PhysicsEngine } from '../src/game/physics';
+import { VehicleInstance } from '../src/types';
 
 const DELTA = 1 / 60;
 
@@ -50,7 +52,67 @@ function testReverseRequiresStopping() {
   if (speed >= -0.1) throw new Error('reverse input never engaged after stopping');
 }
 
+function testSteeringNeedsForwardMotion() {
+  const physics = new PhysicsEngine();
+  const vehicle: VehicleInstance = {
+    id: 'steering-test',
+    type: 'sedan',
+    x: 1000,
+    y: 1000,
+    angle: 0,
+    speed: 0,
+    steeringAngle: 0,
+    angularVelocity: 0,
+    color: '#fff',
+    health: 100,
+    maxHealth: 100,
+    headlights: 0,
+    turnSignal: 'none',
+    isBraking: false,
+    isReversing: false,
+    isHonking: false,
+    isSiren: false,
+    isPlayer: true,
+    smokeTimer: 0,
+  };
+  physics.updatePlayerVehicle(vehicle, {
+    throttle: false,
+    brake: false,
+    reverse: false,
+    steerLeft: true,
+    steerRight: false,
+    handbrake: false,
+  }, DELTA);
+  if (vehicle.angle !== 0 || vehicle.angularVelocity !== 0) {
+    throw new Error('stationary vehicle rotated without forward motion');
+  }
+
+  vehicle.speed = 1;
+  physics.updatePlayerVehicle(vehicle, {
+    throttle: false,
+    brake: false,
+    reverse: false,
+    steerLeft: true,
+    steerRight: false,
+    handbrake: false,
+  }, DELTA);
+  const lowSpeedYaw = Math.abs(vehicle.angularVelocity);
+  vehicle.speed = 10;
+  physics.updatePlayerVehicle(vehicle, {
+    throttle: false,
+    brake: false,
+    reverse: false,
+    steerLeft: true,
+    steerRight: false,
+    handbrake: false,
+  }, DELTA);
+  if (lowSpeedYaw <= 0 || Math.abs(vehicle.angularVelocity) <= lowSpeedYaw) {
+    throw new Error('steering yaw is not proportional to forward speed');
+  }
+}
+
 testAllVehiclesReachTheirWorkingTopSpeed();
 testClassDifferencesAndBraking();
 testReverseRequiresStopping();
+testSteeringNeedsForwardMotion();
 console.log('vehicle-dynamics: OK');

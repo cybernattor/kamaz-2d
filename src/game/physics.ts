@@ -86,8 +86,8 @@ export class PhysicsEngine {
 
     // 1. Dynamic Steering Kinematics (Responsive & Speed-sensitive)
     const speedKmh = Math.abs(vehicle.speed) * 3.6;
-    const speedFactor = Math.max(0.55, 1.0 - (speedKmh / (config.maxSpeed * 1.4)) * 0.45);
-    const maxSteerAngle = 0.72 * speedFactor * dazeFactor; // Up to ~41 degrees at low/medium speeds
+    const speedFactor = Math.max(0.7, 1.0 - (speedKmh / (config.maxSpeed * 1.4)) * 0.3);
+    const maxSteerAngle = 0.62 * speedFactor * dazeFactor; // About 35 degrees at low speed
     const steerSpeed = 6.8;
     let targetSteer = 0;
 
@@ -124,20 +124,18 @@ export class PhysicsEngine {
     vehicle.isBraking = Boolean((inputs.brake || inputs.handbrake) && speedBeforeDynamics > 0.05);
     vehicle.isReversing = vehicle.speed < -0.3;
 
-    // 4. Angular Velocity & Direct Responsive Turning
+    // 4. Bicycle-model turning. A car cannot rotate around its centre while
+    // stationary: yaw comes from forward travel through the front axle.
     const isMoving = Math.abs(vehicle.speed) > 0.01;
     if (isMoving) {
       const speedSign = vehicle.speed >= 0 ? 1 : -1;
-      const turnEff = Math.max(0.45, Math.min(1.2, Math.abs(vehicle.speed) / 6.0));
-      const driftMultiplier = isDrifting ? (config.id === 'sports' ? 2.3 : 1.7) : 1.0;
-      
-      // Responsive angular velocity
-      vehicle.angularVelocity = vehicle.steeringAngle * speedSign * turnEff * (config.turnSpeed * 1.15) * driftMultiplier;
+      const wheelbase = config.length * 2.4;
+      const driftMultiplier = isDrifting ? (config.id === 'sports' ? 1.5 : 1.2) : 1.0;
+      // Position integration advances speed by 60 world units per second;
+      // the same scale is used here so the turning radius stays consistent.
+      vehicle.angularVelocity = (Math.abs(vehicle.speed) * 60 / wheelbase)
+        * Math.tan(vehicle.steeringAngle) * speedSign * driftMultiplier;
       vehicle.angle += vehicle.angularVelocity * delta;
-    } else if (Math.abs(vehicle.steeringAngle) > 0.08 && (inputs.throttle || inputs.reverse)) {
-      // Gentle rotation when beginning to move from standstill
-      const rollDir = inputs.throttle ? 1 : -1;
-      vehicle.angle += vehicle.steeringAngle * rollDir * 1.4 * delta;
     } else {
       vehicle.angularVelocity = 0;
     }
