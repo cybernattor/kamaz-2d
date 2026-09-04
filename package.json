@@ -32,6 +32,7 @@
     "test:pedestrian:building-life": "tsx repros/pedestrian-building-life.repro.ts",
     "test:pedestrian:orientation": "tsx repros/pedestrian-orientation.repro.ts",
     "test:physics-particles": "tsx repros/physics-particle-api.repro.ts",
+    "test:physics-dynamics": "tsx repros/physics-vehicle-dynamics.repro.ts",
     "test:physics-crash": "tsx repros/physics-crash-consequences.repro.ts",
     "test:fixed-step": "tsx repros/fixed-step.repro.ts",
     "test:app:lazy-engines": "tsx repros/app-lazy-engines.repro.ts",

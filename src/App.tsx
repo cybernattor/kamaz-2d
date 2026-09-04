@@ -155,7 +155,7 @@ export default function App() {
   const [pedCount, setPedCount] = useState<number>(40);
   const [isNight, setIsNight] = useState<boolean>(preferencesRef.current.isNight);
   const [isMuted, setIsMuted] = useState<boolean>(preferencesRef.current.muted);
-  const [volume, setVolume] = useState<number>(preferencesRef.current.volume);
+  const [volume, setVolume] = useState<number>(preferencesRef.current.volume ?? 1);
   const [zoom, setZoom] = useState<number>(preferencesRef.current.zoom);
   // The render loop reads these through refs. Putting them in the effect's
   // dependency list would tear down the WebGL renderer - and re-upload the

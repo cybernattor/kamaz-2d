@@ -7,7 +7,8 @@ import {
   SkidMark,
   VehicleInstance,
 } from '../types';
-import { KMH_TO_WORLD_SPEED, VEHICLE_CONFIGS } from './vehicleConfigs';
+import { VEHICLE_CONFIGS } from './vehicleConfigs';
+import { integrateVehicleSpeed } from './vehicleDynamics';
 import { Building, CityMap, WORLD_SIZE } from './cityMap';
 import { sound } from '../audio/soundEngine';
 import { SpatialHash } from './spatialHash';
@@ -98,54 +99,30 @@ export class PhysicsEngine {
     // Smooth steering centering with fast response
     vehicle.steeringAngle += (targetSteer - vehicle.steeringAngle) * steerSpeed * delta;
 
-    // 2. Engine Acceleration & Power Delivery
-    let accel = 0;
-    const maxForward = config.maxSpeed * KMH_TO_WORLD_SPEED;
-    const maxReverse = -config.reverseSpeed * KMH_TO_WORLD_SPEED;
-    const speedRatio = Math.max(0, vehicle.speed / (maxForward || 1));
-
     // Damaged engine power loss
     const healthPowerFactor = vehicle.health < 30 ? 0.6 : vehicle.health < 60 ? 0.85 : 1.0;
+    const dynamicsConfig = healthPowerFactor === 1 && dazeFactor === 1
+      ? config
+      : {
+        ...config,
+        acceleration: config.acceleration * healthPowerFactor * dazeFactor,
+        reverseAcceleration: config.reverseAcceleration * healthPowerFactor * dazeFactor,
+      };
 
-    if (!isDestroyed) {
-      if (inputs.throttle) {
-        // High torque pull at low-mid range for heavy trucks
-        const torque = Math.max(0.2, 1.0 - Math.pow(speedRatio, 1.3));
-        accel = config.acceleration * KMH_TO_WORLD_SPEED * torque * healthPowerFactor * dazeFactor;
-      } else if (inputs.reverse || (inputs.brake && vehicle.speed <= 0.3)) {
-        accel = -config.reverseSpeed * KMH_TO_WORLD_SPEED * 0.9 * healthPowerFactor;
-      }
+    // 2. Longitudinal dynamics: traction, air drag, engine braking and brakes.
+    // The integrator clamps delta so a stalled tab cannot teleport the vehicle.
+    const speedBeforeDynamics = vehicle.speed;
+    if (isDestroyed) {
+      vehicle.speed = integrateVehicleSpeed(vehicle.speed, dynamicsConfig, { brake: true }, delta);
+    } else {
+      vehicle.speed = integrateVehicleSpeed(vehicle.speed, dynamicsConfig, inputs, delta);
     }
-
-    // 3. Foot Brake & Handbrake Physics
-    // Drag is time-based so handling remains stable at different frame rates.
-    let rollingResistance = Math.exp(-1.0 * delta);
     vehicle.isBraking = false;
-    vehicle.isReversing = vehicle.speed < -0.3;
-
-    if (inputs.brake && vehicle.speed > 0.3) {
-      vehicle.isBraking = true;
-      vehicle.speed -= config.braking * KMH_TO_WORLD_SPEED * 1.2 * delta;
-      if (vehicle.speed < 0) vehicle.speed = 0;
-    }
 
     // Handbrake drift physics
-    let isDrifting = false;
-    if (inputs.handbrake) {
-      vehicle.isBraking = true;
-      rollingResistance = Math.exp(-4.5 * delta) * config.driftFriction;
-      if (Math.abs(vehicle.speed) > 2.5) {
-        isDrifting = true;
-      }
-    }
-
-    // Apply engine acceleration & natural friction
-    vehicle.speed += accel * delta;
-    vehicle.speed *= rollingResistance;
-
-    // Enforce top speeds
-    if (vehicle.speed > maxForward) vehicle.speed = maxForward;
-    if (vehicle.speed < maxReverse) vehicle.speed = maxReverse;
+    const isDrifting = Boolean(inputs.handbrake && Math.abs(speedBeforeDynamics) > 2.5);
+    vehicle.isBraking = Boolean((inputs.brake || inputs.handbrake) && speedBeforeDynamics > 0.05);
+    vehicle.isReversing = vehicle.speed < -0.3;
 
     // 4. Angular Velocity & Direct Responsive Turning
     const isMoving = Math.abs(vehicle.speed) > 0.01;
@@ -173,7 +150,7 @@ export class PhysicsEngine {
     if (isDrifting) {
       const lateralDirX = -Math.sin(vehicle.angle);
       const lateralDirY = Math.cos(vehicle.angle);
-      const slipAmount = vehicle.steeringAngle * vehicle.speed * 0.32;
+      const slipAmount = vehicle.steeringAngle * vehicle.speed * (1 - config.grip) * 1.6;
       forwardVx += lateralDirX * slipAmount;
       forwardVy += lateralDirY * slipAmount;
     }

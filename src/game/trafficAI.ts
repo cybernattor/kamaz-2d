@@ -1,6 +1,7 @@
 import { Pedestrian, VehicleInstance } from '../types';
 import { CityMap, Intersection, RoadSegment, WORLD_SIZE } from './cityMap';
 import { KMH_TO_WORLD_SPEED, VEHICLE_CONFIGS } from './vehicleConfigs';
+import { integrateVehicleSpeed } from './vehicleDynamics';
 import { SpatialHash } from './spatialHash';
 
 export type TrafficDirection = 'north' | 'south' | 'east' | 'west';
@@ -1613,24 +1614,15 @@ export class TrafficAI {
         }
       }
 
-      // 9. Speed Integration
-      if (shouldStop) {
-        car.isBraking = true;
-        car.speed = Math.max(0, car.speed - config.braking * KMH_TO_WORLD_SPEED * 1.6 * delta);
-      } else {
-        car.isBraking = false;
-        if (car.speed < targetSpeed) {
-          car.speed = Math.min(
-            targetSpeed,
-            car.speed + config.acceleration * KMH_TO_WORLD_SPEED * 0.9 * delta
-          );
-        } else if (car.speed > targetSpeed) {
-          car.speed = Math.max(
-            targetSpeed,
-            car.speed - config.braking * KMH_TO_WORLD_SPEED * 0.5 * delta
-          );
-        }
-      }
+      // 9. Speed Integration. NPCs use the same physically-scaled
+      // acceleration/braking model as the player and only target the road
+      // cruise speed chosen by the traffic controller.
+      const speedBeforeIntegration = car.speed;
+      car.speed = integrateVehicleSpeed(car.speed, config, {
+        targetSpeed: shouldStop ? 0 : targetSpeed,
+      }, delta);
+      car.isBraking = shouldStop || car.speed < speedBeforeIntegration - 0.01;
+      car.isReversing = car.speed < -0.3;
 
       // 10. Straight Road Driving & Active Lane-Centering
       if (!ai.isTurning) {

@@ -18,10 +18,18 @@ export interface VehicleConfig {
   length: number;
   mass: number;
   maxSpeed: number; // km/h
+  /** Longitudinal acceleration in m/s². */
   acceleration: number;
+  /** Emergency braking deceleration in m/s². */
   braking: number;
   turnSpeed: number;
   reverseSpeed: number;
+  reverseAcceleration: number;
+  rollingResistance: number;
+  airResistance: number;
+  engineBraking: number;
+  /** Tire grip coefficient used by lateral slip (0..1). */
+  grip: number;
   driftFriction: number;
   durability: number;
   defaultColor: string;

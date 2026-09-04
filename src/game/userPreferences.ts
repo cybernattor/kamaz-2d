@@ -2,7 +2,7 @@ export const USER_PREFERENCES_STORAGE_KEY = 'kamaz-city-simulator.preferences.v1
 
 export interface UserPreferences {
   muted: boolean;
-  volume: number;
+  volume?: number;
   zoom: number;
   isNight: boolean;
   playerName?: string;

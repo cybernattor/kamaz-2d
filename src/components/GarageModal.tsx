@@ -133,8 +133,8 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               <div className="bg-slate-900/80 p-3 rounded-lg border border-slate-800 flex items-center gap-3">
                 <Zap className="w-5 h-5 text-amber-400" />
                 <div>
-                  <div className="text-[10px] text-slate-400 uppercase font-mono">Разгон / Мощность</div>
-                  <div className="text-base font-bold text-slate-100 font-mono">{selectedConfig.acceleration * 10} л.с.</div>
+                <div className="text-[10px] text-slate-400 uppercase font-mono">Ускорение</div>
+                  <div className="text-base font-bold text-slate-100 font-mono">{selectedConfig.acceleration.toFixed(1)} м/с²</div>
                 </div>
               </div>
 
