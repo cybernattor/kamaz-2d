@@ -52,6 +52,16 @@ function testReverseRequiresStopping() {
   if (speed >= -0.1) throw new Error('reverse input never engaged after stopping');
 }
 
+function testBrakeAndReverseInputPriority() {
+  const config = VEHICLE_CONFIGS.kamaz_dump;
+  const afterBrake = integrateVehicleSpeed(20, config, { throttle: true, brake: true, reverse: true }, DELTA);
+  if (afterBrake >= 20) throw new Error('brake did not override throttle for a heavy vehicle');
+
+  let speed = 20;
+  for (let i = 0; i < 240; i += 1) speed = integrateVehicleSpeed(speed, config, { throttle: true, brake: true, reverse: true }, DELTA);
+  if (speed >= -0.1) throw new Error('holding the brake/reverse pedal never engaged reverse after stopping');
+}
+
 function testSteeringNeedsForwardMotion() {
   const physics = new PhysicsEngine();
   const vehicle: VehicleInstance = {
@@ -114,5 +124,6 @@ function testSteeringNeedsForwardMotion() {
 testAllVehiclesReachTheirWorkingTopSpeed();
 testClassDifferencesAndBraking();
 testReverseRequiresStopping();
+testBrakeAndReverseInputPriority();
 testSteeringNeedsForwardMotion();
 console.log('vehicle-dynamics: OK');

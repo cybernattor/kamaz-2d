@@ -46,6 +46,8 @@ export function integrateVehicleSpeed(
     return speed;
   }
 
+  // Brake input always wins over throttle. The keyboard/mobile control maps
+  // the same pedal to brake while moving forward and reverse after stopping.
   if (input.brake && speed > 0) {
     return Math.max(0, speed - config.braking * (input.handbrake ? 1.25 : 1) * delta);
   }
@@ -54,15 +56,17 @@ export function integrateVehicleSpeed(
     return Math.max(0, speed - config.braking * 0.8 * delta);
   }
 
-  if (input.throttle && speed >= 0) {
-    const drive = config.acceleration * Math.max(0.2, 1 - Math.pow(forwardRatio, 1.35));
-    return Math.min(maxForward, Math.max(0, speed + (drive - resistance) * delta));
-  }
-
+  // Reverse is checked before throttle so a still-held W cannot immediately
+  // cancel the gear change at standstill.
   if (input.reverse && speed <= 0.05) {
     const reverseRatio = Math.min(1, Math.abs(speed) / Math.max(maxReverse, 0.1));
     const drive = config.reverseAcceleration * Math.max(0.18, 1 - reverseRatio);
     return Math.max(-maxReverse, speed - Math.max(0, drive - resistance) * delta);
+  }
+
+  if (input.throttle && speed >= 0 && !input.brake && !input.reverse) {
+    const drive = config.acceleration * Math.max(0.2, 1 - Math.pow(forwardRatio, 1.35));
+    return Math.min(maxForward, Math.max(0, speed + (drive - resistance) * delta));
   }
 
   const coastDeceleration = resistance + (speed > 0 ? config.engineBraking : 0);
