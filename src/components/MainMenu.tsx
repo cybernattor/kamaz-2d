@@ -204,9 +204,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
         </p>
       </div>
 
-      <div className="absolute bottom-4 right-4 flex flex-col items-end gap-2 sm:bottom-6 sm:right-6">
+      <div className="fixed bottom-4 right-4 z-10 flex max-w-[calc(100vw-2rem)] flex-col items-end gap-2 pb-[env(safe-area-inset-bottom)] sm:bottom-6 sm:right-6 sm:pb-0">
         {showSettings && (
-          <section className="w-64 rounded-2xl border border-slate-700 bg-slate-900/95 p-4 text-left shadow-2xl shadow-black/40">
+          <section className="w-64 max-w-full max-h-[calc(100dvh-6rem)] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900/95 p-4 text-left shadow-2xl shadow-black/40">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="flex items-center gap-2 text-sm font-bold text-slate-200">
                 {isMuted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4 text-cyan-400" />}
