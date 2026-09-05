@@ -186,14 +186,15 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput, onSte
         <div className="flex flex-col gap-2 items-center">
           <PedalButton
             id="vbtn-brake"
-            label="Тормоз"
+            label="Тормоз (удержите после остановки — задний ход)"
             haptic={12}
             onActiveChange={(active) => onInput('brake', active)}
-            className="w-16 h-14 rounded-2xl bg-rose-700/85 border border-rose-600 text-white flex flex-col items-center justify-center active:bg-rose-600 shadow-xl font-mono text-[10px] font-bold"
+            className="w-16 h-16 rounded-2xl bg-rose-700/85 border border-rose-600 text-white flex flex-col items-center justify-center gap-0.5 active:bg-rose-600 shadow-xl font-mono text-[9px] font-bold leading-tight"
             icon={
               <>
                 <ArrowDown className="w-5 h-5" />
                 <span>ТОРМОЗ</span>
+                <span className="text-[7px] text-rose-200 font-normal">держи → назад</span>
               </>
             }
           />

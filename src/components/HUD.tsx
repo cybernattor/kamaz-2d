@@ -434,7 +434,10 @@ export const HUD: React.FC<HUDProps> = ({
             <div className="px-2.5 pb-2.5 max-h-40 sm:max-h-none overflow-y-auto sm:overflow-visible space-y-1 border-t border-slate-800 pt-2">
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                   <div>
-                    <span className="text-amber-400 font-bold">WASD / 🠹🠸🠺🠻</span> Управление
+                    <span className="text-amber-400 font-bold">[W/↑]</span> Газ, <span className="text-amber-400 font-bold">[A/D]</span> Руль
+                  </div>
+                  <div>
+                    <span className="text-amber-400 font-bold">[S/↓]</span> Тормоз, удержи — задний ход
                   </div>
                   <div>
                     <span className="text-amber-400 font-bold">[E]</span> Сесть / Выйти
