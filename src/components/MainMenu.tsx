@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Loader2, Settings } from 'lucide-react';
+import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Loader2, Settings, RotateCw } from 'lucide-react';
 
 interface MainMenuProps {
   isTouchDevice: boolean;
@@ -19,11 +19,11 @@ const TIPS_DESKTOP = [
 ];
 
 const TIPS_TOUCH = [
-  'Джойстик снизу слева — руль, газ и тормоз',
-  'Кнопка [E] в HUD — сесть в машину или выйти из неё',
+  'Круг слева — руль, педали справа — газ и тормоз',
+  'Кнопка с флажком — ручник и дрифт, рядом — сигнал',
+  'Кнопка в HUD со значком машины — сесть или выйти из неё',
   'Берите задания через кнопку в HUD и зарабатывайте деньги',
   'В гараже можно сменить машину и её цвет',
-  'Кнопка сигнала — погудеть или включить сирену в спецтехнике',
 ];
 
 /**
@@ -77,6 +77,29 @@ function useHumanCheck() {
   return { ready, blocked };
 }
 
+/**
+ * The whole touch control scheme (wheel bottom-left, pedals bottom-right)
+ * is laid out for a wide, short viewport. Nothing elsewhere in the app
+ * checks orientation, so a player who opens the game in portrait (a
+ * phone's default) gets a cramped view with no warning until they're
+ * already driving. Surface it here instead, before Play is even pressed.
+ */
+function useIsPortrait() {
+  const [isPortrait, setIsPortrait] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(orientation: portrait)').matches
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia('(orientation: portrait)');
+    const update = () => setIsPortrait(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  return isPortrait;
+}
+
 export const MainMenu: React.FC<MainMenuProps> = ({
   isTouchDevice,
   isMuted,
@@ -86,6 +109,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onPlay,
 }) => {
   const { ready, blocked } = useHumanCheck();
+  const isPortrait = useIsPortrait();
   const tips = isTouchDevice ? TIPS_TOUCH : TIPS_DESKTOP;
   const [tipIndex, setTipIndex] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
@@ -101,6 +125,17 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       className="absolute inset-0 z-[150] flex items-center justify-center bg-slate-950/97 backdrop-blur-sm p-4 select-none"
     >
       <div className="w-full max-w-md flex flex-col items-center text-center gap-5">
+        {/* Orientation nudge: the wheel/pedals layout needs a wide, short
+            viewport. A firm suggestion beats letting the player discover a
+            cramped control layout mid-drive. Not a hard gate — some tablets
+            are perfectly playable in portrait. */}
+        {isTouchDevice && isPortrait && (
+          <div className="w-full flex items-center gap-2 text-xs text-amber-300 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
+            <RotateCw className="w-4 h-4 shrink-0 animate-pulse" />
+            <span>Поверните телефон горизонтально — руль и педали рассчитаны на альбомную ориентацию</span>
+          </div>
+        )}
+
         {/* Title */}
         <div className="flex flex-col items-center gap-2">
           <div className="p-3 rounded-2xl bg-gradient-to-br from-orange-500 to-amber-600 shadow-2xl shadow-orange-950/50">
