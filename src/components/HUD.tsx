@@ -114,12 +114,14 @@ export const HUD: React.FC<HUDProps> = ({
   // screen's height.
   const [showControlsHelp, setShowControlsHelp] = useState(false);
 
-  // The bottom band is reserved for the on-screen wheel/pedals, so it must
-  // track whether this is a touch device, not viewport width - most phones
-  // in landscape (the game's primary orientation) are already wider than
-  // the `sm` breakpoint, which used to drop this padding to almost nothing
-  // and let the instrument pod sit directly under the gas/brake pedals.
-  const bottomReserveClass = isTouchDevice ? 'pb-32' : 'pb-2.5';
+  // On touch, every instrument/action that used to live in a tall bottom
+  // "instrument pod" has moved into the compact quickbar right under the
+  // top bar (see hud-touch-quickbar below) - the bottom band renders
+  // nothing at all for touch now, so the on-screen wheel/pedals (a
+  // separately-positioned fixed layer) never compete with HUD chrome for
+  // the same strip of screen. Only a small gap is kept so toast messages
+  // don't visually kiss the pedals.
+  const bottomReserveClass = isTouchDevice ? 'pb-4' : 'pb-2.5';
 
   return (
     <div
@@ -251,6 +253,107 @@ export const HUD: React.FC<HUDProps> = ({
         </div>
       </div>
 
+      {/* Touch-only compact quickbar: speed/gear/condition readout plus the
+          actions that used to live in the big bottom instrument pod
+          (enter/exit, headlights, turn signals, hazard, repair). Sitting
+          right under the top bar instead of stacked above the pedals keeps
+          the entire bottom strip free for the wheel/pedals and stops the
+          HUD from eating into the driving view. */}
+      {isTouchDevice && (
+        <div
+          id="hud-touch-quickbar"
+          className="pointer-events-auto flex flex-wrap items-center gap-1.5"
+        >
+          <div className="flex items-center gap-1.5 bg-slate-950/95 border border-slate-700/80 rounded-lg px-2.5 py-1.5 shadow-lg font-mono">
+            <span className="text-base font-extrabold text-cyan-400">{speedKmH}</span>
+            <span className="text-[10px] text-slate-500">км/ч</span>
+            <span className="h-3 w-px bg-slate-700 mx-0.5" />
+            <span className="text-xs font-bold text-amber-400">{gear}</span>
+            <span className="h-3 w-px bg-slate-700 mx-0.5" />
+            <span
+              className={`text-xs font-bold ${
+                condition > 60 ? 'text-emerald-400' : condition > 30 ? 'text-amber-400' : 'text-rose-500'
+              }`}
+            >
+              {condition}%
+            </span>
+          </div>
+
+          <button
+            id="btn-enter-exit-vehicle"
+            onClick={onToggleEnterExitVehicle}
+            className="min-h-10 flex items-center gap-1 px-2.5 rounded-lg bg-amber-500 active:bg-amber-400 text-black font-bold shadow-lg transition-transform active:scale-95 cursor-pointer"
+            aria-label={inVehicle ? 'Выйти из авто' : 'Сесть в авто'}
+          >
+            <Car className="w-4 h-4" />
+            <span className="text-[10px] font-mono">{inVehicle ? 'Выйти' : 'Сесть'}</span>
+          </button>
+
+          <button
+            id="btn-toggle-headlights"
+            onClick={onToggleHeadlights}
+            className={`min-h-10 min-w-10 flex items-center justify-center rounded-lg border cursor-pointer ${
+              playerVehicle && playerVehicle.headlights > 0
+                ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
+                : 'bg-slate-800/80 text-slate-300 border-slate-700'
+            }`}
+            aria-label="Фары"
+            title="Фары"
+          >
+            <Lightbulb className="w-4 h-4" />
+          </button>
+
+          <button
+            id="btn-turn-left"
+            onClick={() => onToggleTurnSignal('left')}
+            className={`min-h-10 min-w-10 flex items-center justify-center rounded-lg border font-bold cursor-pointer ${
+              playerVehicle?.turnSignal === 'left'
+                ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
+                : 'bg-slate-800/80 text-slate-300 border-slate-700'
+            }`}
+            aria-label="Левый поворотник"
+          >
+            ←
+          </button>
+
+          <button
+            id="btn-turn-right"
+            onClick={() => onToggleTurnSignal('right')}
+            className={`min-h-10 min-w-10 flex items-center justify-center rounded-lg border font-bold cursor-pointer ${
+              playerVehicle?.turnSignal === 'right'
+                ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
+                : 'bg-slate-800/80 text-slate-300 border-slate-700'
+            }`}
+            aria-label="Правый поворотник"
+          >
+            →
+          </button>
+
+          <button
+            id="btn-hazard-lights"
+            onClick={() => onToggleTurnSignal('hazard')}
+            className={`min-h-10 min-w-10 flex items-center justify-center rounded-lg border cursor-pointer ${
+              playerVehicle?.turnSignal === 'hazard'
+                ? 'bg-red-600 text-white border-red-400 animate-pulse'
+                : 'bg-slate-800/80 text-slate-300 border-slate-700'
+            }`}
+            aria-label="Аварийка"
+          >
+            ⚠
+          </button>
+
+          <button
+            id="btn-repair-car"
+            onClick={onRepairVehicle}
+            className="min-h-10 min-w-10 flex items-center justify-center rounded-lg bg-slate-800/80 text-cyan-300 border border-cyan-500/30 cursor-pointer"
+            aria-label="Ремонт авто"
+            title="Ремонт авто"
+          >
+            <Wrench className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* 2. MIDDLE AREA (Active Mission HUD Overlay) */}
       {activeMission && (
         <div className="flex w-full">
@@ -293,12 +396,15 @@ export const HUD: React.FC<HUDProps> = ({
         <NetworkFeed events={feedEvents} />
       </div>
 
-      {/* 3. BOTTOM ROW: Controls Legend (Left) + Driving Instrument Pod (Right - Exact Screenshot Match!) */}
+      {/* 3. BOTTOM ROW: Controls Legend (Left) + Driving Instrument Pod (Right)
+          Desktop only - on touch this whole block (and the tall instrument
+          pod that used to collide with the wheel/pedals) is replaced by the
+          compact hud-touch-quickbar above, keeping the bottom strip clear
+          for the on-screen driving controls. */}
+      {!isTouchDevice && (
       <div
         id="hud-bottom-row"
-        className={`flex ${isTouchDevice ? 'flex-col' : 'flex-col sm:flex-row'} items-stretch ${
-          isTouchDevice ? '' : 'sm:items-end'
-        } justify-between gap-2 w-full pointer-events-auto`}
+        className="flex flex-col sm:flex-row items-stretch sm:items-end justify-between gap-2 w-full pointer-events-auto"
       >
         {/* Bottom-Left Controls Helper — collapsed to one line by default;
             the full key reference is a click away instead of a permanent
@@ -317,11 +423,7 @@ export const HUD: React.FC<HUDProps> = ({
               <span className="text-xs font-bold text-cyan-400 tracking-wider uppercase shrink-0">Управление</span>
               {!showControlsHelp && (
                 <span className="text-slate-400 truncate">
-                  {isTouchDevice ? (
-                    <>Руль + педали снизу · <span className="text-amber-400 font-bold">[E]</span> сесть/выйти</>
-                  ) : (
-                    <><span className="text-amber-400 font-bold">WASD</span> ехать · <span className="text-amber-400 font-bold">[E]</span> сесть/выйти · <span className="text-amber-400 font-bold">[H]</span> гудок</>
-                  )}
+                  <span className="text-amber-400 font-bold">WASD</span> ехать · <span className="text-amber-400 font-bold">[E]</span> сесть/выйти · <span className="text-amber-400 font-bold">[H]</span> гудок
                 </span>
               )}
             </span>
@@ -330,13 +432,6 @@ export const HUD: React.FC<HUDProps> = ({
 
           {showControlsHelp && (
             <div className="px-2.5 pb-2.5 max-h-40 sm:max-h-none overflow-y-auto sm:overflow-visible space-y-1 border-t border-slate-800 pt-2">
-              {isTouchDevice ? (
-                <div className="grid grid-cols-1 gap-y-1">
-                  <div>Круг слева — руль (тяните пальцем влево/вправо)</div>
-                  <div>Педали справа — газ и тормоз, кнопки рядом — ручник и сигнал</div>
-                  <div>Кнопка <span className="text-amber-400 font-bold">[E]</span> в HUD — сесть / выйти</div>
-                </div>
-              ) : (
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                   <div>
                     <span className="text-amber-400 font-bold">WASD / 🠹🠸🠺🠻</span> Управление
@@ -369,13 +464,12 @@ export const HUD: React.FC<HUDProps> = ({
                     <span className="text-amber-400 font-bold">[T]</span> День / Ночь
                   </div>
                 </div>
-              )}
             </div>
           )}
         </div>
 
         {/* Bottom-Right Driving Actions + Instrument Pod */}
-        <div className={`flex flex-col items-stretch gap-1.5 w-full ${isTouchDevice ? '' : 'sm:w-80'} max-w-full`}>
+        <div className="flex flex-col items-stretch gap-1.5 w-full sm:w-80 max-w-full">
           <button
             id="btn-enter-exit-vehicle"
             onClick={onToggleEnterExitVehicle}
@@ -519,6 +613,7 @@ export const HUD: React.FC<HUDProps> = ({
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 };
