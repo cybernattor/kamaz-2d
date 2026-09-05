@@ -114,8 +114,18 @@ export const HUD: React.FC<HUDProps> = ({
   // screen's height.
   const [showControlsHelp, setShowControlsHelp] = useState(false);
 
+  // The bottom band is reserved for the on-screen wheel/pedals, so it must
+  // track whether this is a touch device, not viewport width - most phones
+  // in landscape (the game's primary orientation) are already wider than
+  // the `sm` breakpoint, which used to drop this padding to almost nothing
+  // and let the instrument pod sit directly under the gas/brake pedals.
+  const bottomReserveClass = isTouchDevice ? 'pb-32' : 'pb-2.5';
+
   return (
-    <div id="game-hud-root" className="absolute inset-0 pointer-events-none flex flex-col justify-between gap-1.5 p-2 pb-24 sm:p-2.5 sm:pb-2.5 select-none overflow-hidden font-sans">
+    <div
+      id="game-hud-root"
+      className={`absolute inset-0 pointer-events-none flex flex-col justify-between gap-1.5 p-2 sm:p-2.5 ${bottomReserveClass} select-none overflow-hidden font-sans`}
+    >
       {/* 1. TOP STATUS BAR — a single compact row; the minimap reserves space on the right */}
       <div id="hud-top-bar" className="relative w-full pointer-events-auto">
         <div className="flex flex-wrap items-center gap-1.5 pr-[126px]">
@@ -147,7 +157,7 @@ export const HUD: React.FC<HUDProps> = ({
             <button
               id="btn-toggle-day-night"
               onClick={onToggleDayNight}
-              className="min-h-8 min-w-8 flex items-center justify-center rounded-md bg-slate-800/80 hover:bg-slate-700 transition-colors cursor-pointer"
+              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8 min-w-8'} flex items-center justify-center rounded-md bg-slate-800/80 hover:bg-slate-700 transition-colors cursor-pointer`}
               title={isNight ? 'Ночь — переключить [T]' : 'День — переключить [T]'}
               aria-label="Переключить день или ночь"
             >
@@ -157,7 +167,7 @@ export const HUD: React.FC<HUDProps> = ({
             <button
               id="btn-toggle-audio"
               onClick={onToggleMute}
-              className="min-h-8 min-w-8 flex items-center justify-center rounded-md bg-slate-800/80 hover:bg-slate-700 transition-colors cursor-pointer"
+              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8 min-w-8'} flex items-center justify-center rounded-md bg-slate-800/80 hover:bg-slate-700 transition-colors cursor-pointer`}
               title={isMuted ? 'Звук выключен — включить' : 'Звук включён — выключить'}
               aria-label="Переключить звук"
             >
@@ -168,7 +178,7 @@ export const HUD: React.FC<HUDProps> = ({
               <button
                 id="btn-zoom-out"
                 onClick={onZoomOut}
-                className="min-h-8 min-w-7 flex items-center justify-center text-slate-300 hover:text-cyan-400 cursor-pointer"
+                className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8 min-w-7'} flex items-center justify-center text-slate-300 hover:text-cyan-400 cursor-pointer`}
                 title="Уменьшить [-]"
               >
                 <ZoomOut className="w-3.5 h-3.5" />
@@ -177,7 +187,7 @@ export const HUD: React.FC<HUDProps> = ({
               <button
                 id="btn-zoom-in"
                 onClick={onZoomIn}
-                className="min-h-8 min-w-7 flex items-center justify-center text-slate-300 hover:text-cyan-400 cursor-pointer"
+                className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8 min-w-7'} flex items-center justify-center text-slate-300 hover:text-cyan-400 cursor-pointer`}
                 title="Увеличить [+]"
               >
                 <ZoomIn className="w-3.5 h-3.5" />
@@ -284,7 +294,12 @@ export const HUD: React.FC<HUDProps> = ({
       </div>
 
       {/* 3. BOTTOM ROW: Controls Legend (Left) + Driving Instrument Pod (Right - Exact Screenshot Match!) */}
-      <div id="hud-bottom-row" className="flex flex-col sm:flex-row items-stretch sm:items-end justify-between gap-2 w-full pointer-events-auto">
+      <div
+        id="hud-bottom-row"
+        className={`flex ${isTouchDevice ? 'flex-col' : 'flex-col sm:flex-row'} items-stretch ${
+          isTouchDevice ? '' : 'sm:items-end'
+        } justify-between gap-2 w-full pointer-events-auto`}
+      >
         {/* Bottom-Left Controls Helper — collapsed to one line by default;
             the full key reference is a click away instead of a permanent
             block of space. */}
@@ -303,7 +318,7 @@ export const HUD: React.FC<HUDProps> = ({
               {!showControlsHelp && (
                 <span className="text-slate-400 truncate">
                   {isTouchDevice ? (
-                    <>Джойстик — руль/газ · <span className="text-amber-400 font-bold">[E]</span> сесть/выйти</>
+                    <>Руль + педали снизу · <span className="text-amber-400 font-bold">[E]</span> сесть/выйти</>
                   ) : (
                     <><span className="text-amber-400 font-bold">WASD</span> ехать · <span className="text-amber-400 font-bold">[E]</span> сесть/выйти · <span className="text-amber-400 font-bold">[H]</span> гудок</>
                   )}
@@ -317,7 +332,8 @@ export const HUD: React.FC<HUDProps> = ({
             <div className="px-2.5 pb-2.5 max-h-40 sm:max-h-none overflow-y-auto sm:overflow-visible space-y-1 border-t border-slate-800 pt-2">
               {isTouchDevice ? (
                 <div className="grid grid-cols-1 gap-y-1">
-                  <div>Джойстик снизу — руль, газ и тормоз</div>
+                  <div>Круг слева — руль (тяните пальцем влево/вправо)</div>
+                  <div>Педали справа — газ и тормоз, кнопки рядом — ручник и сигнал</div>
                   <div>Кнопка <span className="text-amber-400 font-bold">[E]</span> в HUD — сесть / выйти</div>
                 </div>
               ) : (
@@ -359,7 +375,7 @@ export const HUD: React.FC<HUDProps> = ({
         </div>
 
         {/* Bottom-Right Driving Actions + Instrument Pod */}
-        <div className="flex flex-col items-stretch gap-1.5 w-full sm:w-80 max-w-full">
+        <div className={`flex flex-col items-stretch gap-1.5 w-full ${isTouchDevice ? '' : 'sm:w-80'} max-w-full`}>
           <button
             id="btn-enter-exit-vehicle"
             onClick={onToggleEnterExitVehicle}

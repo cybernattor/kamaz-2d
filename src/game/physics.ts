@@ -72,6 +72,10 @@ export class PhysicsEngine {
       steerLeft: boolean;
       steerRight: boolean;
       handbrake: boolean;
+      // Continuous -1..1 steering (touch wheel/joystick). When provided it
+      // overrides the digital steerLeft/steerRight pair so touch input gets
+      // proportional steering instead of full-lock-or-nothing.
+      steerAxis?: number;
     },
     delta: number
   ) {
@@ -92,8 +96,12 @@ export class PhysicsEngine {
     let targetSteer = 0;
 
     if (!isDestroyed) {
-      if (inputs.steerLeft) targetSteer -= maxSteerAngle;
-      if (inputs.steerRight) targetSteer += maxSteerAngle;
+      if (typeof inputs.steerAxis === 'number') {
+        targetSteer = Math.max(-1, Math.min(1, inputs.steerAxis)) * maxSteerAngle;
+      } else {
+        if (inputs.steerLeft) targetSteer -= maxSteerAngle;
+        if (inputs.steerRight) targetSteer += maxSteerAngle;
+      }
     }
 
     // Smooth steering centering with fast response
