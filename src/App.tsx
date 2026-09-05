@@ -146,6 +146,9 @@ export default function App() {
 
   // Input states
   const keysRef = useRef<{ [key: string]: boolean }>({});
+  // Analog steering from the touch wheel: -1..1 while held, null when the
+  // wheel isn't being touched (steering then falls back to the A/D keys).
+  const steerAxisRef = useRef<number | null>(null);
 
   // UI Reactive States (for HUD & Modals)
   const [streetName, setStreetName] = useState<string>('Главная Автобаза КАМАЗ');
@@ -325,6 +328,7 @@ export default function App() {
   useEffect(() => {
     const clearActiveInputs = () => {
       keysRef.current = {};
+      steerAxisRef.current = null;
       playerVehicleRef.current.isHonking = false;
       sound.stopHorn();
     };
@@ -606,6 +610,7 @@ export default function App() {
             steerLeft: Boolean(keys['KeyA'] || keys['ArrowLeft']),
             steerRight: Boolean(keys['KeyD'] || keys['ArrowRight']),
             handbrake: Boolean(keys['ShiftLeft'] || keys['ShiftRight']),
+            steerAxis: steerAxisRef.current,
           },
           delta
         );
@@ -906,17 +911,15 @@ export default function App() {
     }
   };
 
-  // Handle Touch/Virtual inputs
+  // Handle Touch/Virtual inputs (pedals, handbrake, horn — discrete)
   const handleVirtualInput = (
-    action: 'throttle' | 'brake' | 'steerLeft' | 'steerRight' | 'handbrake' | 'horn',
+    action: 'throttle' | 'brake' | 'handbrake' | 'horn',
     active: boolean
   ) => {
     sound.init();
     const map: Record<string, string> = {
       throttle: 'KeyW',
       brake: 'Space',
-      steerLeft: 'KeyA',
-      steerRight: 'KeyD',
       handbrake: 'ShiftLeft',
       horn: 'KeyH',
     };
@@ -929,6 +932,11 @@ export default function App() {
         else sound.stopHorn();
       }
     }
+  };
+
+  // Handle Touch steering wheel (analog, -1..1, or null when let go)
+  const handleVirtualSteer = (value: number | null) => {
+    steerAxisRef.current = value;
   };
 
   return (
@@ -1003,7 +1011,9 @@ export default function App() {
       />
 
       {/* Virtual Controls for mobile touch */}
-      {gameStarted && isTouchDevice && <VirtualControls onInput={handleVirtualInput} />}
+      {gameStarted && isTouchDevice && (
+        <VirtualControls onInput={handleVirtualInput} onSteerChange={handleVirtualSteer} />
+      )}
 
       {/* Modals */}
       {showGarage && (

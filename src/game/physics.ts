@@ -72,6 +72,10 @@ export class PhysicsEngine {
       steerLeft: boolean;
       steerRight: boolean;
       handbrake: boolean;
+      // Continuous -1..1 steering (touch wheel/joystick). When provided it
+      // overrides the digital steerLeft/steerRight pair so touch input gets
+      // proportional steering instead of full-lock-or-nothing.
+      steerAxis?: number;
     },
     delta: number
   ) {
@@ -92,8 +96,12 @@ export class PhysicsEngine {
     let targetSteer = 0;
 
     if (!isDestroyed) {
-      if (inputs.steerLeft) targetSteer -= maxSteerAngle;
-      if (inputs.steerRight) targetSteer += maxSteerAngle;
+      if (typeof inputs.steerAxis === 'number') {
+        targetSteer = Math.max(-1, Math.min(1, inputs.steerAxis)) * maxSteerAngle;
+      } else {
+        if (inputs.steerLeft) targetSteer -= maxSteerAngle;
+        if (inputs.steerRight) targetSteer += maxSteerAngle;
+      }
     }
 
     // Smooth steering centering with fast response
@@ -161,7 +169,20 @@ export class PhysicsEngine {
     vehicle.y = Math.max(80, Math.min(WORLD_SIZE - 80, vehicle.y));
 
     // 7. Skid marks & Tire sounds
-    const isHardBraking = inputs.brake && vehicle.speed > 10;
+    // Tires only screech when braking force actually threatens to overrun
+    // available grip - not on every ordinary brake press. The old check
+    // (`inputs.brake && speed > 10`) fired for *any* vehicle at highway
+    // speed regardless of how hard its brakes actually bite, so a heavy
+    // truck's gentle multi-second stop played the same lock-up screech as
+    // a sports car's emergency stop the whole way down: the sound promised
+    // an instant stop the physics never delivered. Comparing configured
+    // braking deceleration against a grip-derived ceiling means vehicles
+    // with brakes strong relative to their tires' grip (sports cars,
+    // hot hatches) skid under hard braking, while heavier/grippier
+    // vehicles (trucks, buses) decelerate quietly, matching how their
+    // stopping distance actually feels.
+    const gripBrakingCeiling = 9 * config.grip;
+    const isHardBraking = inputs.brake && vehicle.speed > 10 && config.braking > gripBrakingCeiling * 0.85;
     if (isDrifting || isHardBraking) {
       this.generateSkidMarks(vehicle, config.width, config.length);
       sound.updateSkid(true, isDrifting ? 0.85 : 0.45);
