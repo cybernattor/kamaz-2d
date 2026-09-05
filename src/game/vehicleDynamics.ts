@@ -46,14 +46,14 @@ export function integrateVehicleSpeed(
     return speed;
   }
 
-  // Brake input always wins over throttle. The keyboard/mobile control maps
-  // the same pedal to brake while moving forward and reverse after stopping.
+  // Brake input always wins over throttle. Reverse is a separate input and
+  // never acts as a brake while the vehicle is moving forward.
   if (input.brake && speed > 0) {
     return Math.max(0, speed - config.braking * (input.handbrake ? 1.25 : 1) * delta);
   }
 
   if (input.reverse && speed > 0.05) {
-    return Math.max(0, speed - config.braking * 0.8 * delta);
+    return moveToward(speed, 0, resistance * delta);
   }
 
   // Reverse is checked before throttle so a still-held W cannot immediately

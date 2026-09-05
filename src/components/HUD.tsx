@@ -305,7 +305,7 @@ export const HUD: React.FC<HUDProps> = ({
                   {isTouchDevice ? (
                     <>Джойстик — руль/газ · <span className="text-amber-400 font-bold">[E]</span> сесть/выйти</>
                   ) : (
-                    <><span className="text-amber-400 font-bold">WASD</span> ехать · <span className="text-amber-400 font-bold">[E]</span> сесть/выйти · <span className="text-amber-400 font-bold">[H]</span> гудок</>
+                    <><span className="text-amber-400 font-bold">[W]</span> газ · <span className="text-amber-400 font-bold">[S]</span> назад · <span className="text-amber-400 font-bold">[Space]</span> тормоз · <span className="text-amber-400 font-bold">[Shift]</span> ручник</>
                   )}
                 </span>
               )}

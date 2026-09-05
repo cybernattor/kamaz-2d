@@ -47,19 +47,35 @@ function testReverseRequiresStopping() {
   const stillForward = integrateVehicleSpeed(8, config, { reverse: true }, DELTA);
   if (stillForward <= 0) throw new Error('reverse input changed direction without stopping');
 
-  let speed = stillForward;
+  let speed = 0;
   for (let i = 0; i < 300; i += 1) speed = integrateVehicleSpeed(speed, config, { reverse: true }, DELTA);
-  if (speed >= -0.1) throw new Error('reverse input never engaged after stopping');
+  if (speed >= -0.1) throw new Error('reverse input did not engage from a stopped vehicle');
 }
 
 function testBrakeAndReverseInputPriority() {
   const config = VEHICLE_CONFIGS.kamaz_dump;
-  const afterBrake = integrateVehicleSpeed(20, config, { throttle: true, brake: true, reverse: true }, DELTA);
+  const afterBrake = integrateVehicleSpeed(20, config, { throttle: true, brake: true }, DELTA);
   if (afterBrake >= 20) throw new Error('brake did not override throttle for a heavy vehicle');
 
   let speed = 20;
-  for (let i = 0; i < 240; i += 1) speed = integrateVehicleSpeed(speed, config, { throttle: true, brake: true, reverse: true }, DELTA);
-  if (speed >= -0.1) throw new Error('holding the brake/reverse pedal never engaged reverse after stopping');
+  for (let i = 0; i < 240; i += 1) speed = integrateVehicleSpeed(speed, config, { brake: true }, DELTA);
+  if (speed !== 0) throw new Error('brake did not bring a heavy vehicle to a full stop');
+  speed = integrateVehicleSpeed(speed, config, { reverse: true }, DELTA);
+  if (speed >= -0.01) throw new Error('reverse did not engage from a stopped vehicle');
+}
+
+function testSpaceBrakeWorksForEveryVehicle() {
+  for (const config of Object.values(VEHICLE_CONFIGS)) {
+    let speed = config.maxSpeed / 3.6;
+    let seconds = 0;
+    while (speed > 0 && seconds < 20) {
+      speed = integrateVehicleSpeed(speed, config, { brake: true }, DELTA);
+      seconds += DELTA;
+    }
+    if (speed > 0 || seconds > 12) {
+      throw new Error(`${config.id} did not stop with Space brake in reasonable time`);
+    }
+  }
 }
 
 function testSteeringNeedsForwardMotion() {
@@ -125,5 +141,6 @@ testAllVehiclesReachTheirWorkingTopSpeed();
 testClassDifferencesAndBraking();
 testReverseRequiresStopping();
 testBrakeAndReverseInputPriority();
+testSpaceBrakeWorksForEveryVehicle();
 testSteeringNeedsForwardMotion();
 console.log('vehicle-dynamics: OK');

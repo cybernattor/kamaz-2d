@@ -601,11 +601,11 @@ export default function App() {
           v,
           {
             throttle: Boolean(keys['KeyW'] || keys['ArrowUp']),
-            brake: Boolean(keys['KeyS'] || keys['ArrowDown']),
-            reverse: Boolean(keys['KeyS'] || keys['ArrowDown']),
+            brake: Boolean(keys['Space'] || keys['ArrowDown']),
+            reverse: Boolean(keys['KeyS']),
             steerLeft: Boolean(keys['KeyA'] || keys['ArrowLeft']),
             steerRight: Boolean(keys['KeyD'] || keys['ArrowRight']),
-            handbrake: Boolean(keys['Space']),
+            handbrake: Boolean(keys['ShiftLeft'] || keys['ShiftRight']),
           },
           delta
         );
@@ -914,10 +914,10 @@ export default function App() {
     sound.init();
     const map: Record<string, string> = {
       throttle: 'KeyW',
-      brake: 'KeyS',
+      brake: 'Space',
       steerLeft: 'KeyA',
       steerRight: 'KeyD',
-      handbrake: 'Space',
+      handbrake: 'ShiftLeft',
       horn: 'KeyH',
     };
     const code = map[action];
