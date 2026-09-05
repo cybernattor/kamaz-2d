@@ -1137,12 +1137,24 @@ export class GameRenderer {
     if (blinkOn && v.turnSignal !== 'none') {
       ctx.fillStyle = '#f59e0b'; // Amber
       if (v.turnSignal === 'left' || v.turnSignal === 'hazard') {
+        ctx.globalAlpha = 0.2;
+        ctx.beginPath();
+        ctx.arc(halfL - 2, -halfW + 2, 6, 0, Math.PI * 2);
+        ctx.arc(-halfL + 2, -halfW + 2, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
         ctx.beginPath();
         ctx.arc(halfL - 2, -halfW + 2, 4, 0, Math.PI * 2);
         ctx.arc(-halfL + 2, -halfW + 2, 4, 0, Math.PI * 2);
         ctx.fill();
       }
       if (v.turnSignal === 'right' || v.turnSignal === 'hazard') {
+        ctx.globalAlpha = 0.2;
+        ctx.beginPath();
+        ctx.arc(halfL - 2, halfW - 2, 6, 0, Math.PI * 2);
+        ctx.arc(-halfL + 2, halfW - 2, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
         ctx.beginPath();
         ctx.arc(halfL - 2, halfW - 2, 4, 0, Math.PI * 2);
         ctx.arc(-halfL + 2, halfW - 2, 4, 0, Math.PI * 2);

@@ -967,11 +967,6 @@ export class PixiGameRenderer {
     graphics.rect(-halfLength - 1, -halfWidth + 2, 3, 5).fill(vehicle.isBraking ? 0xef4444 : 0x7f1d1d);
     graphics.rect(-halfLength - 1, halfWidth - 7, 3, 5).fill(vehicle.isBraking ? 0xef4444 : 0x7f1d1d);
 
-    if (vehicle.turnSignal !== 'none' && Math.floor(Date.now() / 350) % 2 === 0) {
-      const signal = 0xf59e0b;
-      if (vehicle.turnSignal === 'left' || vehicle.turnSignal === 'hazard') graphics.circle(halfLength - 2, -halfWidth + 2, 4).fill(signal);
-      if (vehicle.turnSignal === 'right' || vehicle.turnSignal === 'hazard') graphics.circle(halfLength - 2, halfWidth - 2, 4).fill(signal);
-    }
     if (vehicle.isCrashed) graphics.rect(-halfLength - 4, -halfWidth - 4, config.length + 8, config.width + 8).stroke({ color: 0xf97316, width: 3 });
   }
 
@@ -985,8 +980,16 @@ export class PixiGameRenderer {
     graphics.rect(-halfLength - 1, -halfWidth + 2, 3, 5).fill(vehicle.isBraking ? 0xef4444 : 0x7f1d1d);
     graphics.rect(-halfLength - 1, halfWidth - 7, 3, 5).fill(vehicle.isBraking ? 0xef4444 : 0x7f1d1d);
     if (vehicle.turnSignal !== 'none' && Math.floor(Date.now() / 350) % 2 === 0) {
-      if (vehicle.turnSignal === 'left' || vehicle.turnSignal === 'hazard') graphics.circle(halfLength - 2, -halfWidth + 2, 4).fill(0xf59e0b);
-      if (vehicle.turnSignal === 'right' || vehicle.turnSignal === 'hazard') graphics.circle(halfLength - 2, halfWidth - 2, 4).fill(0xf59e0b);
+      const left = vehicle.turnSignal === 'left' || vehicle.turnSignal === 'hazard';
+      const right = vehicle.turnSignal === 'right' || vehicle.turnSignal === 'hazard';
+      const signalPoints = [
+        ...(left ? [[halfLength - 2, -halfWidth + 2], [-halfLength + 2, -halfWidth + 2]] : []),
+        ...(right ? [[halfLength - 2, halfWidth - 2], [-halfLength + 2, halfWidth - 2]] : []),
+      ];
+      for (const [x, y] of signalPoints) {
+        graphics.circle(x, y, 6).fill({ color: 0xf59e0b, alpha: 0.2 });
+        graphics.circle(x, y, 4).fill(0xf59e0b);
+      }
     }
     // Emergency lightbar. Ambulance/police used to render as a plain sedan
     // with no siren livery at all — this is what actually identifies them

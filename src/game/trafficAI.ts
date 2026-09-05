@@ -164,6 +164,14 @@ export class TrafficAI {
     const roadType = ped.walkRoadType || 'vertical';
     const roadCoord = ped.walkRoadCoord ?? (roadType === 'vertical' ? this.gridX[0] : this.gridY[0]);
     const side = ped.walkSide ?? this.sidewalkOffset;
+    // A resident can only enter a building from the sidewalk side they are
+    // already walking on. Sending them to a building across the carriageway
+    // made the toDoor segment cut through traffic and fail the sidewalk
+    // invariant.
+    const onSameSide = roadType === 'vertical'
+      ? (building.x - roadCoord) * side > 0
+      : (building.y - roadCoord) * side > 0;
+    if (!onSameSide) return false;
     const entrance = this.getBuildingEntrance(building.id, roadType, roadCoord, side);
     if (!entrance) return false;
     ped.buildingId = building.id;
@@ -380,6 +388,22 @@ export class TrafficAI {
     preferredSide?: -1 | 1
   ) {
     if (ai.adaptiveBypass || ai.groundBypass || ai.isTurning) return false;
+
+    // Only one NPC may actively change lanes on a road segment at a time.
+    // Two independently selected bypass arcs can otherwise converge on the
+    // same lane and make the spacing solver push one car back every frame.
+    const competingBypass = this.npcVehicles.some((other) => {
+      if (other.id === car.id || other.health <= 0 || other.isCrashed) return false;
+      const otherAi = this.aiData.get(other.id);
+      return Boolean(
+        otherAi?.adaptiveBypass &&
+          otherAi.roadType === ai.roadType &&
+          otherAi.roadCoord === ai.roadCoord &&
+          otherAi.direction === ai.direction &&
+          Math.hypot(other.x - car.x, other.y - car.y) < 220
+      );
+    });
+    if (competingBypass) return false;
 
     const forwardX = Math.cos(car.angle);
     const forwardY = Math.sin(car.angle);
@@ -622,9 +646,12 @@ export class TrafficAI {
   }
 
   private resolveNpcSpacing() {
-    // Keep the mature 16-pass queue stability, but share one broad phase and
-    // ordering for the full tick instead of rebuilding both on every pass.
-    for (let pass = 0; pass < 16; pass += 1) {
+    // Keep one broad phase and ordering for the full tick instead of rebuilding
+    // both on every pass. A bounded number of passes is enough to resolve a
+    // dense queue. Repeating a
+    // full positional correction 16 times lets lane-centering undo it on the
+    // next frame, which is the visible "dancing" oscillation near junctions.
+    for (let pass = 0; pass < 8; pass += 1) {
       for (let i = 0; i < this.npcVehicles.length; i += 1) {
         const first = this.npcVehicles[i];
         if (first.health <= 0 || first.isCrashed) continue;
@@ -667,18 +694,32 @@ export class TrafficAI {
               firstAi.laneIndex === secondAi.laneIndex &&
               firstAi.direction !== secondAi.direction
           );
+          const sameRoadDirection = Boolean(
+            firstAi && secondAi &&
+              !firstAi.isTurning && !secondAi.isTurning &&
+              firstAi.roadType === secondAi.roadType &&
+              firstAi.roadCoord === secondAi.roadCoord &&
+              firstAi.direction === secondAi.direction
+          );
           const firstRadius = Math.hypot(firstConfig.length / 2, firstConfig.width / 2);
           const secondRadius = Math.hypot(secondConfig.length / 2, secondConfig.width / 2);
           const minDistance = sameHeading
             ? (firstConfig.length + secondConfig.length) / 2 + 8
             : sameRoadOppositeLane
             ? (firstConfig.width + secondConfig.width) / 2 + 6
+            : sameRoadDirection
+            ? firstRadius + secondRadius + 10
             : firstRadius + secondRadius + 2;
           if (distance >= minDistance) continue;
 
           // Keep a small numerical buffer because several neighbouring pairs
           // can be corrected during the same pass.
-          const separation = minDistance - distance + 3;
+          const needsImmediateClearance = Boolean(
+            sameRoadDirection || firstAi?.isTurning || secondAi?.isTurning
+          );
+          const separation = needsImmediateClearance
+            ? minDistance - distance + 3
+            : Math.min(32, minDistance - distance + 3);
 
           const forwardGap = dx * Math.cos(first.angle) + dy * Math.sin(first.angle);
           const yielding = sameHeading && Math.abs(forwardGap) > 0.5
@@ -690,11 +731,27 @@ export class TrafficAI {
             const headingY = Math.sin(yielding.angle);
             yielding.x -= headingX * separation;
             yielding.y -= headingY * separation;
-          } else if (firstAi?.isTurning || secondAi?.isTurning) {
+          } else if (firstAi?.isTurning || secondAi?.isTurning || sameRoadDirection) {
             // A turning car can be moving almost perpendicular to the other
-            // car, so backing it along its current heading may not increase
-            // the gap at all. Resolve this transient conflict on the contact
-            // normal; the next frame's lane/turn controller takes over.
+            // car, and cars in neighbouring lanes need lateral separation.
+            // Backing along the heading would not increase either gap. Resolve
+            // this transient conflict on the contact normal; lane control then
+            // eases the car back instead of making it oscillate across lanes.
+            if (sameRoadDirection) {
+              const bypassing = firstAi?.adaptiveBypass ? first : secondAi?.adaptiveBypass ? second : null;
+              const bypassingAi = bypassing ? this.aiData.get(bypassing.id) : undefined;
+              if (bypassingAi?.adaptiveBypass) {
+                // The target lane became occupied after the bypass was chosen.
+                // Abort that plan and let normal queue braking take over;
+                // otherwise the waypoint controller re-enters the conflict on
+                // every frame and produces the reported dancing motion.
+                bypassingAi.adaptiveBypass = undefined;
+                bypassingAi.progressTimer = 0;
+                bypassing.turnSignal = 'none';
+                bypassing.speed = 0;
+                bypassing.isBraking = true;
+              }
+            }
             const normalX = distance > 0.001 ? dx / distance : Math.cos(yielding.angle);
             const normalY = distance > 0.001 ? dy / distance : Math.sin(yielding.angle);
             if (yielding === first) {
@@ -1519,6 +1576,24 @@ export class TrafficAI {
             if (roll < 0.32) {
               // Decide Turn: Left or Right
               const isRightTurn = roll < 0.16;
+              const occupiedByTurningNpc = this.npcVehicles.some((other) => {
+                if (other.id === car.id || other.health <= 0 || other.isCrashed) return false;
+                const otherAi = this.aiData.get(other.id);
+                return Boolean(
+                  otherAi?.isTurning &&
+                    otherAi.lastIntersectionId === inter.id &&
+                    Math.hypot(other.x - inter.x, other.y - inter.y) < 180
+                );
+              });
+              const reservedByAnotherNpc = this.intersectionReservations.get(inter.id);
+              if (occupiedByTurningNpc || (reservedByAnotherNpc && reservedByAnotherNpc !== car.id)) {
+                // Never start a second Bezier turn in the same conflict zone.
+                // Positional spacing cannot stabilize two perpendicular paths;
+                // yielding before the arc prevents the visible orbit/dance.
+                shouldStop = true;
+                targetSpeed = 0;
+                break;
+              }
               const turnResult = this.calculateIntersectionTurn(
                 inter,
                 ai.roadType,
@@ -1538,6 +1613,8 @@ export class TrafficAI {
                 ai.targetRoadCoord = turnResult.targetRoadCoord;
                 ai.targetDirection = turnResult.targetDirection;
                 car.turnSignal = isRightTurn ? 'right' : 'left';
+                this.intersectionReservations.set(inter.id, car.id);
+                this.intersectionReservationAge.set(inter.id, 0);
                 // Commit to the turn before the car reaches the Bezier arc,
                 // giving the normal brake integrator time to shed speed.
                 targetSpeed = Math.min(targetSpeed, 8);
@@ -1607,7 +1684,7 @@ export class TrafficAI {
       }
 
       // Clear intersection trigger once safely past
-      if (ai.lastIntersectionId) {
+      if (ai.lastIntersectionId && !ai.isTurning) {
         const inter = this.cityMap.intersections.find((i) => i.id === ai.lastIntersectionId);
         if (inter && Math.hypot(inter.x - car.x, inter.y - car.y) > 95) {
           ai.lastIntersectionId = undefined;
