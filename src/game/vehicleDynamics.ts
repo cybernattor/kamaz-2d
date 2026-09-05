@@ -48,8 +48,10 @@ export function integrateVehicleSpeed(
 
   // Brake input always wins over throttle. Reverse is a separate input and
   // never acts as a brake while the vehicle is moving forward.
-  if (input.brake && speed > 0) {
-    return Math.max(0, speed - config.braking * (input.handbrake ? 1.25 : 1) * delta);
+  if (input.brake && speed !== 0) {
+    // Brakes must oppose the current direction. The old forward-only clamp
+    // made Space ineffective while reversing, leaving only rolling resistance.
+    return moveToward(speed, 0, config.braking * (input.handbrake ? 1.25 : 1) * delta);
   }
 
   if (input.reverse && speed > 0.05) {

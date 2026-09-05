@@ -78,6 +78,21 @@ function testSpaceBrakeWorksForEveryVehicle() {
   }
 }
 
+function testBrakeStopsReverseMotion() {
+  const config = VEHICLE_CONFIGS.sports;
+  let speed = -config.reverseSpeed / 3.6;
+  const startingSpeed = Math.abs(speed);
+  for (let i = 0; i < 120 && speed !== 0; i += 1) {
+    speed = integrateVehicleSpeed(speed, config, { brake: true, handbrake: true }, DELTA);
+  }
+  if (speed !== 0) {
+    throw new Error(`brake and handbrake did not stop sports car from reverse speed: ${speed.toFixed(2)}`);
+  }
+  if (startingSpeed / config.braking > 2.5) {
+    throw new Error('reverse braking setup is unexpectedly slow');
+  }
+}
+
 function testSteeringNeedsForwardMotion() {
   const physics = new PhysicsEngine();
   const vehicle: VehicleInstance = {
@@ -142,5 +157,6 @@ testClassDifferencesAndBraking();
 testReverseRequiresStopping();
 testBrakeAndReverseInputPriority();
 testSpaceBrakeWorksForEveryVehicle();
+testBrakeStopsReverseMotion();
 testSteeringNeedsForwardMotion();
 console.log('vehicle-dynamics: OK');

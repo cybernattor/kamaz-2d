@@ -129,7 +129,7 @@ export class PhysicsEngine {
 
     // Handbrake drift physics
     const isDrifting = Boolean(inputs.handbrake && Math.abs(speedBeforeDynamics) > 2.5);
-    vehicle.isBraking = Boolean((inputs.brake || inputs.handbrake) && speedBeforeDynamics > 0.05);
+    vehicle.isBraking = Boolean((inputs.brake || inputs.handbrake) && Math.abs(speedBeforeDynamics) > 0.05);
     vehicle.isReversing = vehicle.speed < -0.3;
 
     // 4. Bicycle-model turning. A car cannot rotate around its centre while
@@ -182,7 +182,7 @@ export class PhysicsEngine {
     // vehicles (trucks, buses) decelerate quietly, matching how their
     // stopping distance actually feels.
     const gripBrakingCeiling = 9 * config.grip;
-    const isHardBraking = inputs.brake && vehicle.speed > 10 && config.braking > gripBrakingCeiling * 0.85;
+    const isHardBraking = inputs.brake && Math.abs(vehicle.speed) > 10 && config.braking > gripBrakingCeiling * 0.85;
     if (isDrifting || isHardBraking) {
       this.generateSkidMarks(vehicle, config.width, config.length);
       sound.updateSkid(true, isDrifting ? 0.85 : 0.45);
