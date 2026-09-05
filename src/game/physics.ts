@@ -164,9 +164,26 @@ export class PhysicsEngine {
     vehicle.x += forwardVx * 60 * delta;
     vehicle.y += forwardVy * 60 * delta;
 
-    // 6. World Bounds containment
-    vehicle.x = Math.max(80, Math.min(WORLD_SIZE - 80, vehicle.x));
-    vehicle.y = Math.max(80, Math.min(WORLD_SIZE - 80, vehicle.y));
+    // 6. World Bounds containment and edge impact response. Clamping the
+    // position alone lets the vehicle keep its full speed while pressing
+    // against the invisible map wall, unlike a building collision.
+    const worldMin = 80;
+    const worldMax = WORLD_SIZE - 80;
+    const hitWorldEdge = (
+      (vehicle.x <= worldMin && forwardVx < 0) ||
+      (vehicle.x >= worldMax && forwardVx > 0) ||
+      (vehicle.y <= worldMin && forwardVy < 0) ||
+      (vehicle.y >= worldMax && forwardVy > 0)
+    );
+    vehicle.x = Math.max(worldMin, Math.min(worldMax, vehicle.x));
+    vehicle.y = Math.max(worldMin, Math.min(worldMax, vehicle.y));
+    if (hitWorldEdge) {
+      // Keep a small, readable bounce while removing most impact energy. The
+      // next frame's normal traction model then settles the vehicle instead
+      // of allowing throttle to pin it to the boundary indefinitely.
+      vehicle.speed = -vehicle.speed * 0.12;
+      vehicle.angularVelocity *= 0.5;
+    }
 
     // 7. Skid marks & Tire sounds
     // Tires only screech when braking force actually threatens to overrun

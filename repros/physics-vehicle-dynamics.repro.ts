@@ -152,6 +152,42 @@ function testSteeringNeedsForwardMotion() {
   }
 }
 
+function testWorldEdgeDampensImpactSpeed() {
+  const physics = new PhysicsEngine();
+  const vehicle: VehicleInstance = {
+    id: 'edge-test',
+    type: 'sports',
+    x: 80.1,
+    y: 1000,
+    angle: Math.PI,
+    speed: 12,
+    steeringAngle: 0,
+    angularVelocity: 0,
+    color: '#fff',
+    health: 100,
+    maxHealth: 100,
+    headlights: 0,
+    turnSignal: 'none',
+    isBraking: false,
+    isReversing: false,
+    isHonking: false,
+    isSiren: false,
+    isPlayer: true,
+    smokeTimer: 0,
+  };
+  physics.updatePlayerVehicle(vehicle, {
+    throttle: false,
+    brake: false,
+    reverse: false,
+    steerLeft: false,
+    steerRight: false,
+    handbrake: false,
+  }, DELTA);
+  if (vehicle.x !== 80 || Math.abs(vehicle.speed) >= 2) {
+    throw new Error(`world edge did not dampen impact: x=${vehicle.x}, speed=${vehicle.speed}`);
+  }
+}
+
 testAllVehiclesReachTheirWorkingTopSpeed();
 testClassDifferencesAndBraking();
 testReverseRequiresStopping();
@@ -159,4 +195,5 @@ testBrakeAndReverseInputPriority();
 testSpaceBrakeWorksForEveryVehicle();
 testBrakeStopsReverseMotion();
 testSteeringNeedsForwardMotion();
+testWorldEdgeDampensImpactSpeed();
 console.log('vehicle-dynamics: OK');
