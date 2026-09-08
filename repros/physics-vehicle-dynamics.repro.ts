@@ -42,14 +42,20 @@ function testClassDifferencesAndBraking() {
   if (distance < 35 || distance > 100) throw new Error(`unexpected 100-0 braking distance: ${distance.toFixed(1)}m`);
 }
 
-function testReverseRequiresStopping() {
+function testReverseCanChangeDirectionWhileRolling() {
   const config = VEHICLE_CONFIGS.sedan;
   const stillForward = integrateVehicleSpeed(8, config, { reverse: true }, DELTA);
-  if (stillForward <= 0) throw new Error('reverse input changed direction without stopping');
+  if (stillForward >= 8) throw new Error('reverse input did not counter forward motion');
 
-  let speed = 0;
+  let speed = 8;
   for (let i = 0; i < 300; i += 1) speed = integrateVehicleSpeed(speed, config, { reverse: true }, DELTA);
-  if (speed >= -0.1) throw new Error('reverse input did not engage from a stopped vehicle');
+  if (speed >= -0.1) throw new Error('reverse input did not engage while rolling forward');
+
+  speed = -8;
+  const stillReverse = integrateVehicleSpeed(speed, config, { throttle: true }, DELTA);
+  if (stillReverse <= -8) throw new Error('forward throttle did not counter reverse motion');
+  for (let i = 0; i < 300; i += 1) speed = integrateVehicleSpeed(speed, config, { throttle: true }, DELTA);
+  if (speed <= 0.1) throw new Error('forward throttle did not engage while rolling backward');
 }
 
 function testBrakeAndReverseInputPriority() {
@@ -190,7 +196,7 @@ function testWorldEdgeDampensImpactSpeed() {
 
 testAllVehiclesReachTheirWorkingTopSpeed();
 testClassDifferencesAndBraking();
-testReverseRequiresStopping();
+testReverseCanChangeDirectionWhileRolling();
 testBrakeAndReverseInputPriority();
 testSpaceBrakeWorksForEveryVehicle();
 testBrakeStopsReverseMotion();

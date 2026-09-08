@@ -55,7 +55,11 @@ export function integrateVehicleSpeed(
   }
 
   if (input.reverse && speed > 0.05) {
-    return moveToward(speed, 0, resistance * delta);
+    // Reverse is an opposing drive request, not passive coasting. Apply
+    // reverse torque immediately so a moving car can change direction
+    // without waiting for a separate full-stop phase.
+    const reverseDrive = config.reverseAcceleration * 0.8 + resistance;
+    return Math.max(-maxReverse, speed - reverseDrive * delta);
   }
 
   // Reverse is checked before throttle so a still-held W cannot immediately
@@ -64,6 +68,13 @@ export function integrateVehicleSpeed(
     const reverseRatio = Math.min(1, Math.abs(speed) / Math.max(maxReverse, 0.1));
     const drive = config.reverseAcceleration * Math.max(0.18, 1 - reverseRatio);
     return Math.max(-maxReverse, speed - Math.max(0, drive - resistance) * delta);
+  }
+
+  if (input.throttle && speed < -0.05 && !input.brake && !input.reverse) {
+    // Forward throttle mirrors reverse: it counters backward motion directly
+    // and naturally crosses through zero instead of requiring a dead stop.
+    const forwardDrive = config.acceleration * 0.8 + resistance;
+    return Math.min(maxForward, speed + forwardDrive * delta);
   }
 
   if (input.throttle && speed >= 0 && !input.brake && !input.reverse) {
