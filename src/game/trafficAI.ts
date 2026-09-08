@@ -41,6 +41,15 @@ interface NPCAIExtra {
     waypoints: Array<{ x: number; y: number }>;
     waypointIndex: number;
   };
+  activity: 'driving' | 'parked';
+  driveTimer: number;
+  nextParkingIn: number;
+  parkingTimer: number;
+  parkingPoiId?: string;
+  parkingCoordinate?: number;
+  parkingSide?: -1 | 1;
+  parkingPassengers?: number;
+  abandonAfterParking: boolean;
 }
 
 export class TrafficAI {
@@ -135,6 +144,129 @@ export class TrafficAI {
     const baseline = Math.min(15, Math.max(8, config.maxSpeed * KMH_TO_WORLD_SPEED * 0.58));
     const postedLimit = road?.speedLimit;
     return postedLimit === undefined ? baseline : Math.min(baseline, postedLimit * KMH_TO_WORLD_SPEED * 0.9);
+  }
+
+  private getCurrentRoadId(ai: NPCAIExtra) {
+    const road = this.cityMap.roads.find((candidate) =>
+      candidate.roadClass === 'arterial' &&
+      Boolean(candidate.isVertical) === (ai.roadType === 'vertical') &&
+      Math.abs((ai.roadType === 'vertical' ? candidate.x1 : candidate.y1) - ai.roadCoord) < 2
+    );
+    return road?.id;
+  }
+
+  private getRouteTurn(ai: NPCAIExtra, inter: Intersection): boolean | null {
+    if (!ai.routeRoadIds.length || !ai.routeTargetPoiId) return null;
+    const currentRoadId = this.getCurrentRoadId(ai);
+    if (currentRoadId) {
+      const currentIndex = ai.routeRoadIds.indexOf(currentRoadId, Math.max(0, ai.routeIndex));
+      if (currentIndex >= 0) ai.routeIndex = currentIndex;
+    }
+    let nextRoadId = ai.routeRoadIds[ai.routeIndex + 1];
+    while (nextRoadId === currentRoadId) {
+      ai.routeIndex += 1;
+      nextRoadId = ai.routeRoadIds[ai.routeIndex + 1];
+    }
+    if (!nextRoadId) return null;
+    const nextRoad = this.cityMap.roads.find((road) => road.id === nextRoadId);
+    if (!nextRoad) return null;
+    if (Boolean(nextRoad.isVertical) === (ai.roadType === 'vertical')) return false;
+
+    const target = this.cityMap.pois.find((poi) => poi.id === ai.routeTargetPoiId);
+    if (!target) return null;
+    if (ai.roadType === 'vertical') {
+      // calculateIntersectionTurn maps south->west and north->east to a right turn.
+      return ai.direction === 'south' ? target.x < inter.x : target.x > inter.x;
+    }
+    // calculateIntersectionTurn maps east->south and west->north to a right turn.
+    return ai.direction === 'east' ? target.y > inter.y : target.y < inter.y;
+  }
+
+  private planParkingStop(car: VehicleInstance, ai: NPCAIExtra) {
+    if (ai.parkingCoordinate !== undefined) return;
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const candidates = this.cityMap.pois
+      .map((poi) => ({
+        poi,
+        lateral: ai.roadType === 'vertical' ? Math.abs(poi.x - lane.x!) : Math.abs(poi.y - lane.y!),
+        along: ai.roadType === 'vertical' ? poi.y : poi.x,
+      }))
+      .sort((a, b) => a.lateral - b.lateral);
+    const forward = (value: number) => ai.direction === 'south' || ai.direction === 'east'
+      ? value - (ai.roadType === 'vertical' ? car.y : car.x)
+      : (ai.roadType === 'vertical' ? car.y : car.x) - value;
+    const selected = candidates.find((candidate) => forward(candidate.along) > 180) || candidates[0];
+    if (!selected) return;
+    ai.parkingPoiId = selected.poi.id;
+    ai.parkingSide = (ai.roadType === 'vertical'
+      ? selected.poi.x - lane.x!
+      : selected.poi.y - lane.y!) >= 0 ? 1 : -1;
+    ai.parkingCoordinate = Math.max(180, Math.min(WORLD_SIZE - 180, selected.along));
+  }
+
+  private beginParking(car: VehicleInstance, ai: NPCAIExtra) {
+    ai.activity = 'parked';
+    ai.parkingTimer = 8 + (Number(car.id.replace(/\D/g, '')) % 5);
+    ai.parkingPassengers = 1 + (Number(car.id.replace(/\D/g, '')) % 2);
+    ai.abandonAfterParking = Number(car.id.replace(/\D/g, '')) % 7 === 0;
+    ai.parkingCoordinate = undefined;
+    ai.driveTimer = 0;
+    ai.nextParkingIn = 30 + (Number(car.id.replace(/\D/g, '')) % 6) * 8;
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const parkingOffset = 118 * (ai.parkingSide || 1);
+    if (ai.roadType === 'vertical') car.x = lane.x! + parkingOffset;
+    else car.y = lane.y! + parkingOffset;
+    car.speed = 0;
+    car.isBraking = true;
+    car.npcParked = true;
+
+    const side = ai.roadType === 'vertical' ? this.sidewalkOffset : this.sidewalkOffset;
+    const exitX = ai.roadType === 'vertical' ? lane.x! + side * (ai.parkingSide || 1) : car.x;
+    const exitY = ai.roadType === 'vertical' ? car.y : lane.y! + side * (ai.parkingSide || 1);
+    this.pedestrians.push({
+      id: `parking_driver_${car.id}_${Math.floor(performance.now())}`,
+      x: car.x,
+      y: car.y,
+      angle: Math.atan2(exitY - car.y, exitX - car.x),
+      speed: 1.5,
+      targetX: exitX,
+      targetY: exitY,
+      state: 'leaving',
+      health: 100,
+      skinColor: '#fed7aa',
+      shirtColor: '#2563eb',
+      pantsColor: '#1e293b',
+      speechTimer: 0,
+      ragdollTimer: 0,
+      vx: 0,
+      vy: 0,
+      vehicleId: car.id,
+      parkingRole: 'exiting',
+      parkingTimer: 1.5,
+    });
+    for (let i = 0; i < (ai.parkingPassengers || 0); i += 1) {
+      this.pedestrians.push({
+        id: `parking_passenger_${car.id}_${i}_${Math.floor(performance.now())}`,
+        x: exitX + (i + 1) * 18,
+        y: exitY,
+        angle: Math.atan2(car.y - exitY, car.x - exitX),
+        speed: 1.35,
+        targetX: car.x,
+        targetY: car.y,
+        state: 'walking',
+        health: 100,
+        skinColor: '#fde047',
+        shirtColor: '#10b981',
+        pantsColor: '#334155',
+        speechTimer: 0,
+        ragdollTimer: 0,
+        vx: 0,
+        vy: 0,
+        vehicleId: car.id,
+        parkingRole: 'entering',
+        parkingTimer: 0,
+      });
+    }
   }
 
   private getBuildingEntrance(buildingId: string, roadType: 'vertical' | 'horizontal', roadCoord: number, side: number) {
@@ -903,6 +1035,11 @@ export class TrafficAI {
         progressTimer: 0,
         lastX: x,
         lastY: y,
+        activity: 'driving',
+        driveTimer: 0,
+        nextParkingIn: 18 + (i % 6) * 7,
+        parkingTimer: 0,
+        abandonAfterParking: false,
       });
     }
   }
@@ -1072,11 +1209,37 @@ export class TrafficAI {
           progressTimer: 0,
           lastX: car.x,
           lastY: car.y,
+          activity: 'driving',
+          driveTimer: 0,
+          nextParkingIn: 30,
+          parkingTimer: 0,
+          abandonAfterParking: false,
         };
         this.aiData.set(car.id, ai);
       }
 
       const config = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+      if (ai.activity === 'parked') {
+        ai.parkingTimer = Math.max(0, ai.parkingTimer - delta);
+        car.speed = 0;
+        car.isBraking = true;
+        car.npcParked = true;
+        continue;
+      }
+      ai.driveTimer += delta;
+      if (ai.driveTimer >= ai.nextParkingIn && !ai.isTurning && !ai.adaptiveBypass && !ai.groundBypass) {
+        this.planParkingStop(car, ai);
+      }
+      if (ai.parkingCoordinate !== undefined) {
+        const current = ai.roadType === 'vertical' ? car.y : car.x;
+        const distance = ai.direction === 'south' || ai.direction === 'east'
+          ? ai.parkingCoordinate - current
+          : current - ai.parkingCoordinate;
+        if (distance >= -18 && distance < 28) {
+          this.beginParking(car, ai);
+          continue;
+        }
+      }
       const cruiseSpeed = this.getNpcCruiseSpeed(car, ai);
       if (this.updateGroundBypass(car, ai, delta, cruiseSpeed)) {
         ai.lastX = car.x;
@@ -1579,7 +1742,8 @@ export class TrafficAI {
           if (dInter < 116 && ai.lastIntersectionId !== inter.id) {
             ai.lastIntersectionId = inter.id;
 
-            const roll = Math.random();
+            const routeTurn = this.getRouteTurn(ai, inter);
+            const roll = routeTurn === null ? Math.random() : routeTurn ? 0.1 : 0.5;
             if (roll < 0.32) {
               // Decide Turn: Left or Right
               const isRightTurn = roll < 0.16;
@@ -1653,6 +1817,16 @@ export class TrafficAI {
           ai.roadType = ai.roadType === 'vertical' ? 'horizontal' : 'vertical';
           ai.roadCoord = ai.targetRoadCoord;
           ai.direction = ai.targetDirection;
+          ai.routeIndex = Math.min(ai.routeRoadIds.length, ai.routeIndex + 1);
+          if (ai.routeIndex >= ai.routeRoadIds.length - 1 && ai.routeTargetPoiId) {
+            const nextPoi = this.cityMap.pois[(Number(car.id.replace(/\D/g, '')) + ai.routeIndex + 3) % this.cityMap.pois.length];
+            if (nextPoi) {
+              ai.routeSourcePoiId = ai.routeTargetPoiId;
+              ai.routeTargetPoiId = nextPoi.id;
+              ai.routeRoadIds = this.cityMap.getRouteBetweenPois(ai.routeSourcePoiId, ai.routeTargetPoiId);
+              ai.routeIndex = 0;
+            }
+          }
         } else {
           // Quadratic Bezier Position Interpolation
           const t = ai.turnProgress;
@@ -1958,6 +2132,91 @@ export class TrafficAI {
         if (ped.speechTimer <= 0) {
           ped.speechText = undefined;
         }
+      }
+
+      // Parking stops are small, visible trips rather than a hidden timer:
+      // the driver walks away from the car, waits, then returns and boards.
+      // Passenger pedestrians use the same state with a one-way trip into it.
+      if (ped.parkingRole) {
+        const parkedVehicle = ped.vehicleId
+          ? this.npcVehicles.find((vehicle) => vehicle.id === ped.vehicleId)
+          : undefined;
+        const parkedAi = parkedVehicle ? this.aiData.get(parkedVehicle.id) : undefined;
+        if (!parkedVehicle || !parkedAi || parkedVehicle.isCrashed) {
+          ped.parkingRole = undefined;
+          ped.vehicleId = undefined;
+          ped.state = 'walking';
+          ped.speed = 1.1;
+          this.choosePedestrianWaypoint(ped);
+          continue;
+        }
+
+        if (ped.parkingRole === 'waiting') {
+          ped.parkingTimer = Math.max(0, (ped.parkingTimer || 0) - delta);
+          ped.state = 'waiting';
+          if (ped.parkingTimer <= 0) {
+            if (parkedAi.abandonAfterParking) {
+              // A minority of trips end here: the driver leaves the car at a
+              // destination parking lot and continues on foot.
+              ped.parkingRole = undefined;
+              ped.vehicleId = undefined;
+              ped.state = 'walking';
+              ped.speed = 1.1;
+              ped.lifeStage = 'sidewalk';
+              this.choosePedestrianWaypoint(ped);
+              continue;
+            }
+            ped.parkingRole = 'entering';
+            ped.state = 'entering';
+            ped.targetX = parkedVehicle.x;
+            ped.targetY = parkedVehicle.y;
+          }
+          continue;
+        }
+
+        const distanceToParkingTarget = Math.hypot(ped.targetX - ped.x, ped.targetY - ped.y);
+        if (distanceToParkingTarget <= 18) {
+          if (ped.parkingRole === 'exiting') {
+            ped.parkingRole = 'waiting';
+            ped.state = 'waiting';
+            ped.parkingTimer = 3.5;
+          } else if (ped.id.startsWith('parking_driver_')) {
+            ped.state = 'indoors';
+            ped.parkingRole = undefined;
+            ped.vehicleId = undefined;
+            parkedAi.activity = 'driving';
+            parkedAi.driveTimer = 0;
+            parkedAi.parkingTimer = 0;
+            parkedAi.parkingPoiId = undefined;
+            parkedAi.parkingCoordinate = undefined;
+            parkedAi.parkingSide = undefined;
+            parkedAi.routeSourcePoiId = parkedAi.routeTargetPoiId;
+            const nextPoi = this.cityMap.pois[
+              (this.cityMap.pois.findIndex((poi) => poi.id === parkedAi.routeSourcePoiId) + 3) % this.cityMap.pois.length
+            ];
+            if (nextPoi && parkedAi.routeSourcePoiId) {
+              parkedAi.routeTargetPoiId = nextPoi.id;
+              parkedAi.routeRoadIds = this.cityMap.getRouteBetweenPois(parkedAi.routeSourcePoiId, nextPoi.id);
+              parkedAi.routeIndex = 0;
+            }
+            parkedVehicle.npcParked = false;
+            parkedVehicle.isBraking = false;
+          } else {
+            // Passengers disappear into the vehicle; only the driver controls
+            // when the parked NPC is allowed to resume driving.
+            ped.state = 'indoors';
+            ped.parkingRole = undefined;
+            ped.vehicleId = undefined;
+          }
+          continue;
+        }
+
+        const parkingAngle = Math.atan2(ped.targetY - ped.y, ped.targetX - ped.x);
+        ped.angle = parkingAngle;
+        ped.state = ped.parkingRole === 'exiting' ? 'leaving' : 'entering';
+        ped.x += Math.cos(parkingAngle) * ped.speed * 60 * delta;
+        ped.y += Math.sin(parkingAngle) * ped.speed * 60 * delta;
+        continue;
       }
 
       if (ped.isDriver) {
