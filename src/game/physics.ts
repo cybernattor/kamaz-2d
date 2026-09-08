@@ -93,7 +93,7 @@ export class PhysicsEngine {
     const speedKmh = Math.abs(vehicle.speed) * 3.6;
     const speedFactor = Math.max(0.7, 1.0 - (speedKmh / (config.maxSpeed * 1.4)) * 0.3);
     const maxSteerAngle = 0.62 * speedFactor * dazeFactor; // About 35 degrees at low speed
-    const steerSpeed = 6.8;
+    const steerSpeed = 3.8;
     let targetSteer = 0;
 
     if (!isDestroyed) {

@@ -150,6 +150,7 @@ export default function App() {
   // Analog steering from the touch wheel: -1..1 while held, null when the
   // wheel isn't being touched (steering then falls back to the A/D keys).
   const steerAxisRef = useRef<number | null>(null);
+  const [keyboardSteer, setKeyboardSteer] = useState(0);
 
   // UI Reactive States (for HUD & Modals)
   const [streetName, setStreetName] = useState<string>('Главная Автобаза КАМАЗ');
@@ -348,6 +349,7 @@ export default function App() {
     const clearActiveInputs = () => {
       keysRef.current = {};
       steerAxisRef.current = null;
+      setKeyboardSteer(0);
       playerVehicleRef.current.isHonking = false;
       sound.stopHorn();
     };
@@ -395,6 +397,12 @@ export default function App() {
       }
 
       keysRef.current[e.code] = true;
+      if (!e.repeat && (e.code === 'KeyA' || e.code === 'ArrowLeft' || e.code === 'KeyD' || e.code === 'ArrowRight')) {
+        setKeyboardSteer(
+          (keysRef.current['KeyD'] || keysRef.current['ArrowRight'] ? 1 : 0) -
+          (keysRef.current['KeyA'] || keysRef.current['ArrowLeft'] ? 1 : 0)
+        );
+      }
 
       // Browsers repeat keydown while a key is held. Movement should keep its
       // pressed state, but actions such as getting out, opening a modal or
@@ -446,6 +454,12 @@ export default function App() {
         return;
       }
       keysRef.current[e.code] = false;
+      if (e.code === 'KeyA' || e.code === 'ArrowLeft' || e.code === 'KeyD' || e.code === 'ArrowRight') {
+        setKeyboardSteer(
+          (keysRef.current['KeyD'] || keysRef.current['ArrowRight'] ? 1 : 0) -
+          (keysRef.current['KeyA'] || keysRef.current['ArrowLeft'] ? 1 : 0)
+        );
+      }
 
       if (e.code === 'KeyH') {
         playerVehicleRef.current.isHonking = false;
@@ -1039,9 +1053,14 @@ export default function App() {
         feedEvents={feedEvents}
       />
 
-      {/* Virtual Controls for mobile touch */}
-      {gameStarted && isTouchDevice && (
-        <VirtualControls onInput={handleVirtualInput} onSteerChange={handleVirtualSteer} />
+      {/* Steering wheel on every device; pedals remain touch-only. */}
+      {gameStarted && (
+        <VirtualControls
+          onInput={handleVirtualInput}
+          onSteerChange={handleVirtualSteer}
+          keyboardSteer={keyboardSteer}
+          showPedals={isTouchDevice}
+        />
       )}
 
       {/* Modals */}

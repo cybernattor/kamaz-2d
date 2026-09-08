@@ -158,6 +158,31 @@ function testSteeringNeedsForwardMotion() {
   }
 }
 
+function testSteeringRampsTowardTarget() {
+  const physics = new PhysicsEngine();
+  const vehicle: VehicleInstance = {
+    id: 'steering-ramp-test', type: 'sedan', x: 1000, y: 1000, angle: 0, speed: 4,
+    steeringAngle: 0, angularVelocity: 0, color: '#fff', health: 100, maxHealth: 100,
+    headlights: 0, turnSignal: 'none', isBraking: false, isReversing: false,
+    isHonking: false, isSiren: false, isPlayer: true, smokeTimer: 0,
+  };
+  physics.updatePlayerVehicle(vehicle, {
+    throttle: false, brake: false, reverse: false,
+    steerLeft: true, steerRight: false, handbrake: false,
+  }, DELTA);
+  if (Math.abs(vehicle.steeringAngle) >= 0.62) {
+    throw new Error('steering reached full lock in one frame');
+  }
+  const firstAngle = Math.abs(vehicle.steeringAngle);
+  physics.updatePlayerVehicle(vehicle, {
+    throttle: false, brake: false, reverse: false,
+    steerLeft: true, steerRight: false, handbrake: false,
+  }, DELTA);
+  if (Math.abs(vehicle.steeringAngle) <= firstAngle) {
+    throw new Error('steering did not continue ramping toward target');
+  }
+}
+
 function testWorldEdgeDampensImpactSpeed() {
   const physics = new PhysicsEngine();
   const vehicle: VehicleInstance = {
@@ -195,6 +220,7 @@ function testWorldEdgeDampensImpactSpeed() {
 }
 
 testAllVehiclesReachTheirWorkingTopSpeed();
+testSteeringRampsTowardTarget();
 testClassDifferencesAndBraking();
 testReverseCanChangeDirectionWhileRolling();
 testBrakeAndReverseInputPriority();

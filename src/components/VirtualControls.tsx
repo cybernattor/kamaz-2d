@@ -12,6 +12,8 @@ interface VirtualControlsProps {
    * hybrid touch+keyboard devices.
    */
   onSteerChange: (value: number | null) => void;
+  keyboardSteer: number;
+  showPedals: boolean;
 }
 
 /** Short tap of the device vibrator, if available. Silently no-ops on
@@ -24,13 +26,12 @@ function hapticTick(ms = 10) {
   }
 }
 
-const STEER_TRAVEL_PX = 46; // half-width of knob travel inside the wheel base
+const STEER_MAX_ROTATION = 120;
 
 /**
- * Analog steering wheel. A single pointer drags the knob left/right inside
- * a circular base; horizontal offset maps linearly to -1..1. Unlike the old
- * left/right buttons this gives proportional steering instead of
- * full-lock-or-nothing, which is the whole point of a "wheel" control.
+ * Analog steering wheel. A single pointer drags horizontally across the
+ * wheel; the wheel itself rotates proportionally to -1..1. The external
+ * keyboard value keeps the visual state in sync with A/D and arrow keys.
  *
  * Pointer Events (not touch+mouse handlers) are used deliberately: a single
  * event model means no risk of a delayed synthetic mouse event reactivating
@@ -38,10 +39,13 @@ const STEER_TRAVEL_PX = 46; // half-width of knob travel inside the wheel base
  * touchstart/mousedown pairs have on WebKit), and pointer capture keeps the
  * drag tracking correctly even if the finger slides outside the wheel.
  */
-const SteeringWheel: React.FC<{ onChange: (value: number | null) => void }> = ({ onChange }) => {
+const SteeringWheel: React.FC<{
+  onChange: (value: number | null) => void;
+  keyboardSteer: number;
+}> = ({ onChange, keyboardSteer }) => {
   const baseRef = useRef<HTMLDivElement | null>(null);
   const activePointerId = useRef<number | null>(null);
-  const [knobX, setKnobX] = useState(0);
+  const [pointerSteer, setPointerSteer] = useState<number | null>(null);
 
   const updateFromClientX = useCallback(
     (clientX: number) => {
@@ -49,9 +53,9 @@ const SteeringWheel: React.FC<{ onChange: (value: number | null) => void }> = ({
       if (!base) return;
       const rect = base.getBoundingClientRect();
       const centerX = rect.left + rect.width / 2;
-      const dx = Math.max(-STEER_TRAVEL_PX, Math.min(STEER_TRAVEL_PX, clientX - centerX));
-      setKnobX(dx);
-      onChange(dx / STEER_TRAVEL_PX);
+      const normalized = Math.max(-1, Math.min(1, (clientX - centerX) / (rect.width / 2)));
+      setPointerSteer(normalized);
+      onChange(normalized);
     },
     [onChange]
   );
@@ -73,12 +77,14 @@ const SteeringWheel: React.FC<{ onChange: (value: number | null) => void }> = ({
   const releasePointer = (e: React.PointerEvent<HTMLDivElement>) => {
     if (activePointerId.current !== e.pointerId) return;
     activePointerId.current = null;
-    setKnobX(0);
+    setPointerSteer(null);
     onChange(null);
   };
 
+  const displayedSteer = pointerSteer ?? keyboardSteer;
+
   return (
-    <div className="flex flex-col items-center gap-1 pointer-events-auto">
+    <div className="flex flex-col items-center gap-1.5 pointer-events-auto">
       <div
         id="vwheel-base"
         ref={baseRef}
@@ -87,22 +93,41 @@ const SteeringWheel: React.FC<{ onChange: (value: number | null) => void }> = ({
         onPointerUp={releasePointer}
         onPointerCancel={releasePointer}
         style={{ touchAction: 'none' }}
-        className="relative w-[116px] h-[116px] rounded-full bg-slate-900/85 border-2 border-slate-700 shadow-xl select-none"
+        className="relative w-32 h-32 rounded-full bg-slate-950/95 border border-slate-700/80 shadow-[0_12px_28px_rgba(2,6,23,0.5),inset_0_0_0_2px_rgba(255,255,255,0.04)] select-none"
         role="slider"
         aria-label="Руль"
         aria-valuemin={-1}
         aria-valuemax={1}
-        aria-valuenow={Number((knobX / STEER_TRAVEL_PX).toFixed(2))}
+        aria-valuenow={Number(displayedSteer.toFixed(2))}
+        aria-valuetext={`${Math.round(Math.abs(displayedSteer) * 100)}% ${displayedSteer < 0 ? 'влево' : displayedSteer > 0 ? 'вправо' : 'по центру'}`}
       >
-        {/* Track hint */}
-        <div className="absolute inset-3 rounded-full border border-slate-700/60" />
+        {/* Fixed dashboard bezel and steering-strength ticks. */}
+        <div className="absolute inset-1 rounded-full border-2 border-slate-800 bg-slate-900/70" />
+        <div className="absolute inset-0 rounded-full border border-cyan-400/15" />
+        <div className="absolute left-1/2 top-0 h-1 w-8 -translate-x-1/2 rounded-b-full bg-cyan-300/80 shadow-[0_0_10px_rgba(103,232,249,0.45)]" />
+        <div className="absolute left-2 top-1/2 h-px w-2 -translate-y-1/2 bg-cyan-300/40" />
+        <div className="absolute right-2 top-1/2 h-px w-2 -translate-y-1/2 bg-cyan-300/40" />
+
+        {/* Rotating leather rim, spokes and hub. */}
         <div
-          id="vwheel-knob"
-          className="absolute top-1/2 left-1/2 w-12 h-12 -mt-6 -ml-6 rounded-full bg-cyan-600/90 border-2 border-cyan-300 shadow-lg transition-transform"
-          style={{ transform: `translateX(${knobX}px)`, transitionDuration: activePointerId.current ? '0ms' : '120ms' }}
-        />
+          id="vwheel-wheel"
+          className={`absolute inset-2 rounded-full border-[9px] border-slate-700 bg-slate-900 shadow-[inset_0_0_0_2px_rgba(15,23,42,0.95),inset_0_0_12px_rgba(2,6,23,0.9)] ${pointerSteer === null ? 'transition-transform duration-200 ease-out' : 'transition-none'}`}
+          style={{ transform: `rotate(${displayedSteer * STEER_MAX_ROTATION}deg)` }}
+        >
+          <div className="absolute inset-1 rounded-full border border-slate-500/40" />
+          <div className="absolute left-1/2 top-1/2 h-[47%] w-2.5 -translate-x-1/2 -translate-y-full rounded-full bg-slate-500 shadow-[inset_1px_0_0_rgba(255,255,255,0.22)]" />
+          <div className="absolute left-1/2 top-1/2 h-2.5 w-[47%] origin-left -translate-y-1/2 rotate-[150deg] rounded-full bg-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]" />
+          <div className="absolute left-1/2 top-1/2 h-2.5 w-[47%] origin-left -translate-y-1/2 -rotate-[150deg] rounded-full bg-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]" />
+          <div className="absolute left-1/2 top-[7px] h-2 w-2 -translate-x-1/2 rounded-full bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.55)]" />
+          <div className="absolute left-1/2 top-1/2 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-4 border-slate-500 bg-slate-950 shadow-[0_2px_6px_rgba(2,6,23,0.8),inset_0_0_0_2px_rgba(255,255,255,0.08)]">
+            <div className="h-5 w-5 rounded-full border border-cyan-300/80 bg-slate-800 shadow-[0_0_0_3px_rgba(8,145,178,0.18)]" />
+          </div>
+        </div>
       </div>
-      <span className="text-[10px] font-mono font-bold text-slate-400 tracking-wider">РУЛЬ</span>
+      <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold tracking-[0.18em] text-slate-300">
+        <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 shadow-[0_0_6px_rgba(103,232,249,0.7)]" />
+        <span>РУЛЬ</span>
+      </div>
     </div>
   );
 };
@@ -153,17 +178,17 @@ const PedalButton: React.FC<PedalButtonProps> = ({ id, label, className, icon, o
   );
 };
 
-export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput, onSteerChange }) => {
+export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput, onSteerChange, keyboardSteer, showPedals }) => {
   return (
     <div
       id="virtual-controls-container"
       className="fixed inset-x-0 bottom-2 pointer-events-none flex items-end justify-between px-3 z-40 select-none"
     >
       {/* Left: analog steering wheel */}
-      <SteeringWheel onChange={onSteerChange} />
+      <SteeringWheel onChange={onSteerChange} keyboardSteer={keyboardSteer} />
 
       {/* Right: horn + handbrake stacked small, gas/brake pedals stacked large */}
-      <div className="flex items-end gap-2 pointer-events-auto">
+      {showPedals && <div className="flex items-end gap-2 pointer-events-auto">
         <div className="flex flex-col gap-2">
           <PedalButton
             id="vbtn-horn"
@@ -212,7 +237,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput, onSte
             }
           />
         </div>
-      </div>
+      </div>}
     </div>
   );
 };
