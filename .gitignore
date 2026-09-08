@@ -34,3 +34,4 @@ Desktop.ini
 
 # Generated local artifacts
 outputs/
+.codebase-memory/
