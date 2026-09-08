@@ -19,6 +19,26 @@ const MAX_SPEECH_LENGTH = 120;
 /** Generous next to the client's ~22Hz, low enough to stop a runaway loop. */
 const MAX_UPDATES_PER_SECOND = 40;
 const MAX_CHATS_PER_10S = 5;
+// Keep the free instance predictable: the expensive part of the server is
+// pairwise room simulation, so cap both room fan-out and total connections.
+const MAX_PLAYERS_PER_ROOM = 24;
+const MAX_ACTIVE_ROOMS = 20;
+const MAX_TOTAL_PLAYERS = 120;
+const ROOM_IDLE_TIMEOUT_MS = 120_000;
+const ROOM_TICK_BUDGET_MS = 8;
+
+const MULTIPLAYER_VEHICLE_LENGTHS: Record<string, number> = {
+  kamaz_dump: 74,
+  kamaz_flatbed: 80,
+  heavy_4x4: 52,
+  ambulance: 54,
+  police: 48,
+  sedan: 46,
+  hatchback: 38,
+  sports: 46,
+  bus: 96,
+  taxi: 46,
+};
 
 const TURN_SIGNALS = new Set(['none', 'left', 'right', 'hazard']);
 
@@ -85,6 +105,7 @@ interface PlayerState {
   speechText?: string;
   speechTime?: number;
   lastUpdate: number;
+  lastPositionUpdate?: number;
 }
 
 interface RoomData {
@@ -96,6 +117,10 @@ interface RoomData {
   sockets: Set<WebSocket>;
   destructiblesState: Record<string, { destroyed: boolean; respawnAt: number }>;
   dirty: Set<string>;
+  collisionCooldowns: Map<string, number>;
+  lastActivity: number;
+  lastTickMs: number;
+  overBudgetTicks: number;
 }
 
 /** Allocate a deterministic free pad near the requested arrival point. */
@@ -168,9 +193,79 @@ function getOrCreateRoom(roomId: string, roomName?: string): RoomData {
       sockets: new Set(),
       destructiblesState: {},
       dirty: new Set(),
+      collisionCooldowns: new Map(),
+      lastActivity: Date.now(),
+      lastTickMs: 0,
+      overBudgetTicks: 0,
     });
   }
   return rooms.get(roomId)!;
+}
+
+function clampPlayerMovement(player: PlayerState, nextX: number, nextY: number, now: number) {
+  if (player.lastPositionUpdate === undefined) return { x: nextX, y: nextY };
+  const elapsed = Math.min(0.5, Math.max(0.001, (now - player.lastPositionUpdate) / 1000));
+  // Client positions remain supported for compatibility, but a packet cannot
+  // teleport a car arbitrarily far between server ticks. The generous margin
+  // absorbs network jitter while still rejecting obvious speed hacks.
+  const maxDistance = Math.max(80, (Math.abs(player.speed) + 10) * 60 * elapsed * 1.6 + 35);
+  const dx = nextX - player.x;
+  const dy = nextY - player.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance <= maxDistance) return { x: nextX, y: nextY };
+  const ratio = maxDistance / distance;
+  return { x: player.x + dx * ratio, y: player.y + dy * ratio };
+}
+
+function resolveMultiplayerVehicleCollisions(room: RoomData, now: number) {
+  const players = Array.from(room.players.values());
+  for (let i = 0; i < players.length; i += 1) {
+    const first = players[i];
+    if (!first.inVehicle || first.condition <= 0) continue;
+    for (let j = i + 1; j < players.length; j += 1) {
+      const second = players[j];
+      if (!second.inVehicle || second.condition <= 0) continue;
+
+      const dx = second.x - first.x;
+      const dy = second.y - first.y;
+      const distance = Math.hypot(dx, dy);
+      const firstLength = MULTIPLAYER_VEHICLE_LENGTHS[first.vehicleType] || 46;
+      const secondLength = MULTIPLAYER_VEHICLE_LENGTHS[second.vehicleType] || 46;
+      const minimumDistance = (firstLength + secondLength) * 0.38;
+      if (distance >= minimumDistance) continue;
+
+      const safeDistance = distance > 0.001 ? distance : minimumDistance;
+      const nx = distance > 0.001 ? dx / safeDistance : (first.id < second.id ? 1 : -1);
+      const ny = distance > 0.001 ? dy / safeDistance : 0;
+      const overlap = minimumDistance - distance;
+      first.x = clampNumber(first.x - nx * overlap * 0.5, 0, WORLD_SIZE, first.x);
+      first.y = clampNumber(first.y - ny * overlap * 0.5, 0, WORLD_SIZE, first.y);
+      second.x = clampNumber(second.x + nx * overlap * 0.5, 0, WORLD_SIZE, second.x);
+      second.y = clampNumber(second.y + ny * overlap * 0.5, 0, WORLD_SIZE, second.y);
+      room.dirty.add(first.id);
+      room.dirty.add(second.id);
+
+      const firstVx = Math.cos(first.angle) * first.speed;
+      const firstVy = Math.sin(first.angle) * first.speed;
+      const secondVx = Math.cos(second.angle) * second.speed;
+      const secondVy = Math.sin(second.angle) * second.speed;
+      const relativeSpeed = Math.hypot(firstVx - secondVx, firstVy - secondVy);
+      const closingSpeed = (firstVx - secondVx) * nx + (firstVy - secondVy) * ny;
+      if (relativeSpeed <= 5.5 || closingSpeed <= 2.5) continue;
+
+      const key = first.id < second.id ? `${first.id}_${second.id}` : `${second.id}_${first.id}`;
+      const lastHit = room.collisionCooldowns.get(key) || 0;
+      if (now - lastHit < 500) continue;
+      room.collisionCooldowns.set(key, now);
+      const impactDamage = Math.min(35, Math.max(4, Math.round((relativeSpeed - 4) * 1.5)));
+      first.condition = Math.max(0, first.condition - impactDamage);
+      second.condition = Math.max(0, second.condition - impactDamage);
+      first.speed *= 0.35;
+      second.speed *= 0.35;
+      room.dirty.add(first.id);
+      room.dirty.add(second.id);
+    }
+  }
 }
 
 async function startServer() {
@@ -185,6 +280,8 @@ async function startServer() {
       status: 'ok',
       activeRooms: rooms.size,
       totalPlayers: Array.from(rooms.values()).reduce((acc, r) => acc + r.players.size, 0),
+      limits: { maxPlayersPerRoom: MAX_PLAYERS_PER_ROOM, maxActiveRooms: MAX_ACTIVE_ROOMS, maxTotalPlayers: MAX_TOTAL_PLAYERS },
+      rooms: Array.from(rooms.values()).map((room) => ({ id: room.id, players: room.players.size, lastTickMs: Number(room.lastTickMs.toFixed(2)), overBudgetTicks: room.overBudgetTicks })),
     });
   });
 
@@ -253,6 +350,12 @@ async function startServer() {
             if (state.playerId) return; // already joined on this socket
 
             const roomId = clampText(msg.roomId, 40) || 'default';
+            const existingRoom = rooms.get(roomId);
+            const totalPlayers = Array.from(rooms.values()).reduce((sum, room) => sum + room.players.size, 0);
+            if (totalPlayers >= MAX_TOTAL_PLAYERS || (existingRoom && existingRoom.players.size >= MAX_PLAYERS_PER_ROOM) || (!existingRoom && rooms.size >= MAX_ACTIVE_ROOMS)) {
+              ws.send(JSON.stringify({ type: 'error', code: 'room_full', message: 'Комната временно заполнена' }));
+              return;
+            }
             const room = getOrCreateRoom(roomId, clampText(msg.roomName, 40) || undefined);
 
             // The id is assigned here, never taken from the client. A
@@ -333,8 +436,11 @@ async function startServer() {
 
             // Every field is clamped. One NaN out of the physics used to be
             // copied straight into everyone else's renderer.
-            player.x = clampNumber(msg.x, 0, WORLD_SIZE, player.x);
-            player.y = clampNumber(msg.y, 0, WORLD_SIZE, player.y);
+            const requestedX = clampNumber(msg.x, 0, WORLD_SIZE, player.x);
+            const requestedY = clampNumber(msg.y, 0, WORLD_SIZE, player.y);
+            const safePosition = clampPlayerMovement(player, requestedX, requestedY, now);
+            player.x = safePosition.x;
+            player.y = safePosition.y;
             player.angle = clampNumber(msg.angle, -Math.PI * 2, Math.PI * 2, player.angle);
             player.speed = clampNumber(msg.speed, -200, 200, player.speed);
             player.steering = clampNumber(msg.steering, -Math.PI, Math.PI, player.steering);
@@ -345,6 +451,8 @@ async function startServer() {
             player.isSiren = msg.isSiren === true;
             player.turnSignal = TURN_SIGNALS.has(msg.turnSignal) ? msg.turnSignal : 'none';
             player.lastUpdate = now;
+            player.lastPositionUpdate = now;
+            room.lastActivity = now;
 
             const vehicleType = clampText(msg.vehicleType, 40);
             const vehicleColor = clampText(msg.vehicleColor, 20);
@@ -443,6 +551,11 @@ async function startServer() {
 
     room.players.delete(playerId);
     room.dirty.delete(playerId);
+    for (const key of room.collisionCooldowns.keys()) {
+      if (key.startsWith(`${playerId}_`) || key.endsWith(`_${playerId}`)) {
+        room.collisionCooldowns.delete(key);
+      }
+    }
     broadcastToRoom(roomId, { type: 'player_left', playerId });
 
     if (room.players.size === 0 && room.sockets.size === 0 && roomId !== 'default') {
@@ -467,6 +580,11 @@ async function startServer() {
   setInterval(() => {
     const sentAt = Date.now();
     for (const [, room] of rooms) {
+      if (room.dirty.size === 0) continue;
+      const tickStarted = performance.now();
+      resolveMultiplayerVehicleCollisions(room, sentAt);
+      room.lastTickMs = performance.now() - tickStarted;
+      if (room.lastTickMs > ROOM_TICK_BUDGET_MS) room.overBudgetTicks += 1;
       if (room.dirty.size === 0 || room.sockets.size === 0) continue;
 
       const players = [];
@@ -521,7 +639,7 @@ async function startServer() {
   // Periodic cleanup of inactive players and respawning destructible props
   setInterval(() => {
     const now = Date.now();
-    for (const [roomId, room] of rooms) {
+      for (const [roomId, room] of rooms) {
       for (const [pId, p] of room.players) {
         if (now - p.lastUpdate > PLAYER_TIMEOUT_MS) {
           room.players.delete(pId);

@@ -34,6 +34,7 @@
     "test:physics-particles": "tsx repros/physics-particle-api.repro.ts",
     "test:physics-dynamics": "tsx repros/physics-vehicle-dynamics.repro.ts",
     "test:physics-crash": "tsx repros/physics-crash-consequences.repro.ts",
+    "test:physics:swept-collision": "tsx repros/physics-swept-collision.repro.ts",
     "test:fixed-step": "tsx repros/fixed-step.repro.ts",
     "test:app:lazy-engines": "tsx repros/app-lazy-engines.repro.ts",
     "test:app:key-repeat": "tsx repros/app-key-repeat.repro.ts",

@@ -651,7 +651,14 @@ export class TrafficAI {
     // dense queue. Repeating a
     // full positional correction 16 times lets lane-centering undo it on the
     // next frame, which is the visible "dancing" oscillation near junctions.
-    for (let pass = 0; pass < 8; pass += 1) {
+    // Twelve bounded passes leave enough room for a dense queue to settle
+    // after adaptive bypass movement without reopening the old 16-pass jitter.
+    for (let pass = 0; pass < 12; pass += 1) {
+      // Corrections can move a car across a hash-cell boundary. Rebuilding
+      // here prevents the next pass from querying stale neighbours and
+      // leaving a pair overlapped after the solver appears to converge.
+      this.vehicleIndex.clear();
+      this.vehicleIndex.insertAll(this.npcVehicles);
       for (let i = 0; i < this.npcVehicles.length; i += 1) {
         const first = this.npcVehicles[i];
         if (first.health <= 0 || first.isCrashed) continue;

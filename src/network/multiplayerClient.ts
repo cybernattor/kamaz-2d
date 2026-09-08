@@ -9,6 +9,7 @@ export interface MultiplayerCallbacks {
   onObjectRespawned?: (objectId: string) => void;
   onChatMessage?: (msg: ChatMessage) => void;
   onStatusChange?: (status: 'disconnected' | 'connecting' | 'connected') => void;
+  onAuthoritativeState?: (state: Partial<RemotePlayer> & { id: string }) => void;
 }
 
 /** One received state for a remote player, stamped with local arrival time. */
@@ -225,7 +226,10 @@ export class MultiplayerClient {
       case 'snapshot': {
         const now = performance.now();
         (msg.players as Array<Partial<RemotePlayer> & { id: string }> | undefined)?.forEach((update) => {
-          if (update.id === this.playerId) return;
+          if (update.id === this.playerId) {
+            this.callbacks.onAuthoritativeState?.(update);
+            return;
+          }
           const existing = this.remotePlayers.get(update.id);
           if (!existing) return; // join has not arrived yet; the next tick will land
 

@@ -27,6 +27,7 @@ export type VehicleCrashHandler = (
 ) => void;
 
 export class PhysicsEngine {
+  private previousVehiclePositions = new Map<string, { x: number; y: number }>();
   public skidMarks: SkidMark[] = [];
   public particles: Particle[] = [];
 
@@ -356,6 +357,11 @@ export class PhysicsEngine {
       ped.vehicleHitCooldown = Math.max(0, (ped.vehicleHitCooldown || 0) - delta);
     });
 
+    const currentVehicleIds = new Set(vehicles.map((vehicle) => vehicle.id));
+    for (const id of this.previousVehiclePositions.keys()) {
+      if (!currentVehicleIds.has(id)) this.previousVehiclePositions.delete(id);
+    }
+
     // 1. Vehicle vs Vehicle Collisions (Smooth Pushing & Mass Momentum Exchange)
     for (let i = 0; i < vehicles.length; i++) {
       const v1 = vehicles[i];
@@ -376,16 +382,37 @@ export class PhysicsEngine {
         // traffic reverse direction and pile up until a junction locked up.
         const isPlayerPair = v1.isPlayer || v2.isPlayer;
 
+        const previous1 = this.previousVehiclePositions.get(v1.id) || { x: v1.x, y: v1.y };
+        const previous2 = this.previousVehiclePositions.get(v2.id) || { x: v2.x, y: v2.y };
         const dx = v2.x - v1.x;
         const dy = v2.y - v1.y;
         const dist = Math.hypot(dx, dy);
         const minDist = (cfg1.length + cfg2.length) * 0.38;
 
-        if (dist < minDist && dist > 0.001) {
+        // Use continuous detection as well as the final-position test. The
+        // player is integrated at display rate while collisions are resolved
+        // at a fixed 30 Hz, so a fast car can cross an NPC between two checks.
+        const startX = previous2.x - previous1.x;
+        const startY = previous2.y - previous1.y;
+        const travelX = dx - startX;
+        const travelY = dy - startY;
+        const travelLengthSq = travelX * travelX + travelY * travelY;
+        const closestT = travelLengthSq > 0.000001
+          ? Math.max(0, Math.min(1, -(startX * travelX + startY * travelY) / travelLengthSq))
+          : 0;
+        const closestX = startX + travelX * closestT;
+        const closestY = startY + travelY * closestT;
+        const sweptDistance = Math.hypot(closestX, closestY);
+        const sweptContact = sweptDistance < minDist && dist >= minDist;
+
+        if (dist < minDist || sweptContact) {
           // Push apart based on mass ratio
           const overlap = minDist - dist;
-          const nx = dx / dist;
-          const ny = dy / dist;
+          const contactX = sweptContact ? closestX : dx;
+          const contactY = sweptContact ? closestY : dy;
+          const normalDistance = Math.hypot(contactX, contactY);
+          const nx = normalDistance > 0.001 ? contactX / normalDistance : (startX !== 0 ? (startX > 0 ? 1 : -1) : (v1.id < v2.id ? 1 : -1));
+          const ny = normalDistance > 0.001 ? contactY / normalDistance : 0;
           const totalMass = cfg1.mass + cfg2.mass;
           const firstPlayerAnchored = v1.isPlayer && Math.abs(v1.speed) < 0.5;
           const secondPlayerAnchored = v2.isPlayer && Math.abs(v2.speed) < 0.5;
@@ -397,7 +424,11 @@ export class PhysicsEngine {
           // A stopped player is an anchored obstacle. Do not make the player
           // oscillate backward/forward as the following NPC repeatedly
           // collides with the same bumper; move the NPC fully clear instead.
-          if (firstPlayerAnchored) {
+          if (sweptContact) {
+            // The vehicles have already crossed by the time this fixed-step
+            // check runs. Do not snap them backwards; retain their current
+            // positions and still apply the impact response below.
+          } else if (firstPlayerAnchored) {
             v2.x += nx * overlap;
             v2.y += ny * overlap;
           } else if (secondPlayerAnchored) {
@@ -702,6 +733,10 @@ export class PhysicsEngine {
           sound.playCrash(0.35);
         }
       }
+    }
+
+    for (const vehicle of vehicles) {
+      this.previousVehiclePositions.set(vehicle.id, { x: vehicle.x, y: vehicle.y });
     }
   }
 

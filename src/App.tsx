@@ -251,6 +251,21 @@ export default function App() {
           });
         }
       },
+      onAuthoritativeState: (state) => {
+        // The server only sends our own state back when it has resolved a
+        // multiplayer collision. Apply a meaningful correction, while
+        // ignoring the normal sub-pixel rounding in 20 Hz snapshots.
+        const vehicle = playerVehicleRef.current;
+        const dx = (state.x ?? vehicle.x) - vehicle.x;
+        const dy = (state.y ?? vehicle.y) - vehicle.y;
+        if (Math.hypot(dx, dy) > 8 || state.condition !== undefined && state.condition !== vehicle.health) {
+          vehicle.x = state.x ?? vehicle.x;
+          vehicle.y = state.y ?? vehicle.y;
+          vehicle.angle = state.angle ?? vehicle.angle;
+          vehicle.speed = state.speed ?? vehicle.speed;
+          vehicle.health = state.condition ?? vehicle.health;
+        }
+      },
       // Only membership changes reach React. Position updates used to call
       // setState ~22 times per second per remote player, re-rendering the whole
       // app; the render loop reads positions straight off the client instead.
