@@ -396,7 +396,7 @@ export const HUD: React.FC<HUDProps> = ({
 
       {/* Radio feed: chat lines + join/leave, directly above the controls
           legend so it never overlaps it or the minimap regardless of screen size */}
-      <div className="pointer-events-none w-full">
+      <div className="pointer-events-none mt-auto mb-1 w-full">
         <NetworkFeed events={feedEvents} />
       </div>
 

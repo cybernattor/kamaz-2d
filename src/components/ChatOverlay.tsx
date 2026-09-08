@@ -30,6 +30,18 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
     setValue('');
   };
 
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key === 'Enter' && !value.trim()) {
+      event.preventDefault();
+      onClose();
+    }
+  };
+
   return (
     <div id="chat-overlay" className="pointer-events-auto absolute left-2 top-[58px] z-30 w-[min(360px,calc(100vw-1rem))] overflow-hidden rounded-2xl border border-emerald-400/30 bg-slate-950/65 shadow-2xl shadow-black/30 backdrop-blur-xl">
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
@@ -50,7 +62,7 @@ export const ChatOverlay: React.FC<ChatOverlayProps> = ({
         ))}
       </div>
       <form onSubmit={send} className="flex gap-2 border-t border-white/10 p-2">
-        <input ref={inputRef} id="chat-overlay-input" value={value} onChange={(event) => setValue(event.target.value)} placeholder={`Сообщение от ${playerName}…`} className="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.06] px-2.5 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-400/60" />
+        <input ref={inputRef} id="chat-overlay-input" value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={handleKeyDown} placeholder={`Сообщение от ${playerName}…`} className="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.06] px-2.5 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-400/60" />
         <button type="submit" className="rounded-lg bg-emerald-600 px-2.5 text-white hover:bg-emerald-500" aria-label="Отправить сообщение"><Send className="h-4 w-4" /></button>
       </form>
       <div className="flex items-center gap-1 px-3 pb-2 text-[10px] text-slate-500"><Users className="h-3 w-3" /> Enter — открыть · Esc — закрыть</div>
