@@ -291,6 +291,8 @@ export interface RemotePlayer {
   speechText?: string;
   speechTime?: number;
   lastUpdate: number;
+  /** Set only on server-corrected collision snapshots. */
+  authoritativeCorrection?: boolean;
 }
 
 export interface ChatMessage {

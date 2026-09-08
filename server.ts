@@ -118,6 +118,7 @@ interface RoomData {
   destructiblesState: Record<string, { destroyed: boolean; respawnAt: number }>;
   dirty: Set<string>;
   collisionCooldowns: Map<string, number>;
+  correctedPlayers: Set<string>;
   lastActivity: number;
   lastTickMs: number;
   overBudgetTicks: number;
@@ -194,6 +195,7 @@ function getOrCreateRoom(roomId: string, roomName?: string): RoomData {
       destructiblesState: {},
       dirty: new Set(),
       collisionCooldowns: new Map(),
+      correctedPlayers: new Set(),
       lastActivity: Date.now(),
       lastTickMs: 0,
       overBudgetTicks: 0,
@@ -244,6 +246,8 @@ function resolveMultiplayerVehicleCollisions(room: RoomData, now: number) {
       second.y = clampNumber(second.y + ny * overlap * 0.5, 0, WORLD_SIZE, second.y);
       room.dirty.add(first.id);
       room.dirty.add(second.id);
+      room.correctedPlayers.add(first.id);
+      room.correctedPlayers.add(second.id);
 
       const firstVx = Math.cos(first.angle) * first.speed;
       const firstVy = Math.sin(first.angle) * first.speed;
@@ -264,6 +268,8 @@ function resolveMultiplayerVehicleCollisions(room: RoomData, now: number) {
       second.speed *= 0.35;
       room.dirty.add(first.id);
       room.dirty.add(second.id);
+      room.correctedPlayers.add(first.id);
+      room.correctedPlayers.add(second.id);
     }
   }
 }
@@ -605,9 +611,11 @@ async function startServer() {
           turnSignal: player.turnSignal,
           isHonking: player.isHonking,
           isSiren: player.isSiren,
+          authoritativeCorrection: room.correctedPlayers.has(player.id),
         });
       }
       room.dirty.clear();
+      room.correctedPlayers.clear();
       if (players.length === 0) continue;
 
       const payload = JSON.stringify({ type: 'snapshot', t: sentAt, players });

@@ -227,6 +227,7 @@ export class MultiplayerClient {
         const now = performance.now();
         (msg.players as Array<Partial<RemotePlayer> & { id: string }> | undefined)?.forEach((update) => {
           if (update.id === this.playerId) {
+            if (update.authoritativeCorrection !== true) return;
             this.callbacks.onAuthoritativeState?.(update);
             return;
           }
