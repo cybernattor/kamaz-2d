@@ -133,9 +133,9 @@ export const HUD: React.FC<HUDProps> = ({
     >
       {/* 1. TOP STATUS BAR — a single compact row; the minimap reserves space on the right */}
       <div id="hud-top-bar" className="relative w-full pointer-events-auto">
-        <div className="flex flex-wrap items-center gap-1.5 pr-[126px]">
+        <div className="flex flex-wrap items-center gap-0 pr-[126px] bg-slate-950/90 border border-slate-700/80 rounded-xl shadow-lg overflow-hidden">
           {/* Street Name + FPS + Stats */}
-          <div className="min-w-0 flex-1 flex items-center gap-1.5 bg-slate-950/95 border border-slate-700/80 px-2.5 py-1.5 rounded-lg shadow-lg">
+          <div className="min-w-0 flex-1 flex items-center gap-1.5 px-2.5 py-1.5">
             <div className="min-w-0 flex items-center gap-1.5 text-cyan-400 font-bold text-xs tracking-wide">
               <Compass className="w-3.5 h-3.5 text-cyan-400 animate-pulse shrink-0" />
               <span className="font-mono truncate">{streetName}</span>
@@ -158,7 +158,7 @@ export const HUD: React.FC<HUDProps> = ({
 
           {/* Quick Controls Toggles — icon-only with a hover tooltip, so the
               whole cluster stays compact instead of spelling everything out */}
-          <div className="flex items-center gap-1 bg-slate-950/95 border border-slate-700/80 px-1 py-1 rounded-lg shadow-lg shrink-0">
+          <div className="flex items-center gap-1 border-l border-slate-700/70 px-1 py-1 shrink-0">
             <button
               id="btn-toggle-day-night"
               onClick={onToggleDayNight}
