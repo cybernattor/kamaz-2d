@@ -23,6 +23,7 @@ import { MainMenu } from './components/MainMenu';
 import { GarageModal } from './components/GarageModal';
 import { MissionsModal } from './components/MissionsModal';
 import { MultiplayerModal } from './components/MultiplayerModal';
+import { ChatOverlay } from './components/ChatOverlay';
 import { FullMapModal } from './components/FullMapModal';
 import type { FeedEvent } from './components/NetworkFeed';
 import { VirtualControls } from './components/VirtualControls';
@@ -153,6 +154,7 @@ export default function App() {
   // UI Reactive States (for HUD & Modals)
   const [streetName, setStreetName] = useState<string>('Главная Автобаза КАМАЗ');
   const [fps, setFps] = useState<number>(60);
+  const [showFps, setShowFps] = useState<boolean>(preferencesRef.current.showFps ?? true);
   const [, setHudTick] = useState(0);
   const [carCount, setCarCount] = useState<number>(45);
   const [pedCount, setPedCount] = useState<number>(40);
@@ -173,6 +175,7 @@ export default function App() {
   const [showGarage, setShowGarage] = useState<boolean>(false);
   const [showMissions, setShowMissions] = useState<boolean>(false);
   const [showMultiplayer, setShowMultiplayer] = useState<boolean>(false);
+  const [showChat, setShowChat] = useState<boolean>(false);
   const [showFullMap, setShowFullMap] = useState<boolean>(false);
   const modalOpenRef = useRef(false);
   const showFullMapRef = useRef(false);
@@ -209,12 +212,13 @@ export default function App() {
       volume,
       zoom,
       isNight,
+      showFps,
       playerName,
       roomId: mpRoomId,
       vehicleType: playerVehicleRef.current.type,
       vehicleColor: playerVehicleRef.current.color,
     });
-  }, [isMuted, volume, zoom, isNight, playerName, mpRoomId]);
+  }, [isMuted, volume, zoom, isNight, showFps, playerName, mpRoomId]);
 
   // Initialize Multiplayer Client — deferred until Play is pressed, so
   // sitting on the start screen doesn't spawn the player into the room for
@@ -333,11 +337,11 @@ export default function App() {
   // Global game shortcuts stay registered while a dialog is on screen, so
   // mirror that state in a ref for the stable keyboard listener below.
   useEffect(() => {
-    modalOpenRef.current = showGarage || showMissions || showMultiplayer || showFullMap;
+    modalOpenRef.current = showGarage || showMissions || showMultiplayer || showFullMap || showChat;
     showFullMapRef.current = showFullMap;
     showGarageRef.current = showGarage;
     showMissionsRef.current = showMissions;
-  }, [showGarage, showMissions, showMultiplayer, showFullMap]);
+  }, [showGarage, showMissions, showMultiplayer, showFullMap, showChat]);
 
   // Handle Keyboard Input
   useEffect(() => {
@@ -364,6 +368,7 @@ export default function App() {
           setShowMissions(false);
           setShowMultiplayer(false);
           setShowFullMap(false);
+          setShowChat(false);
         } else if (
           !e.repeat &&
           (e.code === 'KeyM' || e.code === 'KeyG' || (e.code === 'KeyJ' && !e.ctrlKey))
@@ -381,6 +386,11 @@ export default function App() {
           setShowMissions(!wasOpen && e.code === 'KeyJ');
           setShowMultiplayer(false);
         }
+        return;
+      }
+
+      if (!e.repeat && e.code === 'Enter') {
+        setShowChat(true);
         return;
       }
 
@@ -890,6 +900,7 @@ export default function App() {
       volume,
       zoom,
       isNight,
+      showFps,
       playerName,
       roomId: mpRoomId,
       vehicleType: type,
@@ -975,12 +986,14 @@ export default function App() {
       {/* Start screen: game keeps simulating behind it, input stays gated
           (see handleKeyDown/handleKeyUp) until Play is pressed */}
       {!gameStarted && !webglUnavailable && (
-        <MainMenu
+          <MainMenu
           isTouchDevice={isTouchDevice}
           isMuted={isMuted}
           volume={volume}
           onToggleMute={() => setIsMuted((current) => !current)}
-          onVolumeChange={setVolume}
+            onVolumeChange={setVolume}
+            showFps={showFps}
+            onToggleFps={() => setShowFps((current) => !current)}
           onPlay={() => {
             sound.init();
             setGameStarted(true);
@@ -992,6 +1005,7 @@ export default function App() {
       <HUD
         streetName={streetName}
         fps={fps}
+        showFps={showFps}
         carCount={carCount}
         pedCount={pedCount}
         isNight={isNight}
@@ -1014,7 +1028,7 @@ export default function App() {
         onOpenMap={() => setShowFullMap(true)}
         onOpenGarage={() => setShowGarage(true)}
         onOpenMissions={() => setShowMissions(true)}
-        onOpenMultiplayer={() => setShowMultiplayer(true)}
+        onOpenMultiplayer={() => setShowChat(true)}
         onRepairVehicle={repairVehicle}
         onToggleHeadlights={cycleHeadlights}
         onToggleTurnSignal={toggleTurnSignal}
@@ -1072,6 +1086,21 @@ export default function App() {
           }}
           onClose={() => setShowMultiplayer(false)}
         />
+      )}
+
+      {showChat && !showMultiplayer && (
+        <div className="pointer-events-none absolute inset-0 z-40">
+          <ChatOverlay
+            status={mpStatus}
+            onlineCount={remotePlayers.length}
+            chatMessages={chatMessages}
+            remotePlayers={remotePlayers}
+            playerName={playerName}
+            onSendChat={(text) => multiplayerRef.current?.sendChat(text)}
+            onClose={() => setShowChat(false)}
+            onOpenNetworkSettings={() => { setShowChat(false); setShowMultiplayer(true); }}
+          />
+        </div>
       )}
 
       {showFullMap && (

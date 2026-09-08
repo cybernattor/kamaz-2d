@@ -7,6 +7,8 @@ interface MainMenuProps {
   volume: number;
   onToggleMute: () => void;
   onVolumeChange: (volume: number) => void;
+  showFps: boolean;
+  onToggleFps: () => void;
   onPlay: () => void;
 }
 
@@ -108,6 +110,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   volume,
   onToggleMute,
   onVolumeChange,
+  showFps,
+  onToggleFps,
   onPlay,
 }) => {
   const { ready, blocked } = useHumanCheck();
@@ -234,6 +238,17 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               onChange={(event) => onVolumeChange(Number(event.target.value))}
               className="mt-2 w-full accent-cyan-400"
             />
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-800 pt-3">
+              <span className="text-xs text-slate-300">Показывать FPS</span>
+              <button
+                type="button"
+                onClick={onToggleFps}
+                aria-pressed={showFps}
+                className={`rounded-lg border px-2 py-1 text-xs font-mono transition ${showFps ? 'border-emerald-500/60 text-emerald-300' : 'border-slate-700 text-slate-500'}`}
+              >
+                {showFps ? 'Вкл' : 'Выкл'}
+              </button>
+            </div>
           </section>
         )}
         <button

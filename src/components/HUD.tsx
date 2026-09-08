@@ -10,6 +10,7 @@ import {
   ZoomOut,
   Wrench,
   Users,
+  MessageSquare,
   Compass,
   Car,
   Briefcase,
@@ -24,6 +25,7 @@ import { CityMap } from '../game/cityMap';
 interface HUDProps {
   streetName: string;
   fps: number;
+  showFps: boolean;
   carCount: number;
   pedCount: number;
   isNight: boolean;
@@ -58,6 +60,7 @@ interface HUDProps {
 export const HUD: React.FC<HUDProps> = ({
   streetName,
   fps,
+  showFps,
   carCount,
   pedCount,
   isNight,
@@ -140,10 +143,10 @@ export const HUD: React.FC<HUDProps> = ({
 
             <div className="hidden sm:block h-4 w-px bg-slate-700 mx-0.5" />
 
-            <div className="hidden sm:flex items-center gap-1 text-xs text-emerald-400 font-mono shrink-0">
+            {showFps && <div className="flex items-center gap-1 text-xs text-emerald-400 font-mono shrink-0">
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
               <span>{fps}</span>
-            </div>
+            </div>}
 
             <div className="hidden sm:block h-4 w-px bg-slate-700 mx-0.5" />
 
@@ -226,10 +229,11 @@ export const HUD: React.FC<HUDProps> = ({
                   ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 hover:bg-emerald-900/60'
                   : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700'
               }`}
-              title={multiplayerStatus === 'connected' ? `Онлайн (${onlineCount + 1})` : 'Мультиплеер'}
-              aria-label="Открыть мультиплеер"
+              title={multiplayerStatus === 'connected' ? `Рация — онлайн (${onlineCount + 1})` : 'Открыть рацию'}
+              aria-label="Открыть рацию"
             >
-              <Users className="w-3.5 h-3.5" />
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline text-[10px] font-bold">Рация</span>
               <span className="text-[10px] font-bold font-mono">
                 {multiplayerStatus === 'connected' ? onlineCount + 1 : '—'}
               </span>

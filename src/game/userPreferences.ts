@@ -3,6 +3,7 @@ export const USER_PREFERENCES_STORAGE_KEY = 'kamaz-city-simulator.preferences.v1
 export interface UserPreferences {
   muted: boolean;
   volume?: number;
+  showFps?: boolean;
   zoom: number;
   isNight: boolean;
   playerName?: string;
@@ -11,7 +12,7 @@ export interface UserPreferences {
   vehicleColor?: string;
 }
 
-const DEFAULT_PREFERENCES: UserPreferences = { muted: false, volume: 1, zoom: 1, isNight: false };
+const DEFAULT_PREFERENCES: UserPreferences = { muted: false, volume: 1, showFps: true, zoom: 1, isNight: false };
 
 function getStorage(): Storage | null {
   try {
@@ -40,6 +41,7 @@ export function loadUserPreferences(): UserPreferences {
     return {
       muted: typeof muted === 'boolean' ? muted : DEFAULT_PREFERENCES.muted,
       volume,
+      showFps: typeof savedValue.showFps === 'boolean' ? savedValue.showFps : DEFAULT_PREFERENCES.showFps,
       zoom,
       isNight: typeof savedValue.isNight === 'boolean' ? savedValue.isNight : DEFAULT_PREFERENCES.isNight,
       playerName: typeof savedValue.playerName === 'string' ? savedValue.playerName.slice(0, 18) : undefined,

@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "053903d99e8ac903069b66bbbe6fdb68cdc2c372",
-    "indexed_at": "2026-09-08T17:31:23Z",
+    "commit": "d24e31722b729fec494608a76e73fd8fb598b060",
+    "indexed_at": "2026-09-08T17:48:08Z",
     "project": "C-dev_C-kamaz-city-simulator-2d",
-    "nodes": 741,
-    "edges": 2398,
+    "nodes": 746,
+    "edges": 2392,
     "original_size": 5767168,
-    "compressed_size": 1215643,
+    "compressed_size": 1221164,
     "compression_level": 3
 }
