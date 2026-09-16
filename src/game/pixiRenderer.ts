@@ -97,6 +97,7 @@ export class PixiGameRenderer {
 
   private readonly vehicleViews = new Map<string, EntityView>();
   private readonly pedestrianViews = new Map<string, EntityView>();
+  private readonly remoteCharacterViews = new Map<string, EntityView>();
   private readonly propViews = new Map<string, EntityView>();
   private readonly trafficLightViews = new Map<string, EntityView>();
   private readonly vehicleTextures = new Map<string, Texture>();
@@ -473,6 +474,7 @@ export class PixiGameRenderer {
   ) {
     const active = new Set<string>();
     const activeLabels = new Set<string>();
+    const activeCharacters = new Set<string>();
     for (const vehicle of [...npcVehicles, ...playerVehicles]) {
       active.add(vehicle.id);
       this.updateVehicleView(
@@ -482,7 +484,23 @@ export class PixiGameRenderer {
       );
     }
     for (const remote of remotePlayers) {
-      if (!remote.inVehicle) continue;
+      activeLabels.add(remote.id);
+      if (!remote.inVehicle) {
+        activeCharacters.add(remote.id);
+        const view = this.getView(
+          this.remoteCharacterViews,
+          remote.id,
+          this.pedestrianLayer,
+          this.getPlayerCharacterTexture()
+        );
+        view.container.visible = this.isVisible(remote.x, remote.y, 40, 40, bounds);
+        if (view.container.visible) {
+          view.container.position.set(remote.x, remote.y);
+          view.container.rotation = remote.angle;
+        }
+        this.updateNameLabel(remote, bounds, 20);
+        continue;
+      }
       const dummy: VehicleInstance = {
         id: `remote_${remote.id}`,
         type: remote.vehicleType,
@@ -512,14 +530,15 @@ export class PixiGameRenderer {
         dummy,
         bounds
       );
-      activeLabels.add(remote.id);
-      this.updateNameLabel(remote, bounds);
+      const vehicleConfig = VEHICLE_CONFIGS[remote.vehicleType] || VEHICLE_CONFIGS.sedan;
+      this.updateNameLabel(remote, bounds, vehicleConfig.width / 2 + 14);
     }
     this.hideInactive(this.vehicleViews, active);
+    this.hideInactive(this.remoteCharacterViews, activeCharacters);
     this.releaseNameLabels(activeLabels);
   }
 
-  private updateNameLabel(remote: RemotePlayer, bounds: Bounds) {
+  private updateNameLabel(remote: RemotePlayer, bounds: Bounds, labelOffsetY: number) {
     if (!this.isVisible(remote.x, remote.y, 140, 140, bounds)) {
       const existing = this.nameLabels.get(remote.id);
       if (existing) existing.visible = false;
@@ -547,8 +566,7 @@ export class PixiGameRenderer {
       label.text = remote.name;
     }
     label.visible = true;
-    const config = VEHICLE_CONFIGS[remote.vehicleType] || VEHICLE_CONFIGS.sedan;
-    label.position.set(remote.x, remote.y - config.width / 2 - 14);
+    label.position.set(remote.x, remote.y - labelOffsetY);
 
     // The Canvas renderer draws a health bar above every remote player's
     // name tag; this GPU path only ever drew the name.
@@ -559,7 +577,7 @@ export class PixiGameRenderer {
       this.nameHealthBars.set(remote.id, bar);
     }
     bar.visible = true;
-    bar.position.set(remote.x - 20, remote.y - config.width / 2 - 10);
+    bar.position.set(remote.x - 20, remote.y - labelOffsetY + 4);
     bar.clear();
     bar.rect(0, 0, 40, 4).fill(0x334155);
     const health = Math.max(0, remote.condition);
@@ -1203,6 +1221,7 @@ export class PixiGameRenderer {
     if (this.initialized) this.disposeApplication();
     this.vehicleViews.clear();
     this.pedestrianViews.clear();
+    this.remoteCharacterViews.clear();
     this.propViews.clear();
     this.trafficLightViews.clear();
     for (const texture of this.vehicleTextures.values()) texture.destroy(true);

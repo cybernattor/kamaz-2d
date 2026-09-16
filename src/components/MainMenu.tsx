@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Loader2, Settings, RotateCw } from 'lucide-react';
+import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Loader2, Settings, RotateCw, Github, Scale } from 'lucide-react';
 
 interface MainMenuProps {
   isTouchDevice: boolean;
@@ -155,6 +155,19 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           </p>
         </div>
 
+        {/* Multiplayer callout — the game's headline feature gets its own
+            banner instead of blending into the badge row below. */}
+        <div className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-950/50 border border-emerald-500/50 px-3 py-2 shadow-[0_0_20px_rgba(16,185,129,0.15)]">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+          </span>
+          <Users className="w-4 h-4 text-emerald-400" />
+          <span className="text-sm font-extrabold text-emerald-300 tracking-tight">
+            Онлайн-мультиплеер — играйте вместе в живом городе
+          </span>
+        </div>
+
         {/* Feature badges */}
         <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono text-slate-300">
           <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-slate-900/80 border border-slate-700/80">
@@ -162,9 +175,6 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           </span>
           <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-slate-900/80 border border-slate-700/80">
             <Wrench className="w-3 h-3 text-cyan-400" /> Гараж
-          </span>
-          <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-slate-900/80 border border-slate-700/80">
-            <Users className="w-3 h-3 text-emerald-400" /> Мультиплеер
           </span>
           <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-slate-900/80 border border-slate-700/80">
             <Moon className="w-3 h-3 text-indigo-400" /> День/Ночь
@@ -206,6 +216,21 @@ export const MainMenu: React.FC<MainMenuProps> = ({
         <p className="text-[10px] text-slate-600 font-mono">
           Работает прямо в браузере — ничего скачивать не нужно
         </p>
+
+        {/* Source & license */}
+        <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono text-slate-400">
+          <a
+            href="https://github.com/cybernattor/kamaz-2d"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/80 border border-slate-700/80 transition hover:border-cyan-500 hover:text-cyan-300"
+          >
+            <Github className="w-3.5 h-3.5" /> Исходный код на GitHub
+          </a>
+          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/80 border border-slate-700/80">
+            <Scale className="w-3.5 h-3.5 text-amber-400" /> Лицензия GPL-3.0
+          </span>
+        </div>
       </div>
 
       <div className="fixed bottom-4 right-4 z-10 flex max-w-[calc(100vw-2rem)] flex-col items-end gap-2 pb-[env(safe-area-inset-bottom)] sm:bottom-6 sm:right-6 sm:pb-0">

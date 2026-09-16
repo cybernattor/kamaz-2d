@@ -966,6 +966,12 @@ export default function App() {
     const code = map[action];
     if (code) {
       keysRef.current[code] = active;
+      if (action === 'brake') {
+        // Touch has no separate reverse key like keyboard's S, so the single
+        // brake pedal doubles as reverse once the vehicle has stopped -
+        // mirrors S's brake-then-reverse behavior, just on one pedal.
+        keysRef.current['KeyS'] = active;
+      }
       if (action === 'horn') {
         playerVehicleRef.current.isHonking = active;
         if (active) sound.startHorn(playerVehicleRef.current.type.startsWith('kamaz'));

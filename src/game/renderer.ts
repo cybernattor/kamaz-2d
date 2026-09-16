@@ -925,9 +925,10 @@ export class GameRenderer {
       this.drawVehicleBody(ctx, v);
     });
 
-    // Render Remote Multiplayer vehicles
+    // Render Remote Multiplayer vehicles & on-foot remote players
     remotePlayers.forEach((rp) => {
-      if (rp.inVehicle && this.isVisible(rp.x, rp.y, 100, 100)) {
+      if (!this.isVisible(rp.x, rp.y, 100, 100)) return;
+      if (rp.inVehicle) {
         const dummy: VehicleInstance = {
           id: rp.id,
           type: rp.vehicleType,
@@ -952,8 +953,59 @@ export class GameRenderer {
           smokeTimer: 0,
         };
         this.drawVehicleBody(ctx, dummy);
+      } else {
+        this.drawRemoteCharacter(ctx, rp);
       }
     });
+  }
+
+  // Remote player walking on foot — same trucker figure as the local player,
+  // with a color-coded name tag & health bar like their in-vehicle state has.
+  private drawRemoteCharacter(ctx: CanvasRenderingContext2D, rp: RemotePlayer) {
+    ctx.save();
+    ctx.translate(rp.x, rp.y);
+    ctx.rotate(rp.angle);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 9, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    const walkAnim = rp.speed > 0 ? Math.sin(Date.now() * 0.02) * 5 : 0;
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(-4 + walkAnim, -6, 8, 4);
+    ctx.fillRect(-4 - walkAnim, 2, 8, 4);
+
+    ctx.fillStyle = '#f97316';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 8, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#fef08a';
+    ctx.fillRect(-6, -4, 12, 2);
+    ctx.fillRect(-6, 2, 12, 2);
+
+    ctx.fillStyle = '#fed7aa';
+    ctx.beginPath();
+    ctx.arc(3, 0, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#0284c7';
+    ctx.beginPath();
+    ctx.arc(6, 0, 4, -Math.PI / 2, Math.PI / 2);
+    ctx.fill();
+
+    ctx.rotate(-rp.angle);
+    ctx.fillStyle = nameColorForId(rp.id);
+    ctx.font = 'bold 12px "JetBrains Mono", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(rp.name, 0, -20);
+
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(-20, -16, 40, 4);
+    ctx.fillStyle = rp.condition > 50 ? '#22c55e' : rp.condition > 25 ? '#eab308' : '#ef4444';
+    ctx.fillRect(-20, -16, (40 * Math.max(0, rp.condition)) / 100, 4);
+
+    ctx.restore();
   }
 
   private drawVehicleBody(ctx: CanvasRenderingContext2D, v: VehicleInstance) {
