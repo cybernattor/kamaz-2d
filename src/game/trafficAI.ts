@@ -109,7 +109,7 @@ export class TrafficAI {
     const current = roadType === 'vertical' ? ped.y : ped.x;
     const bounds = this.getPedestrianAxisBounds(
       current,
-      roadType === 'vertical' ? this.gridY : this.gridX
+      this.pedestrianCrossings(ped, roadType)
     );
     let direction = ped.walkDirection ?? 1;
     const destination = direction > 0 ? bounds.upper : bounds.lower;
@@ -289,28 +289,90 @@ export class TrafficAI {
     };
   }
 
+  /** True when the straight segment runs over the drivable surface of any road. */
+  private pathCrossesRoad(fromX: number, fromY: number, toX: number, toY: number) {
+    const steps = Math.max(1, Math.ceil(Math.hypot(toX - fromX, toY - fromY) / 30));
+    for (let step = 0; step <= steps; step += 1) {
+      const t = step / steps;
+      const clearance = this.cityMap.clearanceToRoads({
+        x: fromX + (toX - fromX) * t,
+        y: fromY + (toY - fromY) * t,
+        width: 0,
+        height: 0,
+      });
+      if (clearance < -8) return true;
+    }
+    return false;
+  }
+
   private assignBuildingTrip(ped: Pedestrian) {
     if (this.cityMap.buildings.length === 0) return false;
     const seed = Number(ped.id.replace(/\D/g, '')) || 0;
-    const building = this.cityMap.buildings[(seed * 7 + Math.floor(ped.x + ped.y)) % this.cityMap.buildings.length];
     const roadType = ped.walkRoadType || 'vertical';
     const roadCoord = ped.walkRoadCoord ?? (roadType === 'vertical' ? this.gridX[0] : this.gridY[0]);
     const side = ped.walkSide ?? this.sidewalkOffset;
+
     // A resident can only enter a building from the sidewalk side they are
-    // already walking on. Sending them to a building across the carriageway
-    // made the toDoor segment cut through traffic and fail the sidewalk
-    // invariant.
-    const onSameSide = roadType === 'vertical'
-      ? (building.x - roadCoord) * side > 0
-      : (building.y - roadCoord) * side > 0;
-    if (!onSameSide) return false;
-    const entrance = this.getBuildingEntrance(building.id, roadType, roadCoord, side);
-    if (!entrance) return false;
-    ped.buildingId = building.id;
-    ped.lifeStage = 'toSidewalk';
-    ped.targetX = entrance.sidewalkX;
-    ped.targetY = entrance.sidewalkY;
-    return true;
+    // already walking on, and only one they can reach without crossing a road.
+    // Candidates are the nearest buildings (rotated by id so residents do not
+    // all pick the same one), not a random building anywhere on the map.
+    const candidates = this.cityMap.buildings
+      .filter((building) => (roadType === 'vertical'
+        ? (building.x - roadCoord) * side
+        : (building.y - roadCoord) * side) > 0)
+      .map((building) => ({ building, distance: Math.hypot(building.x - ped.x, building.y - ped.y) }))
+      .filter((candidate) => candidate.distance <= 500)
+      .sort((first, second) => first.distance - second.distance)
+      .slice(0, 8);
+
+    for (let offset = 0; offset < candidates.length; offset += 1) {
+      const { building } = candidates[(seed + offset) % candidates.length];
+      const entrance = this.getBuildingEntrance(building.id, roadType, roadCoord, side);
+      if (!entrance) continue;
+      // The building can be near yet have other roads in between.
+      if (this.pathCrossesRoad(ped.x, ped.y, entrance.sidewalkX, entrance.sidewalkY)
+        || this.pathCrossesRoad(entrance.sidewalkX, entrance.sidewalkY, entrance.doorX, entrance.doorY)) continue;
+      ped.buildingId = building.id;
+      ped.lifeStage = 'toSidewalk';
+      ped.targetX = entrance.sidewalkX;
+      ped.targetY = entrance.sidewalkY;
+      return true;
+    }
+    return false;
+  }
+
+  private readonly pedestrianCrossingCache = new Map<string, number[]>();
+
+  /**
+   * Coordinates along a pedestrian's walking axis where a road cuts across the
+   * sidewalk line. The arterial grid alone is not enough: the ring road,
+   * access roads and country routes are polylines that also cross sidewalks,
+   * and walkers used to stroll straight across them.
+   */
+  private pedestrianCrossings(ped: Pedestrian, axis: 'vertical' | 'horizontal') {
+    const grid = axis === 'vertical' ? this.gridY : this.gridX;
+    const line = (ped.walkRoadCoord ?? (axis === 'vertical' ? ped.x : ped.y)) + (ped.walkSide ?? 0);
+    const key = `${axis}:${Math.round(line)}`;
+    const cached = this.pedestrianCrossingCache.get(key);
+    if (cached) return cached;
+
+    const crossings = [...grid];
+    for (const road of this.cityMap.roads) {
+      for (let i = 1; i < road.points.length; i += 1) {
+        const a = road.points[i - 1];
+        const b = road.points[i];
+        const sideA = (axis === 'vertical' ? a.x : a.y) - line;
+        const sideB = (axis === 'vertical' ? b.x : b.y) - line;
+        if (sideA * sideB >= 0) continue; // parallel to, or entirely on one side of, the sidewalk
+        const t = sideA / (sideA - sideB);
+        const at = axis === 'vertical' ? a.y + (b.y - a.y) * t : a.x + (b.x - a.x) * t;
+        // The arterial that defines this crossing is already in the grid list.
+        if (crossings.every((known) => Math.abs(known - at) > 60)) crossings.push(at);
+      }
+    }
+    crossings.sort((first, second) => first - second);
+    this.pedestrianCrossingCache.set(key, crossings);
+    return crossings;
   }
 
   private getPedestrianAxisBounds(value: number, crossingRoads: number[]) {
@@ -1053,7 +1115,22 @@ export class TrafficAI {
       const isVert = i % 2 === 0;
       const roadCoord = isVert ? this.gridX[i % this.gridX.length] : this.gridY[i % this.gridY.length];
       const side = (i % 4 < 2 ? 1 : -1) * this.sidewalkOffset;
-      const spread = 280 + (i * 240) % (WORLD_SIZE - 560);
+      const spreadRange = WORLD_SIZE - 560;
+      const axis = isVert ? 'vertical' : 'horizontal';
+      const probe = { walkRoadCoord: roadCoord, walkSide: side, x: 0, y: 0 } as Pedestrian;
+      // Non-grid roads cut across sidewalks, so a fixed spread can land on a
+      // carriageway or in a pocket too short to walk in. Slide along the
+      // sidewalk to the first spot that has both kerb clearance and room.
+      let spread = 280 + (i * 240) % spreadRange;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const candidate = 280 + ((i * 240) + attempt * 97) % spreadRange;
+        const cx = isVert ? roadCoord + side : candidate;
+        const cy = isVert ? candidate : roadCoord + side;
+        const room = this.getPedestrianAxisBounds(candidate, this.pedestrianCrossings(probe, axis));
+        spread = candidate;
+        if (room.upper - room.lower >= 60 && candidate >= room.lower && candidate <= room.upper
+          && this.cityMap.clearanceToRoads({ x: cx, y: cy, width: 0, height: 0 }) >= 20) break;
+      }
 
       const px = isVert ? roadCoord + side : spread;
       const py = isVert ? spread : roadCoord + side;
@@ -2047,11 +2124,11 @@ export class TrafficAI {
   private triggerPedestrianPanic(ped: Pedestrian, fromX: number, fromY: number) {
     const angleAway = Math.atan2(ped.y - fromY, ped.x - fromX);
     if (ped.walkRoadType === 'vertical') {
-      const bounds = this.getPedestrianAxisBounds(ped.y, this.gridY);
+      const bounds = this.getPedestrianAxisBounds(ped.y, this.pedestrianCrossings(ped, 'vertical'));
       ped.panicTargetX = (ped.walkRoadCoord ?? ped.x) + (ped.walkSide ?? 108);
       ped.panicTargetY = ped.y >= fromY ? bounds.upper : bounds.lower;
     } else {
-      const bounds = this.getPedestrianAxisBounds(ped.x, this.gridX);
+      const bounds = this.getPedestrianAxisBounds(ped.x, this.pedestrianCrossings(ped, 'horizontal'));
       ped.panicTargetX = ped.x >= fromX ? bounds.upper : bounds.lower;
       ped.panicTargetY = (ped.walkRoadCoord ?? ped.y) + (ped.walkSide ?? 108);
     }
@@ -2369,11 +2446,11 @@ export class TrafficAI {
         ped.x += Math.cos(moveAngle) * ped.speed * 60 * delta;
         ped.y += Math.sin(moveAngle) * ped.speed * 60 * delta;
         if (ped.lifeStage !== 'toDoor' && ped.walkRoadType === 'vertical') {
-          const bounds = this.getPedestrianAxisBounds(ped.y, this.gridY);
+          const bounds = this.getPedestrianAxisBounds(ped.y, this.pedestrianCrossings(ped, 'vertical'));
           ped.x = (ped.walkRoadCoord ?? ped.x) + (ped.walkSide ?? 108);
           ped.y = Math.max(bounds.lower, Math.min(bounds.upper, ped.y));
         } else if (ped.lifeStage !== 'toDoor') {
-          const bounds = this.getPedestrianAxisBounds(ped.x, this.gridX);
+          const bounds = this.getPedestrianAxisBounds(ped.x, this.pedestrianCrossings(ped, 'horizontal'));
           ped.y = (ped.walkRoadCoord ?? ped.y) + (ped.walkSide ?? 108);
           ped.x = Math.max(bounds.lower, Math.min(bounds.upper, ped.x));
         }
