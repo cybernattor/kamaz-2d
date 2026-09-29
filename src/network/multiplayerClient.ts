@@ -9,6 +9,8 @@ export interface MultiplayerCallbacks {
   onObjectRespawned?: (objectId: string) => void;
   onChatMessage?: (msg: ChatMessage) => void;
   onStatusChange?: (status: 'disconnected' | 'connecting' | 'connected') => void;
+  /** The server rejected the join or reported a fatal condition. */
+  onError?: (code: string, message: string) => void;
   onAuthoritativeState?: (state: Partial<RemotePlayer> & { id: string }) => void;
 }
 
@@ -83,10 +85,37 @@ export class MultiplayerClient {
     roomId: string = 'default',
     spawn?: Partial<{ x: number; y: number; angle: number; vehicleType: VehicleCategory; vehicleColor: string }>
   ) {
+    // Switching rooms must not leave the previous socket alive: it would keep
+    // feeding the old room's players into this client and keep us joined there.
+    this.closeSocket();
+    this.clearReconnectTimer();
+    this.remotePlayers.clear();
+    this.buffers.clear();
     this.currentRoomId = roomId;
     this.intentionallyClosed = false;
+    this.reconnectAttempts = 0;
     if (spawn) this.spawnRequest = { ...this.spawnRequest, ...spawn };
     this.openSocket();
+  }
+
+  /** Detach handlers before closing so the stale socket's late 'close' event
+   *  cannot null out the replacement socket or schedule a reconnect. */
+  private closeSocket() {
+    const socket = this.ws;
+    if (!socket) return;
+    this.ws = null;
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onclose = null;
+    socket.onerror = null;
+    socket.close();
+  }
+
+  private clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   }
 
   private setStatus(status: 'disconnected' | 'connecting' | 'connected') {
@@ -102,9 +131,10 @@ export class MultiplayerClient {
     const wsUrl = `${protocol}//${window.location.host || 'localhost:3000'}/ws`;
 
     try {
-      this.ws = new WebSocket(wsUrl);
+      const socket = new WebSocket(wsUrl);
+      this.ws = socket;
 
-      this.ws.onopen = () => {
+      socket.onopen = () => {
         this.reconnectAttempts = 0;
         this.setStatus('connected');
 
@@ -123,7 +153,7 @@ export class MultiplayerClient {
         this.send(this.lastJoinPayload);
       };
 
-      this.ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
         try {
           this.handleServerMessage(JSON.parse(event.data));
         } catch (err) {
@@ -131,7 +161,8 @@ export class MultiplayerClient {
         }
       };
 
-      this.ws.onclose = () => {
+      socket.onclose = () => {
+        if (this.ws !== socket) return;
         this.ws = null;
         this.remotePlayers.clear();
         this.buffers.clear();
@@ -139,7 +170,7 @@ export class MultiplayerClient {
         this.scheduleReconnect();
       };
 
-      this.ws.onerror = () => {
+      socket.onerror = () => {
         // 'close' always follows, and that is where the retry is scheduled.
         console.warn('WebSocket error; will retry unless disconnected on purpose.');
       };
@@ -193,6 +224,8 @@ export class MultiplayerClient {
     timestamp?: number;
     vehicleType?: VehicleCategory;
     vehicleColor?: string;
+    code?: string;
+    message?: string;
   }) {
     switch (msg.type) {
       case 'init': {
@@ -211,6 +244,22 @@ export class MultiplayerClient {
           spawn,
           msg.assignedName
         );
+        break;
+      }
+
+      case 'error': {
+        // The server refused the join (e.g. room_full). Without this the client
+        // sat 'connected' in an empty world with no init ever arriving.
+        this.callbacks.onError?.(msg.code || 'unknown', msg.message || '');
+        if (msg.code === 'room_full') {
+          // Retrying the same full room would just be refused again.
+          this.intentionallyClosed = true;
+          this.clearReconnectTimer();
+          this.closeSocket();
+          this.remotePlayers.clear();
+          this.buffers.clear();
+          this.setStatus('disconnected');
+        }
         break;
       }
 
@@ -412,14 +461,8 @@ export class MultiplayerClient {
 
   public disconnect() {
     this.intentionallyClosed = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    this.clearReconnectTimer();
+    this.closeSocket();
     this.remotePlayers.clear();
     this.buffers.clear();
     this.setStatus('disconnected');

@@ -133,7 +133,7 @@ async function main() {
     alpha.send(JSON.stringify({
       type: 'update', x: NaN, y: 'abc', angle: null, speed: 1e12, steering: undefined,
       inVehicle: true, condition: 99999, headlights: 77, turnSignal: 'hax',
-      isHonking: 'yes', isSiren: 1, speechText: 'x'.repeat(5000),
+      isHonking: 'yes', isSiren: 1, speechText: 'x'.repeat(3000),
     }));
     await delay(200);
 
@@ -215,6 +215,27 @@ async function main() {
       failures.push(`400 updates produced ${perSecond.toFixed(0)} snapshots/s; the tick is not decoupling the rate`);
     }
     if (snapshots === 0) failures.push('the snapshot tick stopped sending entirely under load');
+
+    // A message far beyond anything legitimate must drop the connection
+    // instead of being buffered and parsed (ws defaults to a 100 MB limit).
+    const oversized = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const closeCode = await new Promise<number | undefined>((resolve) => {
+      const timer = setTimeout(() => resolve(undefined), 2000);
+      oversized.once('close', (code) => { clearTimeout(timer); resolve(code); });
+      oversized.once('open', () => oversized.send(JSON.stringify({ type: 'chat', text: 'x'.repeat(20_000) })));
+      oversized.once('error', () => undefined);
+    });
+    if (closeCode !== 1009) failures.push(`an oversized message did not close the socket with 1009 (got ${closeCode})`);
+
+    // Browsers send Origin; a foreign page must not be able to open a socket.
+    const foreignOrigin = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { Origin: 'https://evil.example' } });
+    const foreignOutcome = await new Promise<string>((resolve) => {
+      const timer = setTimeout(() => resolve('timeout'), 2000);
+      foreignOrigin.once('open', () => { clearTimeout(timer); resolve('open'); });
+      foreignOrigin.once('error', () => { clearTimeout(timer); resolve('rejected'); });
+    });
+    if (foreignOutcome !== 'rejected') failures.push(`a cross-origin WebSocket was not rejected (${foreignOutcome})`);
+    foreignOrigin.terminate();
 
     if (failures.length > 0) {
       throw new Error(`MULTIPLAYER_PROTOCOL_FAILED\n${failures.join('\n')}`);

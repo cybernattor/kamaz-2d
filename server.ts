@@ -2,7 +2,6 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
-import { createServer as createViteServer } from 'vite';
 import { CityMap, WORLD_SIZE } from './src/game/cityMap';
 
 /** Snapshot broadcast rate. Clients interpolate between snapshots, so this is
@@ -10,7 +9,7 @@ import { CityMap, WORLD_SIZE } from './src/game/cityMap';
 const TICK_HZ = 20;
 const TICK_MS = 1000 / TICK_HZ;
 /** A client that stops sending is dropped after this long. */
-const PLAYER_TIMEOUT_MS = 30_000;
+const PLAYER_TIMEOUT_MS = Number(process.env.PLAYER_TIMEOUT_MS) > 0 ? Number(process.env.PLAYER_TIMEOUT_MS) : 30_000;
 /** Half-open TCP connections never fire 'close', so sockets are pinged. */
 const HEARTBEAT_MS = 30_000;
 const MAX_NAME_LENGTH = 24;
@@ -26,6 +25,10 @@ const MAX_ACTIVE_ROOMS = 20;
 const MAX_TOTAL_PLAYERS = 120;
 const ROOM_IDLE_TIMEOUT_MS = 120_000;
 const ROOM_TICK_BUDGET_MS = 8;
+/** Every legitimate message is a few hundred bytes; the ws default is 100 MB. */
+const MAX_MESSAGE_BYTES = 4096;
+/** Stops one address from filling the room and connection caps by itself. */
+const MAX_CONNECTIONS_PER_IP = 8;
 
 const MULTIPLAYER_VEHICLE_LENGTHS: Record<string, number> = {
   kamaz_dump: 74,
@@ -278,8 +281,6 @@ async function startServer() {
   const app = express();
   const server = http.createServer(app);
 
-  app.use(express.json());
-
   // API endpoints
   app.get('/api/health', (req, res) => {
     res.json({
@@ -306,12 +307,43 @@ async function startServer() {
   });
 
   // WebSocket Multiplayer Server
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
+  const connectionsPerIp = new Map<string, number>();
+  const clientIp = (request: http.IncomingMessage) => {
+    // Behind a proxy (Render) the socket address is the proxy's.
+    const forwarded = request.headers['x-forwarded-for'];
+    const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
+    return first || request.socket.remoteAddress || 'unknown';
+  };
+  /** Browsers always send Origin on a WebSocket handshake; a page on another
+   *  site must not be able to drive this server. Non-browser clients omit it. */
+  const isSameOrigin = (request: http.IncomingMessage) => {
+    const origin = request.headers.origin;
+    if (!origin) return true;
+    try {
+      return new URL(origin).host === request.headers.host;
+    } catch {
+      return false;
+    }
+  };
   server.on('upgrade', (request, socket, head) => {
     const requestPath = request.url?.split('?')[0];
     if (requestPath !== '/ws') return;
 
+    const ip = clientIp(request);
+    if (!isSameOrigin(request) || (connectionsPerIp.get(ip) || 0) >= MAX_CONNECTIONS_PER_IP) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
     wss.handleUpgrade(request, socket, head, (ws) => {
+      connectionsPerIp.set(ip, (connectionsPerIp.get(ip) || 0) + 1);
+      ws.once('close', () => {
+        const remaining = (connectionsPerIp.get(ip) || 1) - 1;
+        if (remaining > 0) connectionsPerIp.set(ip, remaining);
+        else connectionsPerIp.delete(ip);
+      });
       wss.emit('connection', ws, request);
     });
   });
@@ -647,12 +679,21 @@ async function startServer() {
   // Periodic cleanup of inactive players and respawning destructible props
   setInterval(() => {
     const now = Date.now();
-      for (const [roomId, room] of rooms) {
-      for (const [pId, p] of room.players) {
+    for (const [roomId, room] of rooms) {
+      for (const [pId, p] of Array.from(room.players)) {
         if (now - p.lastUpdate > PLAYER_TIMEOUT_MS) {
-          room.players.delete(pId);
-          room.dirty.delete(pId);
-          broadcastToRoom(roomId, { type: 'player_left', playerId: pId });
+          // Closing the socket matters: otherwise it keeps its playerId, cannot
+          // rejoin ("already joined") and its updates are silently dropped.
+          const stale = Array.from(connections).find(([, connectionState]) => connectionState.playerId === pId);
+          if (stale) {
+            connections.delete(stale[0]);
+            removePlayer(stale[0], stale[1].roomId, pId);
+            stale[0].close(4000, 'inactive');
+          } else {
+            room.players.delete(pId);
+            room.dirty.delete(pId);
+            broadcastToRoom(roomId, { type: 'player_left', playerId: pId });
+          }
         }
       }
 
@@ -675,6 +716,8 @@ async function startServer() {
 
   // Vite middleware in dev / static in prod
   if (process.env.NODE_ENV !== 'production') {
+    // Dynamic so the production bundle never loads the dev toolchain.
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: { server },

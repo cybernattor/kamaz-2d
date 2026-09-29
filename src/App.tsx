@@ -307,6 +307,9 @@ export default function App() {
         setMpStatus(status);
         if (status !== 'connected') sound.clearAllRemoteSounds();
       },
+      onError: (_code, message) => {
+        pushFeedEvent({ type: 'chat', playerId: 'system', name: 'Сервер', text: message || 'Не удалось подключиться к комнате' });
+      },
       onNameAssigned: (name) => {
         setPlayerName(name);
         playerCharRef.current.name = name;
