@@ -8,6 +8,7 @@ interface OnlinePanelProps {
   roomId: string;
   remotePlayers: RemotePlayer[];
   isTouchDevice: boolean;
+  unreadChat: number;
   onOpenChat: () => void;
 }
 
@@ -19,7 +20,7 @@ const MAX_LISTED = 6;
  * nothing on screen told a new player the game is a shared live world.
  */
 export const OnlinePanel: React.FC<OnlinePanelProps> = ({
-  status, roomId, remotePlayers, isTouchDevice, onOpenChat,
+  status, roomId, remotePlayers, isTouchDevice, unreadChat, onOpenChat,
 }) => {
   const connected = status === 'connected';
   const total = remotePlayers.length + 1;
@@ -54,6 +55,11 @@ export const OnlinePanel: React.FC<OnlinePanelProps> = ({
         >
           <MessageSquare className="w-3 h-3" />
           <span className="font-bold">Чат</span>
+          {unreadChat > 0 && (
+            <span className="min-w-4 rounded-full bg-rose-500 px-1 text-center text-[10px] font-bold leading-4 text-white animate-pulse">
+              {unreadChat > 9 ? '9+' : unreadChat}
+            </span>
+          )}
           {!isTouchDevice && <kbd className="rounded border border-cyan-400/40 px-1 text-[10px] text-cyan-300">Enter</kbd>}
         </button>
       </div>

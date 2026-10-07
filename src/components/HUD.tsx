@@ -57,6 +57,7 @@ interface HUDProps {
   isTouchDevice: boolean;
   feedEvents: FeedEvent[];
   roomId: string;
+  unreadChat: number;
 }
 
 export const HUD: React.FC<HUDProps> = ({
@@ -93,6 +94,7 @@ export const HUD: React.FC<HUDProps> = ({
   isTouchDevice,
   feedEvents,
   roomId,
+  unreadChat,
 }) => {
   // Speedometer calculation
   const speedKmH = playerVehicle ? Math.round(Math.abs(playerVehicle.speed) * 3.6) : Math.round(playerChar.speed * 3.6);
@@ -237,6 +239,11 @@ export const HUD: React.FC<HUDProps> = ({
             >
               <MessageSquare className="w-3.5 h-3.5" />
               <span className="text-[10px] font-bold">Чат</span>
+              {unreadChat > 0 && (
+                <span className="min-w-4 rounded-full bg-rose-500 px-1 text-center text-[10px] font-bold leading-4 text-white animate-pulse">
+                  {unreadChat > 9 ? '9+' : unreadChat}
+                </span>
+              )}
               <span className="text-[10px] font-bold font-mono">
                 {multiplayerStatus === 'connected' ? onlineCount + 1 : '—'}
               </span>
@@ -409,6 +416,7 @@ export const HUD: React.FC<HUDProps> = ({
             roomId={roomId}
             remotePlayers={remotePlayers}
             isTouchDevice={isTouchDevice}
+            unreadChat={unreadChat}
             onOpenChat={onOpenMultiplayer}
           />
         )}

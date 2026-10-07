@@ -11,3 +11,32 @@
     transform: translateY(0);
   }
 }
+
+/* Chat messages from other players: slide in from the left, glow briefly so
+   the eye catches them, then fade out before the toast is removed. */
+@keyframes feedSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-24px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes feedGlow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0);
+  }
+  30% {
+    box-shadow: 0 0 18px 2px rgba(34, 211, 238, 0.55);
+  }
+}
+
+@keyframes feedFadeOut {
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}

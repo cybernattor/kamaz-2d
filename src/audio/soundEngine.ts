@@ -567,19 +567,26 @@ class SoundEngine {
   // joining/leaving). Direction of the interval hints at what happened without
   // needing to glance at the toast: rising for someone arriving, falling for
   // someone leaving, a flat neutral blip for a chat message.
-  public playNotification(kind: 'chat' | 'join' | 'leave' = 'chat') {
+  // 'incoming' is a message from another player: a brighter, louder
+  // three-note ding that stands out from the quiet system blip.
+  public playNotification(kind: 'chat' | 'incoming' | 'join' | 'leave' = 'chat') {
     if (!this.initialized || this.isMuted || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
 
     const [f1, f2] =
       kind === 'join' ? [523.25, 783.99] // C5 -> G5, rising
       : kind === 'leave' ? [659.25, 440.0] // E5 -> A4, falling
+      : kind === 'incoming' ? [987.77, 1318.51] // B5 -> E6
       : [740.0, 740.0]; // F#5, flat
 
-    [
+    const peak = kind === 'incoming' ? 0.2 : 0.12;
+    const notes = [
       { freq: f1, at: 0 },
       { freq: f2, at: 0.09 },
-    ].forEach(({ freq, at }) => {
+    ];
+    if (kind === 'incoming') notes.push({ freq: f2, at: 0.2 });
+
+    notes.forEach(({ freq, at }) => {
       if (!this.ctx || !this.masterGain) return;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -587,7 +594,7 @@ class SoundEngine {
       osc.frequency.setValueAtTime(freq, now + at);
 
       gain.gain.setValueAtTime(0, now + at);
-      gain.gain.linearRampToValueAtTime(0.12, now + at + 0.015);
+      gain.gain.linearRampToValueAtTime(peak, now + at + 0.015);
       gain.gain.exponentialRampToValueAtTime(0.001, now + at + 0.18);
 
       osc.connect(gain);

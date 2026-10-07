@@ -42,6 +42,9 @@ const REMOTE_SIREN_BASE_VOLUME = 0.18;
 
 // How long a chat/join/leave toast stays on screen before it auto-dismisses.
 const FEED_EVENT_TTL_MS = 6000;
+// Messages from other players are what the feed exists for, so they stay
+// longer than join/leave notices.
+const FEED_CHAT_TTL_MS = 12000;
 
 /**
  * A ref argument is evaluated on every render even though React keeps only the
@@ -194,14 +197,25 @@ export default function App() {
 
   // Pushes a toast onto the on-screen radio feed and schedules its own
   // removal — callers don't need to track timers themselves.
-  const pushFeedEvent = useCallback((entry: Omit<FeedEvent, 'id'>) => {
+  const pushFeedEvent = useCallback((entry: Omit<FeedEvent, 'id' | 'ttl'>) => {
     const id = `feed_${Date.now()}_${Math.random()}`;
-    setFeedEvents((prev) => [...prev.slice(-5), { ...entry, id }]);
-    sound.playNotification(entry.type);
+    const ttl = entry.type === 'chat' ? FEED_CHAT_TTL_MS : FEED_EVENT_TTL_MS;
+    setFeedEvents((prev) => [...prev.slice(-4), { ...entry, id, ttl }]);
+    sound.playNotification(entry.incoming ? 'incoming' : entry.type);
     setTimeout(() => {
       setFeedEvents((prev) => prev.filter((ev) => ev.id !== id));
-    }, FEED_EVENT_TTL_MS);
+    }, ttl);
   }, []);
+
+  // Messages from other players that arrived while the chat was closed.
+  const [unreadChat, setUnreadChat] = useState(0);
+  const myPlayerIdRef = useRef<string | null>(null);
+  const chatOpenRef = useRef(false);
+  useEffect(() => { myPlayerIdRef.current = myPlayerId; }, [myPlayerId]);
+  useEffect(() => {
+    chatOpenRef.current = showChat || showMultiplayer;
+    if (showChat || showMultiplayer) setUnreadChat(0);
+  }, [showChat, showMultiplayer]);
 
   // Cosmetic settings stay on this device only. Multiplayer identity remains
   // server-assigned; the saved nickname is merely a preferred display name.
@@ -301,7 +315,9 @@ export default function App() {
       },
       onChatMessage: (msg) => {
         setChatMessages((prev) => [...prev.slice(-40), msg]);
-        pushFeedEvent({ type: 'chat', playerId: msg.playerId, name: msg.name, text: msg.text });
+        const fromOthers = msg.playerId !== myPlayerIdRef.current;
+        if (fromOthers && !chatOpenRef.current) setUnreadChat((count) => count + 1);
+        pushFeedEvent({ type: 'chat', playerId: msg.playerId, name: msg.name, text: msg.text, incoming: fromOthers });
       },
       onStatusChange: (status) => {
         setMpStatus(status);
@@ -1061,6 +1077,7 @@ export default function App() {
         isTouchDevice={isTouchDevice}
         feedEvents={feedEvents}
         roomId={mpRoomId}
+        unreadChat={unreadChat}
       />
 
       {/* Steering wheel on every device; pedals remain touch-only. */}
