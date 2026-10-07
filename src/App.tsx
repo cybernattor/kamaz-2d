@@ -1060,6 +1060,7 @@ export default function App() {
         onlineCount={remotePlayers.length}
         isTouchDevice={isTouchDevice}
         feedEvents={feedEvents}
+        roomId={mpRoomId}
       />
 
       {/* Steering wheel on every device; pedals remain touch-only. */}

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { Minimap } from './Minimap';
 import { NetworkFeed, FeedEvent } from './NetworkFeed';
+import { OnlinePanel } from './OnlinePanel';
 import { CityMap } from '../game/cityMap';
 
 interface HUDProps {
@@ -55,6 +56,7 @@ interface HUDProps {
   onlineCount: number;
   isTouchDevice: boolean;
   feedEvents: FeedEvent[];
+  roomId: string;
 }
 
 export const HUD: React.FC<HUDProps> = ({
@@ -90,6 +92,7 @@ export const HUD: React.FC<HUDProps> = ({
   onlineCount,
   isTouchDevice,
   feedEvents,
+  roomId,
 }) => {
   // Speedometer calculation
   const speedKmH = playerVehicle ? Math.round(Math.abs(playerVehicle.speed) * 3.6) : Math.round(playerChar.speed * 3.6);
@@ -229,11 +232,11 @@ export const HUD: React.FC<HUDProps> = ({
                   ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 hover:bg-emerald-900/60'
                   : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700'
               }`}
-              title={multiplayerStatus === 'connected' ? `Рация — онлайн (${onlineCount + 1})` : 'Открыть рацию'}
-              aria-label="Открыть рацию"
+              title={multiplayerStatus === 'connected' ? `Чат — онлайн (${onlineCount + 1}) [Enter]` : 'Открыть чат [Enter]'}
+              aria-label="Открыть чат"
             >
               <MessageSquare className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline text-[10px] font-bold">Рация</span>
+              <span className="text-[10px] font-bold">Чат</span>
               <span className="text-[10px] font-bold font-mono">
                 {multiplayerStatus === 'connected' ? onlineCount + 1 : '—'}
               </span>
@@ -396,8 +399,19 @@ export const HUD: React.FC<HUDProps> = ({
 
       {/* Radio feed: chat lines + join/leave, directly above the controls
           legend so it never overlaps it or the minimap regardless of screen size */}
-      <div className="pointer-events-none mt-auto mb-1 w-full">
+      <div className="pointer-events-none mt-auto mb-1 w-full flex flex-col gap-1.5">
         <NetworkFeed events={feedEvents} />
+        {/* Touch layouts keep the bottom strip free for the wheel/pedals;
+            they use the top-bar chat button instead. */}
+        {!isTouchDevice && (
+          <OnlinePanel
+            status={multiplayerStatus}
+            roomId={roomId}
+            remotePlayers={remotePlayers}
+            isTouchDevice={isTouchDevice}
+            onOpenChat={onOpenMultiplayer}
+          />
+        )}
       </div>
 
       {/* 3. BOTTOM ROW: Controls Legend (Left) + Driving Instrument Pod (Right)

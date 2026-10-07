@@ -357,6 +357,15 @@ export class PhysicsEngine {
       ped.vehicleHitCooldown = Math.max(0, (ped.vehicleHitCooldown || 0) - delta);
     });
 
+    // Impact cooldown keys are per vehicle pair / vehicle+building and NPC ids
+    // are never reused, so the map would otherwise grow for the whole session.
+    // Entries older than the longest cooldown (500ms) carry no information.
+    if (this.lastImpactTime.size > 128) {
+      for (const [key, time] of this.lastImpactTime) {
+        if (now - time > 5000) this.lastImpactTime.delete(key);
+      }
+    }
+
     const currentVehicleIds = new Set(vehicles.map((vehicle) => vehicle.id));
     for (const id of this.previousVehiclePositions.keys()) {
       if (!currentVehicleIds.has(id)) this.previousVehiclePositions.delete(id);
