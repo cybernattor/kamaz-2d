@@ -526,25 +526,28 @@ export class PhysicsEngine {
             v2.x += nx * pushForce * 25 * delta;
             v2.y += ny * pushForce * 25 * delta;
 
-            // Impart rolling speed to v2 in push direction
+            // Momentum exchange along the contact normal with a small
+            // restitution. The old rule forced the pushed car to exactly 28%
+            // of the hitter's speed on every step while the hitter kept its
+            // own speed, so the hitter overtook it again next step and the
+            // NPC stayed glued to the bumper and was carried along without
+            // the player ever slowing down. An impulse leaves the pair
+            // separating (pushed car at least as fast along the normal as the
+            // hitter) so contact ends after one step, and the hitter loses
+            // speed in proportion to the mass it has to move.
+            const v1Dot = Math.cos(v1.angle) * nx + Math.sin(v1.angle) * ny;
             const v2Dot = Math.cos(v2.angle) * nx + Math.sin(v2.angle) * ny;
-            if (v2Dot > 0.2) {
-              // A collision transfers only a fraction of forward momentum.
-              // Copying 85% of the hitter's speed made a stopped NPC launch
-              // like a projectile after a gentle contact.
-              v2.speed = Math.max(v2.speed, Math.abs(v1.speed) * 0.28);
-            } else if (v2Dot < -0.2) {
-              v2.speed = -Math.abs(v1.speed * 0.7);
-            } else {
+            const restitution = 0.2;
+            const impulse = (1 + restitution) * normalClosingSpeed / (1 / cfg1.mass + 1 / cfg2.mass);
+            v1.speed -= (impulse / cfg1.mass) * v1Dot;
+            v2.speed += (impulse / cfg2.mass) * v2Dot;
+
+            if (Math.abs(v2Dot) <= 0.2) {
               // Sliding sideways
               v2.x += nx * Math.abs(v1.speed) * 4 * delta;
               v2.y += ny * Math.abs(v1.speed) * 4 * delta;
               v2.angle += (nx * -Math.sin(v2.angle) + ny * Math.cos(v2.angle)) * 0.05;
             }
-
-            // Pushing vehicle experiences minor resistance proportional to pushed vehicle mass
-            const resistance = (cfg2.mass / totalMass) * 0.12;
-            v1.speed *= Math.max(0.7, 1 - resistance * delta * 4);
           } else if (normalClosingSpeed < -0.05 && !firstPlayerAnchored) {
             // v2 is moving into v1
             const pushForce = -normalClosingSpeed * ratio1;
