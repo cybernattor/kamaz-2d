@@ -11,6 +11,9 @@ class SoundEngine {
   private engineOsc2: OscillatorNode | null = null;
   private engineGain: GainNode | null = null;
   private engineFilter: BiquadFilterNode | null = null;
+  private engineSample: AudioBufferSourceNode | null = null;
+  private engineSampleGain: GainNode | null = null;
+  private audioSamples = new Map<string, AudioBuffer>();
   
   private sirenOsc: OscillatorNode | null = null;
   private sirenGain: GainNode | null = null;
@@ -19,6 +22,8 @@ class SoundEngine {
   private hornOsc1: OscillatorNode | null = null;
   private hornOsc2: OscillatorNode | null = null;
   private hornGain: GainNode | null = null;
+  private hornSample: AudioBufferSourceNode | null = null;
+  private hornSampleGain: GainNode | null = null;
 
   private skidSource: AudioBufferSourceNode | null = null;
   private skidGain: GainNode | null = null;
@@ -51,9 +56,49 @@ class SoundEngine {
       }
 
       this.initialized = true;
+      void this.loadAudioSamples();
     } catch (e) {
       console.warn('AudioContext not allowed yet or not supported:', e);
     }
+  }
+
+  private async loadAudioSamples() {
+    if (!this.ctx) return;
+    const samples = [
+      ['diesel-idle', '/audio/diesel-idle.ogg'],
+      ['diesel-air-horn', '/audio/diesel-air-horn.ogg'],
+      ['air-brake-release', '/audio/air-brake-release.ogg'],
+      ['tire-squeal', '/audio/tire-squeal.ogg'],
+      ['impact-thud', '/audio/impact-thud.ogg'],
+      ['impact-metal', '/audio/impact-metal.ogg'],
+    ] as const;
+
+    await Promise.all(samples.map(async ([name, url]) => {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) return;
+        const buffer = await this.ctx!.decodeAudioData(await response.arrayBuffer());
+        this.audioSamples.set(name, buffer);
+      } catch (error) {
+        console.warn(`Could not load audio sample ${name}:`, error);
+      }
+    }));
+  }
+
+  private playSample(name: string, volume: number, playbackRate = 1, offset = 0) {
+    if (!this.ctx || !this.masterGain || this.isMuted) return null;
+    const buffer = this.audioSamples.get(name);
+    if (!buffer) return null;
+    const source = this.ctx.createBufferSource();
+    const gain = this.ctx.createGain();
+    const now = this.ctx.currentTime;
+    source.buffer = buffer;
+    source.playbackRate.setValueAtTime(playbackRate, now);
+    gain.gain.setValueAtTime(volume, now);
+    source.connect(gain);
+    gain.connect(this.masterGain);
+    source.start(now, Math.min(offset, Math.max(0, buffer.duration - 0.05)));
+    return { source, gain };
   }
 
   public setMuted(muted: boolean) {
@@ -85,6 +130,39 @@ class SoundEngine {
       this.ctx.resume();
     }
 
+    const now = this.ctx.currentTime;
+    const speedRatio = Math.min(Math.abs(speedKmH) / 100, 1.5);
+    if (isKamaz && this.audioSamples.has('diesel-idle')) {
+      if (this.engineGain) this.engineGain.gain.setTargetAtTime(0, now, 0.08);
+      if (!this.engineSample) {
+        const sample = this.audioSamples.get('diesel-idle')!;
+        this.engineSample = this.ctx.createBufferSource();
+        this.engineSample.buffer = sample;
+        this.engineSample.loop = true;
+        this.engineSample.loopStart = 2;
+        this.engineSample.loopEnd = Math.max(2.1, sample.duration - 2);
+        this.engineSampleGain = this.ctx.createGain();
+        this.engineSample.connect(this.engineSampleGain);
+        this.engineSampleGain.connect(this.masterGain);
+        this.engineSample.start(now);
+      }
+      this.engineSample.playbackRate.setTargetAtTime(
+        Math.min(1.35, 0.82 + speedRatio * 0.2 + (isThrottle ? 0.16 : 0)), now, 0.18,
+      );
+      this.engineSampleGain?.gain.setTargetAtTime(
+        0.12 + (isThrottle ? 0.035 : 0) + Math.min(speedRatio, 1) * 0.025, now, 0.15,
+      );
+      return;
+    }
+
+    if (this.engineSample) {
+      this.engineSampleGain?.gain.setTargetAtTime(0, now, 0.08);
+      const oldSample = this.engineSample;
+      setTimeout(() => { try { oldSample.stop(); } catch (_) {} }, 300);
+      this.engineSample = null;
+      this.engineSampleGain = null;
+    }
+
     if (!this.engineOsc1) {
       // Create Engine Synthesizer
       this.engineOsc1 = this.ctx.createOscillator();
@@ -109,12 +187,10 @@ class SoundEngine {
     }
 
     const baseFreq = isKamaz ? 38 : 55;
-    const speedRatio = Math.min(Math.abs(speedKmH) / 100, 1.5);
     const throttleBoost = isThrottle ? 25 : 0;
     const targetFreq1 = baseFreq + speedRatio * 85 + throttleBoost;
     const targetFreq2 = (baseFreq * 1.5) + speedRatio * 110 + (throttleBoost * 0.8);
 
-    const now = this.ctx.currentTime;
     this.engineOsc1.frequency.setTargetAtTime(targetFreq1, now, 0.08);
     this.engineOsc2.frequency.setTargetAtTime(targetFreq2, now, 0.08);
 
@@ -126,11 +202,25 @@ class SoundEngine {
     if (this.engineGain && this.ctx) {
       this.engineGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
     }
+    if (this.engineSample && this.ctx) {
+      this.engineSampleGain?.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+      const sample = this.engineSample;
+      setTimeout(() => { try { sample.stop(); } catch (_) {} }, 350);
+      this.engineSample = null;
+      this.engineSampleGain = null;
+    }
   }
 
   // KAMAZ Air Brake Release Hiss
   public playAirBrake() {
     if (!this.initialized || this.isMuted || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const sample = this.audioSamples.get('air-brake-release');
+    if (sample) {
+      const maxOffset = Math.max(0, sample.duration - 0.55);
+      const sound = this.playSample('air-brake-release', 0.18, 0.9 + Math.random() * 0.2, Math.random() * maxOffset);
+      sound?.source.stop(this.ctx.currentTime + 0.5);
+      return;
+    }
     const now = this.ctx.currentTime;
     const source = this.ctx.createBufferSource();
     source.buffer = this.noiseBuffer;
@@ -155,7 +245,22 @@ class SoundEngine {
   // Horn (Heavy Truck or Standard)
   public startHorn(isKamaz: boolean) {
     if (!this.initialized || this.isMuted || !this.ctx || !this.masterGain) return;
-    if (this.hornOsc1) return; // already active
+    if (this.hornOsc1 || this.hornSample) return; // already active
+
+    if (isKamaz && this.audioSamples.has('diesel-air-horn')) {
+      const sound = this.playSample('diesel-air-horn', 0.28);
+      if (sound) {
+        this.hornSample = sound.source;
+        this.hornSampleGain = sound.gain;
+        sound.source.onended = () => {
+          if (this.hornSample === sound.source) {
+            this.hornSample = null;
+            this.hornSampleGain = null;
+          }
+        };
+        return;
+      }
+    }
 
     const now = this.ctx.currentTime;
     this.hornOsc1 = this.ctx.createOscillator();
@@ -188,6 +293,13 @@ class SoundEngine {
   }
 
   public stopHorn() {
+    if (this.hornSample && this.ctx) {
+      this.hornSampleGain?.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
+      const sample = this.hornSample;
+      setTimeout(() => { try { sample.stop(); } catch (_) {} }, 180);
+      this.hornSample = null;
+      this.hornSampleGain = null;
+    }
     if (this.hornGain && this.ctx && this.hornOsc1 && this.hornOsc2) {
       const now = this.ctx.currentTime;
       this.hornGain.gain.linearRampToValueAtTime(0.001, now + 0.08);
@@ -394,6 +506,22 @@ class SoundEngine {
     const now = this.ctx.currentTime;
 
     if (isSkidding && intensity > 0.15) {
+      const sample = this.audioSamples.get('tire-squeal');
+      if (sample) {
+        if (!this.skidSource) {
+          this.skidSource = this.ctx.createBufferSource();
+          this.skidSource.buffer = sample;
+          this.skidSource.loop = true;
+          this.skidGain = this.ctx.createGain();
+          this.skidGain.gain.setValueAtTime(0.001, now);
+          this.skidSource.connect(this.skidGain);
+          this.skidGain.connect(this.masterGain);
+          this.skidSource.start(now);
+        }
+        this.skidSource.playbackRate.setTargetAtTime(0.9 + Math.min(0.35, intensity * 0.25), now, 0.1);
+        this.skidGain?.gain.setTargetAtTime(Math.min(0.13, intensity * 0.14), now, 0.08);
+        return;
+      }
       if (!this.skidGain) {
         this.skidSource = this.ctx.createBufferSource();
         this.skidSource.buffer = this.noiseBuffer;
@@ -417,6 +545,12 @@ class SoundEngine {
       this.skidGain.gain.setTargetAtTime(targetGain, now, 0.05);
     } else if (this.skidGain) {
       this.skidGain.gain.setTargetAtTime(0.001, now, 0.08);
+      if (this.skidSource) {
+        const source = this.skidSource;
+        setTimeout(() => { try { source.stop(); } catch (_) {} }, 300);
+        this.skidSource = null;
+        this.skidGain = null;
+      }
     }
   }
 
@@ -425,6 +559,16 @@ class SoundEngine {
     if (!this.initialized || this.isMuted || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;
     const volume = Math.min(0.6, Math.max(0.1, impactForce * 0.4));
+
+    if (this.audioSamples.has('impact-thud') && this.audioSamples.has('impact-metal')) {
+      const rate = 0.88 + Math.random() * 0.24;
+      const thud = this.playSample('impact-thud', volume * 0.5, rate);
+      const metal = this.playSample('impact-metal', volume * 0.28, 0.84 + Math.random() * 0.32,
+        Math.random() * Math.max(0, this.audioSamples.get('impact-metal')!.duration - 0.35));
+      thud?.source.stop(now + 1.2);
+      metal?.source.stop(now + 0.7);
+      return;
+    }
 
     // Low thud
     const osc = this.ctx.createOscillator();

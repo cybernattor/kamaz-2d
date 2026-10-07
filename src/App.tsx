@@ -150,6 +150,7 @@ export default function App() {
 
   // Input states
   const keysRef = useRef<{ [key: string]: boolean }>({});
+  const airBrakeWasPressedRef = useRef(false);
   // Analog steering from the touch wheel: -1..1 while held, null when the
   // wheel isn't being touched (steering then falls back to the A/D keys).
   const steerAxisRef = useRef<number | null>(null);
@@ -676,6 +677,9 @@ export default function App() {
         // Synchronize engine sound pitch
         const isThrottle = Boolean(keys['KeyW'] || keys['ArrowUp']);
         const isKamaz = v.type.startsWith('kamaz');
+        const isBraking = Boolean(keys['Space'] || keys['ArrowDown']);
+        if (isKamaz && isBraking && !airBrakeWasPressedRef.current) sound.playAirBrake();
+        airBrakeWasPressedRef.current = isBraking;
         sound.updateEngine(Math.round(v.speed * 3.6), isThrottle, isKamaz);
       } else {
         physicsRef.current.updatePlayerCharacter(
@@ -690,6 +694,7 @@ export default function App() {
           delta,
           cityMapRef.current.buildings
         );
+        airBrakeWasPressedRef.current = false;
         sound.stopEngine();
       }
 
