@@ -41,7 +41,7 @@ export function integrateVehicleSpeed(
     if (speed < target) {
       const ratio = Math.min(1, Math.max(0, speed / Math.max(maxForward, 0.1)));
       const drive = config.acceleration * Math.max(0.2, 1 - Math.pow(ratio, 1.35));
-      return Math.min(target, speed + Math.max(0, drive - resistance) * delta);
+      return Math.min(target, speed + Math.max(0, drive - resistance) * 0.8 * delta);
     }
     return speed;
   }
@@ -73,13 +73,13 @@ export function integrateVehicleSpeed(
   if (input.throttle && speed < -0.05 && !input.brake && !input.reverse) {
     // Forward throttle mirrors reverse: it counters backward motion directly
     // and naturally crosses through zero instead of requiring a dead stop.
-    const forwardDrive = config.acceleration * 0.8 + resistance;
+    const forwardDrive = config.acceleration * 0.64 + resistance;
     return Math.min(maxForward, speed + forwardDrive * delta);
   }
 
   if (input.throttle && speed >= 0 && !input.brake && !input.reverse) {
     const drive = config.acceleration * Math.max(0.2, 1 - Math.pow(forwardRatio, 1.35));
-    return Math.min(maxForward, Math.max(0, speed + (drive - resistance) * delta));
+    return Math.min(maxForward, Math.max(0, speed + (drive - resistance) * 0.8 * delta));
   }
 
   const coastDeceleration = resistance + (speed > 0 ? config.engineBraking : 0);

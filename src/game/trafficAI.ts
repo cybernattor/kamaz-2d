@@ -2025,16 +2025,16 @@ export class TrafficAI {
         // Active Lane Keeping Controller
         if (ai.roadType === 'vertical') {
           // Align X to lane center
-          car.x += (targetLane.x! - car.x) * Math.min(1.0, 5.0 * delta);
+          car.x += (targetLane.x! - car.x) * Math.min(1.0, 4.0 * delta);
           // Align heading
           const diff = Math.atan2(Math.sin(targetLane.angle - car.angle), Math.cos(targetLane.angle - car.angle));
-          car.angle += diff * Math.min(1.0, 6.0 * delta);
+          car.angle += diff * Math.min(1.0, 4.8 * delta);
         } else {
           // Align Y to lane center
-          car.y += (targetLane.y! - car.y) * Math.min(1.0, 5.0 * delta);
+          car.y += (targetLane.y! - car.y) * Math.min(1.0, 4.0 * delta);
           // Align heading
           const diff = Math.atan2(Math.sin(targetLane.angle - car.angle), Math.cos(targetLane.angle - car.angle));
-          car.angle += diff * Math.min(1.0, 6.0 * delta);
+          car.angle += diff * Math.min(1.0, 4.8 * delta);
         }
       }
 

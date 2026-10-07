@@ -40,3 +40,21 @@
     transform: translateY(4px);
   }
 }
+
+@keyframes hazardBlink {
+  50% {
+    background-color: rgb(220 38 38);
+    box-shadow: 0 0 10px rgb(248 113 113 / 45%);
+  }
+}
+
+.hazard-active {
+  animation: hazardBlink 700ms steps(2, end) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hazard-active {
+    animation: none;
+    background-color: rgb(127 29 29);
+  }
+}

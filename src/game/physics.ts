@@ -26,6 +26,28 @@ export type VehicleCrashHandler = (
   secondVehicle?: VehicleInstance
 ) => void;
 
+function getBuildingContact(vehicle: VehicleInstance, width: number, length: number, building: Building) {
+  const forward = { x: Math.cos(vehicle.angle), y: Math.sin(vehicle.angle) };
+  const lateral = { x: -forward.y, y: forward.x };
+  const dx = vehicle.x - building.x;
+  const dy = vehicle.y - building.y;
+  let contact: { x: number; y: number; overlap: number } | undefined;
+
+  for (const axis of [{ x: 1, y: 0 }, { x: 0, y: 1 }, forward, lateral]) {
+    const vehicleRadius = length / 2 * Math.abs(axis.x * forward.x + axis.y * forward.y)
+      + width / 2 * Math.abs(axis.x * lateral.x + axis.y * lateral.y);
+    const buildingRadius = building.width / 2 * Math.abs(axis.x) + building.height / 2 * Math.abs(axis.y);
+    const distance = dx * axis.x + dy * axis.y;
+    const overlap = vehicleRadius + buildingRadius - Math.abs(distance);
+    if (overlap <= 0) return undefined;
+    if (!contact || overlap < contact.overlap) {
+      const direction = distance >= 0 ? 1 : -1;
+      contact = { x: axis.x * direction, y: axis.y * direction, overlap };
+    }
+  }
+  return contact;
+}
+
 export class PhysicsEngine {
   private previousVehiclePositions = new Map<string, { x: number; y: number }>();
   public skidMarks: SkidMark[] = [];
@@ -92,7 +114,7 @@ export class PhysicsEngine {
     // 1. Dynamic Steering Kinematics (Responsive & Speed-sensitive)
     const speedKmh = Math.abs(vehicle.speed) * 3.6;
     const speedFactor = Math.max(0.7, 1.0 - (speedKmh / (config.maxSpeed * 1.4)) * 0.3);
-    const maxSteerAngle = 0.62 * speedFactor * dazeFactor; // About 35 degrees at low speed
+    const maxSteerAngle = 0.5 * speedFactor * dazeFactor; // Reduced steering authority
     const steerSpeed = 3.8;
     let targetSteer = 0;
 
@@ -182,8 +204,8 @@ export class PhysicsEngine {
       // Keep a small, readable bounce while removing most impact energy. The
       // next frame's normal traction model then settles the vehicle instead
       // of allowing throttle to pin it to the boundary indefinitely.
-      vehicle.speed = -vehicle.speed * 0.12;
-      vehicle.angularVelocity *= 0.5;
+      vehicle.speed = -vehicle.speed * 0.35;
+      vehicle.angularVelocity *= 0.75;
     }
 
     // 7. Skid marks & Tire sounds
@@ -571,30 +593,12 @@ export class PhysicsEngine {
       // Buildings are static and the city is bounded; a conservative radius
       // keeps the broad phase cheap without ever missing a nearby wall.
       for (const b of this.buildingIndex.queryRadius(v1.x, v1.y, 420)) {
-        const halfW = b.width / 2 + cfg1.width * 0.45;
-        const halfH = b.height / 2 + cfg1.length * 0.35;
-
-        if (
-          Math.abs(v1.x - b.x) < halfW &&
-          Math.abs(v1.y - b.y) < halfH
-        ) {
-          const overlapX = halfW - Math.abs(v1.x - b.x);
-          const overlapY = halfH - Math.abs(v1.y - b.y);
-
-          // Resolved instantly, this could snap the vehicle several units in
-          // a single step whenever the overlap starts out large - most
-          // visibly when a mission swaps in a bigger truck, or a multiplayer
-          // sync/spawn drops a vehicle deep into a wall's padding. The
-          // camera follows the vehicle, so a big instant snap reads as the
-          // whole view jerking. Capping the per-step correction spreads a
-          // large overlap across a few frames instead, which still clears
-          // the wall in well under a second at 30Hz but never teleports.
-          const maxCorrection = 90 * delta;
-          if (overlapX < overlapY) {
-            v1.x += (v1.x > b.x ? 1 : -1) * Math.min(overlapX, maxCorrection);
-          } else {
-            v1.y += (v1.y > b.y ? 1 : -1) * Math.min(overlapY, maxCorrection);
-          }
+        const contact = getBuildingContact(v1, cfg1.width + 2, cfg1.length + 2, b);
+        if (contact) {
+          // Clear the overlap in one step so the vehicle cannot remain
+          // embedded in the wall and get caught there on every following tick.
+          v1.x += contact.x * contact.overlap;
+          v1.y += contact.y * contact.overlap;
 
           const impactSpeed = Math.abs(v1.speed);
           if (impactSpeed > 3.0) {
@@ -610,9 +614,7 @@ export class PhysicsEngine {
               // Same off-center-spin idea as the vehicle-vehicle case: hit a
               // wall at an angle and the car should kick sideways, not just
               // bounce straight back.
-              const wallNx = overlapX < overlapY ? (v1.x > b.x ? 1 : -1) : 0;
-              const wallNy = overlapX < overlapY ? 0 : (v1.y > b.y ? 1 : -1);
-              const wallAlignment = -Math.sin(v1.angle) * wallNx + Math.cos(v1.angle) * wallNy;
+              const wallAlignment = -Math.sin(v1.angle) * contact.x + Math.cos(v1.angle) * contact.y;
               v1.angle -= wallAlignment * Math.min(1.6, (impactSpeed - 2.0) * 0.1);
               if (v1.isPlayer) v1.dazedTimer = Math.max(v1.dazedTimer || 0, Math.min(1.0, (impactSpeed - 2.0) * 0.07));
               // A serious solo crash also leaves an NPC driver beside the

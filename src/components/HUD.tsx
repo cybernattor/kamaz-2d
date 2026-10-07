@@ -348,7 +348,7 @@ export const HUD: React.FC<HUDProps> = ({
             onClick={() => onToggleTurnSignal('hazard')}
             className={`min-h-10 min-w-10 flex items-center justify-center rounded-lg border cursor-pointer ${
               playerVehicle?.turnSignal === 'hazard'
-                ? 'bg-red-600 text-white border-red-400 animate-pulse'
+                ? 'hazard-active bg-red-950 text-red-100 border-red-400'
                 : 'bg-slate-800/80 text-slate-300 border-slate-700'
             }`}
             aria-label="Аварийка"
@@ -437,7 +437,7 @@ export const HUD: React.FC<HUDProps> = ({
             block of space. */}
         <div
           id="hud-controls-legend"
-          className="bg-slate-950/95 border border-slate-800/80 rounded-xl shadow-xl w-full sm:max-w-md text-[11px] font-mono text-slate-300"
+          className="ml-28 w-[calc(100%-7rem)] bg-slate-950/95 border border-slate-800/80 rounded-xl shadow-xl sm:ml-32 sm:w-full sm:max-w-md text-[11px] font-mono text-slate-300"
         >
           <button
             id="btn-toggle-controls-legend"
@@ -638,7 +638,7 @@ export const HUD: React.FC<HUDProps> = ({
               onClick={() => onToggleTurnSignal('hazard')}
               className={`min-h-10 py-1 px-2 rounded text-xs font-mono font-bold border transition-colors cursor-pointer ${
                 playerVehicle?.turnSignal === 'hazard'
-                  ? 'bg-red-600 text-white border-red-400 animate-ping'
+                ? 'hazard-active bg-red-950 text-red-100 border-red-400'
                   : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800'
               }`}
               title="Hazard Lights [X]"

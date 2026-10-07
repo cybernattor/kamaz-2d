@@ -93,7 +93,7 @@ const SteeringWheel: React.FC<{
         onPointerUp={releasePointer}
         onPointerCancel={releasePointer}
         style={{ touchAction: 'none' }}
-        className="relative w-32 h-32 rounded-full bg-slate-950/95 border border-slate-700/80 shadow-[0_12px_28px_rgba(2,6,23,0.5),inset_0_0_0_2px_rgba(255,255,255,0.04)] select-none"
+        className="relative h-28 w-28 rounded-full border border-slate-600/80 bg-slate-950/90 shadow-[0_8px_20px_rgba(2,6,23,0.45),inset_0_0_0_1px_rgba(255,255,255,0.05)] select-none"
         role="slider"
         aria-label="Руль"
         aria-valuemin={-1}
@@ -101,32 +101,26 @@ const SteeringWheel: React.FC<{
         aria-valuenow={Number(displayedSteer.toFixed(2))}
         aria-valuetext={`${Math.round(Math.abs(displayedSteer) * 100)}% ${displayedSteer < 0 ? 'влево' : displayedSteer > 0 ? 'вправо' : 'по центру'}`}
       >
-        {/* Fixed dashboard bezel and steering-strength ticks. */}
-        <div className="absolute inset-1 rounded-full border-2 border-slate-800 bg-slate-900/70" />
-        <div className="absolute inset-0 rounded-full border border-cyan-400/15" />
-        <div className="absolute left-1/2 top-0 h-1 w-8 -translate-x-1/2 rounded-b-full bg-cyan-300/80 shadow-[0_0_10px_rgba(103,232,249,0.45)]" />
-        <div className="absolute left-2 top-1/2 h-px w-2 -translate-y-1/2 bg-cyan-300/40" />
-        <div className="absolute right-2 top-1/2 h-px w-2 -translate-y-1/2 bg-cyan-300/40" />
-
-        {/* Rotating leather rim, spokes and hub. */}
-        <div
+        <div className="absolute inset-[5px] rounded-full border border-slate-700/80 bg-[radial-gradient(circle_at_50%_42%,rgba(51,65,85,0.5),rgba(2,6,23,0.9)_70%)]" />
+        <svg aria-hidden="true" viewBox="0 0 112 112" className="absolute inset-0 h-full w-full">
+          <circle cx="56" cy="56" r="52" fill="none" stroke="rgba(34,211,238,.18)" strokeWidth="1" />
+          <circle cx="56" cy="56" r="47" fill="none" stroke="rgba(148,163,184,.22)" strokeWidth="1" strokeDasharray="1 5" />
+          <path d="M56 5v5" stroke="#67e8f9" strokeWidth="2" strokeLinecap="round" />
+          <g
           id="vwheel-wheel"
-          className={`absolute inset-2 rounded-full border-[9px] border-slate-700 bg-slate-900 shadow-[inset_0_0_0_2px_rgba(15,23,42,0.95),inset_0_0_12px_rgba(2,6,23,0.9)] ${pointerSteer === null ? 'transition-transform duration-200 ease-out' : 'transition-none'}`}
-          style={{ transform: `rotate(${displayedSteer * STEER_MAX_ROTATION}deg)` }}
-        >
-          <div className="absolute inset-1 rounded-full border border-slate-500/40" />
-          <div className="absolute left-1/2 top-1/2 h-[47%] w-2.5 -translate-x-1/2 -translate-y-full rounded-full bg-slate-500 shadow-[inset_1px_0_0_rgba(255,255,255,0.22)]" />
-          <div className="absolute left-1/2 top-1/2 h-2.5 w-[47%] origin-left -translate-y-1/2 rotate-[150deg] rounded-full bg-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]" />
-          <div className="absolute left-1/2 top-1/2 h-2.5 w-[47%] origin-left -translate-y-1/2 -rotate-[150deg] rounded-full bg-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]" />
-          <div className="absolute left-1/2 top-[7px] h-2 w-2 -translate-x-1/2 rounded-full bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.55)]" />
-          <div className="absolute left-1/2 top-1/2 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-4 border-slate-500 bg-slate-950 shadow-[0_2px_6px_rgba(2,6,23,0.8),inset_0_0_0_2px_rgba(255,255,255,0.08)]">
-            <div className="h-5 w-5 rounded-full border border-cyan-300/80 bg-slate-800 shadow-[0_0_0_3px_rgba(8,145,178,0.18)]" />
-          </div>
-        </div>
-      </div>
-      <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold tracking-[0.18em] text-slate-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 shadow-[0_0_6px_rgba(103,232,249,0.7)]" />
-        <span>РУЛЬ</span>
+            className={pointerSteer === null ? 'transition-transform duration-200 ease-out' : 'transition-none'}
+            style={{ transform: `rotate(${displayedSteer * STEER_MAX_ROTATION}deg)`, transformOrigin: '56px 56px' }}
+          >
+            <circle cx="56" cy="56" r="39" fill="none" stroke="#0b1220" strokeWidth="13" />
+            <circle cx="56" cy="56" r="39" fill="none" stroke="#64748b" strokeWidth="8" />
+            <circle cx="56" cy="56" r="35" fill="none" stroke="#94a3b8" strokeOpacity=".48" strokeWidth="1" />
+            <path d="M56 53 35 31M56 53l21-22M56 53v31" fill="none" stroke="#94a3b8" strokeWidth="6" strokeLinecap="round" />
+            <path d="M56 53 35 31M56 53l21-22M56 53v31" fill="none" stroke="#cbd5e1" strokeOpacity=".35" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="56" cy="53" r="12" fill="#0b1220" stroke="#94a3b8" strokeWidth="2" />
+            <circle cx="56" cy="53" r="5" fill="#164e63" stroke="#67e8f9" strokeWidth="1.5" />
+            <circle cx="56" cy="16" r="2" fill="#67e8f9" />
+          </g>
+        </svg>
       </div>
     </div>
   );
