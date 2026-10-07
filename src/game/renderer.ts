@@ -9,7 +9,7 @@ import {
   TrafficLight,
   VehicleInstance,
 } from '../types';
-import { Building, CityDistrict, CityMap, RoadSegment, WORLD_SIZE } from './cityMap';
+import { Building, CityDistrict, CityMap, CROSSWALK_DEPTH, RoadSegment, WORLD_SIZE } from './cityMap';
 import { MapDecoration, MapTrail } from '../types';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
 import { nameColorForId } from './nameGenerator';
@@ -27,6 +27,7 @@ export class GameRenderer {
   private viewBounds = { left: 0, top: 0, right: WORLD_SIZE, bottom: WORLD_SIZE };
   private staticScene: HTMLCanvasElement | null = null;
   private staticSceneMap: CityMap | null = null;
+  private staticSceneOverview = false;
   private staticSceneScale = 1;
 
   constructor(ctx: CanvasRenderingContext2D) {
@@ -66,8 +67,8 @@ export class GameRenderer {
     return this.staticSceneScale;
   }
 
-  public getStaticScene(cityMap: CityMap) {
-    this.ensureStaticScene(cityMap);
+  public getStaticScene(cityMap: CityMap, overview = false) {
+    this.ensureStaticScene(cityMap, overview);
     return this.staticScene;
   }
 
@@ -164,8 +165,8 @@ export class GameRenderer {
     ctx.restore();
   }
 
-  private ensureStaticScene(cityMap: CityMap) {
-    if (this.staticSceneMap === cityMap && this.staticScene) return;
+  private ensureStaticScene(cityMap: CityMap, overview = false) {
+    if (this.staticSceneMap === cityMap && this.staticScene && this.staticSceneOverview === overview) return;
 
     const scale = this.staticSceneScale;
     const scene = document.createElement('canvas');
@@ -181,14 +182,15 @@ export class GameRenderer {
     this.renderDistricts(sceneCtx, cityMap.districts);
     this.renderMapDecorations(sceneCtx, cityMap.decorations);
     this.renderScenicRoutes(sceneCtx, cityMap.scenicRoutes);
-    this.renderRoads(sceneCtx, cityMap.roads);
-    this.renderIntersections(sceneCtx, cityMap);
+    this.renderRoads(sceneCtx, cityMap.roads, overview);
+    this.renderIntersections(sceneCtx, cityMap, overview);
     this.renderPOIs(sceneCtx, cityMap.pois, null);
     this.renderBuildings(sceneCtx, cityMap.buildings);
     this.viewBounds = previousBounds;
 
     this.staticScene = scene;
     this.staticSceneMap = cityMap;
+    this.staticSceneOverview = overview;
   }
 
   private drawStaticScene(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) {
@@ -494,32 +496,37 @@ export class GameRenderer {
       ctx.rotate(Math.atan2(tangent.y, tangent.x));
 
       if (road.feature === 'bridge') {
-        // Soft drop shadow the deck casts on the road passing underneath,
-        // plus a pier stub planted at each shoulder of that road.
+        // Shade the lower road beyond the deck edges and place supports
+        // outside the bridge's drivable surface.
         ctx.fillStyle = 'rgba(2, 6, 23, 0.4)';
         ctx.beginPath();
-        ctx.ellipse(0, 0, arterialHaloReach, road.width / 2 + 14, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, 0, arterialHaloReach + 18, road.width / 2 + 34, 0, 0, Math.PI * 2);
         ctx.fill();
-        [-90, 90].forEach((offset) => {
+        [-1, 1].forEach((along) => [-1, 1].forEach((across) => {
           ctx.fillStyle = '#1e293b';
           ctx.strokeStyle = '#0f172a';
           ctx.lineWidth = 2;
           ctx.beginPath();
-          ctx.roundRect(offset - 9, -(road.width / 2) - 6, 18, road.width + 12, 4);
+          ctx.roundRect(
+            along * (arterialHaloReach - 8) - 9,
+            across * (road.width / 2 + 12) - 9,
+            18,
+            18,
+            4
+          );
           ctx.fill();
           ctx.stroke();
-        });
+        }));
       } else {
-        // Dark portal mouths where the tunnel dives under the crossing
-        // road, joined by a dim strip so nothing shows through the gap.
-        ctx.fillStyle = 'rgba(2, 6, 23, 0.88)';
-        ctx.fillRect(-arterialHaloReach, -road.width / 2, arterialHaloReach * 2, road.width);
-        [-arterialHaloReach, arterialHaloReach].forEach((offset) => {
-          ctx.fillStyle = '#020617';
+        // Small portal marks show where the road dips under without hiding
+        // the full-width carriageway on the overview map.
+        [-1, 1].forEach((direction) => {
+          const offset = direction * (arterialHaloReach + 10);
+          ctx.fillStyle = '#0f172a';
           ctx.strokeStyle = '#334155';
-          ctx.lineWidth = 2;
+          ctx.lineWidth = 3;
           ctx.beginPath();
-          ctx.roundRect(offset - 14, -(road.width / 2) - 6, 28, road.width + 12, 6);
+          ctx.roundRect(offset - 10, -28, 20, 56, 5);
           ctx.fill();
           ctx.stroke();
         });
@@ -528,80 +535,93 @@ export class GameRenderer {
     });
   }
 
-  private renderRoads(ctx: CanvasRenderingContext2D, roads: RoadSegment[]) {
+  private renderRoads(ctx: CanvasRenderingContext2D, roads: RoadSegment[], overview = false) {
     const drawOrder = [...roads].sort((a, b) => this.roadZOrder(a) - this.roadZOrder(b));
-    drawOrder.forEach((road) => {
-      ctx.save();
+    const bridges = drawOrder.filter((road) => road.feature === 'bridge');
+    const groundRoads = drawOrder.filter((road) => road.feature !== 'bridge');
+    const drawRoadLine = (road: RoadSegment, width: number, offset = 0) => {
       const points = road.points.length > 1 ? road.points : [{ x: road.x1, y: road.y1 }, { x: road.x2, y: road.y2 }];
-      const draw = (offset = 0) => {
-        ctx.beginPath();
-        points.forEach((point, index) => {
-          const previous = points[Math.max(0, index - 1)];
-          const next = points[Math.min(points.length - 1, index + 1)];
-          const tangentX = next.x - previous.x;
-          const tangentY = next.y - previous.y;
-          const length = Math.hypot(tangentX, tangentY) || 1;
-          const x = point.x - (tangentY / length) * offset;
-          const y = point.y + (tangentX / length) * offset;
-          if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        });
-        ctx.stroke();
-      };
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      points.forEach((point, index) => {
+        const previous = points[Math.max(0, index - 1)];
+        const next = points[Math.min(points.length - 1, index + 1)];
+        const tangentX = next.x - previous.x;
+        const tangentY = next.y - previous.y;
+        const length = Math.hypot(tangentX, tangentY) || 1;
+        const x = point.x - (tangentY / length) * offset;
+        const y = point.y + (tangentX / length) * offset;
+        if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    };
 
-      // Sidewalk and asphalt are stroked along the full polyline, so bends do
-      // not turn into disconnected rectangular slabs.
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+    // Paint every shoulder before any asphalt. Drawing each road completely
+    // in sequence let a later road's wide shoulder cover an earlier road.
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    drawOrder.forEach((road) => {
       ctx.strokeStyle = '#334155';
-      ctx.lineWidth = road.width + 48;
-      draw();
+      drawRoadLine(road, road.width + 48);
+    });
+
+    groundRoads.forEach((road) => {
       ctx.strokeStyle = road.roadClass === 'dirt' ? '#9a6b30' : road.roadClass === 'highway' ? '#202938' : '#1e2530';
-      ctx.lineWidth = road.width;
-      draw();
+      drawRoadLine(road, road.width);
+    });
+
+    // Bridges get their shadow between the lower road and the deck, so their
+    // centerlines and lane markings cannot bleed through the overpass.
+    bridges.forEach((road) => this.renderGradeCrossings(ctx, road));
+    bridges.forEach((road) => {
+      ctx.strokeStyle = road.roadClass === 'dirt' ? '#9a6b30' : road.roadClass === 'highway' ? '#202938' : '#1e2530';
+      drawRoadLine(road, road.width);
+    });
+
+    [...groundRoads, ...bridges].forEach((road) => {
       ctx.strokeStyle = '#64748b';
-      ctx.lineWidth = 2;
-      draw(road.width / 2);
-      draw(-road.width / 2);
+      drawRoadLine(road, 2, road.width / 2);
+      drawRoadLine(road, 2, -road.width / 2);
 
       if (road.roadClass !== 'dirt') {
-        const laneWidth = road.width / (road.lanesPerDirection * 2);
         ctx.strokeStyle = '#eab308';
-        ctx.lineWidth = road.directionMode === 'one-way' ? 2 : 3;
         ctx.setLineDash([]);
-        draw(road.directionMode === 'one-way' ? 0 : 3);
-        if (road.directionMode !== 'one-way') draw(-3);
+        drawRoadLine(road, road.directionMode === 'one-way' ? 2 : 3, road.directionMode === 'one-way' ? 0 : 3);
+        if (road.directionMode !== 'one-way') drawRoadLine(road, 3, -3);
 
+        if (overview) return;
+        const laneWidth = road.width / (road.lanesPerDirection * 2);
         ctx.strokeStyle = '#f8fafc';
-        ctx.lineWidth = 2.2;
         ctx.setLineDash([16, 18]);
         for (let lane = 1; lane < road.lanesPerDirection * 2; lane += 1) {
           if (road.directionMode === 'one-way' && lane === road.lanesPerDirection) continue;
           const offset = -road.width / 2 + laneWidth * lane;
-          draw(offset);
+          drawRoadLine(road, 2.2, offset);
         }
       } else {
         ctx.strokeStyle = '#f1d39b';
-        ctx.lineWidth = 2;
         ctx.setLineDash([14, 12]);
-        draw();
+        drawRoadLine(road, 2);
       }
       if (road.feature === 'bridge' || road.feature === 'tunnel') {
         ctx.strokeStyle = road.feature === 'bridge' ? '#93c5fd' : '#64748b';
-        ctx.lineWidth = 5;
-        ctx.setLineDash([28, 20]);
-        draw(road.width / 2 + 11);
-        draw(-road.width / 2 - 11);
+        ctx.setLineDash(road.feature === 'bridge' ? [] : [28, 20]);
+        drawRoadLine(road, 5, road.width / 2 + 11);
+        drawRoadLine(road, 5, -road.width / 2 - 11);
       }
-
-      ctx.setLineDash([]);
-      ctx.restore();
-
-      this.renderGradeCrossings(ctx, road);
     });
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // Portals cover the road that passes above the tunnel.
+    groundRoads.filter((road) => road.feature === 'tunnel')
+      .forEach((road) => this.renderGradeCrossings(ctx, road));
   }
 
-  private renderIntersections(ctx: CanvasRenderingContext2D, cityMap: CityMap) {
+  private renderIntersections(ctx: CanvasRenderingContext2D, cityMap: CityMap, overview = false) {
     cityMap.intersections.forEach((inter) => {
+      if (overview && inter.trafficControlled !== false) return;
       ctx.save();
       const half = inter.size / 2;
 
@@ -628,12 +648,6 @@ export class GameRenderer {
           ctx.arc(inter.x, inter.y, Math.max(26, half * 0.7), 0, Math.PI * 2);
           ctx.stroke();
           ctx.setLineDash([]);
-        } else {
-          ctx.roundRect(inter.x - half, inter.y - half, inter.size, inter.size, 18);
-          ctx.fill();
-          ctx.strokeStyle = '#64748b';
-          ctx.lineWidth = 3;
-          ctx.stroke();
         }
         ctx.restore();
         return;
@@ -644,9 +658,9 @@ export class GameRenderer {
       ctx.fillRect(inter.x - half, inter.y - half, inter.size, inter.size);
 
       // Render 4 Zebra Crosswalks (Crisp White Bars Matching Screenshots!)
-      const stripeWidth = 6;
-      const stripeGap = 5;
-      const zebraLen = 22;
+      const stripeWidth = 10;
+      const stripeGap = 8;
+      const zebraLen = CROSSWALK_DEPTH;
 
       ctx.fillStyle = '#ffffff';
 
@@ -674,11 +688,9 @@ export class GameRenderer {
       ctx.fillRect(inter.x - half - 22, inter.y + half + 4, 18, 18);
       ctx.fillRect(inter.x + half + 4, inter.y + half + 4, 18, 18);
 
-      // Stop lines are deliberately outside the zebra crossing. The traffic
-      // controller uses the same offset, so the visual line and the actual
-      // stopping position stay aligned for every vehicle length.
+      // Keep stop lines upstream of the full crosswalk, with a small buffer.
       ctx.fillStyle = '#f8fafc';
-      const stopOffset = half + 8;
+      const stopOffset = half + zebraLen + 8;
       ctx.fillRect(inter.x - half, inter.y - stopOffset - 2, inter.size, 4);
       ctx.fillRect(inter.x - half, inter.y + stopOffset - 2, inter.size, 4);
       ctx.fillRect(inter.x - stopOffset - 2, inter.y - half, 4, inter.size);

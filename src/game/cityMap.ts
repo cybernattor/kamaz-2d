@@ -92,6 +92,7 @@ export interface Building {
 }
 
 export const WORLD_SIZE = 3600;
+export const CROSSWALK_DEPTH = 34;
 
 /** Axis-aligned box used by every placement check in this module. */
 export interface MapRect {
@@ -329,11 +330,11 @@ export class CityMap {
     // secondary roads; bending these four roads made the car lanes visibly
     // drift away from the geometry that drives them.
     gridX.forEach((gx, idx) => {
-      const points: RoadPoint[] = [{ x: gx, y: 160 }];
+      const points: RoadPoint[] = [{ x: gx, y: 300 }];
       gridY.forEach((gy, crossingIndex) => {
         points.push({ x: gx, y: gy });
       });
-      points.push({ x: gx, y: WORLD_SIZE - 130 });
+      points.push({ x: gx, y: WORLD_SIZE - 300 });
       this.roads.push({
         ...road(`road_v_${idx}`, avenueNamesX[idx], points, 'arterial', 2, idx === 0 ? 50 : 60, idx < 2 ? 'district-residential' : 'district-industrial', {
           isVertical: true,
@@ -343,11 +344,11 @@ export class CityMap {
     });
 
     gridY.forEach((gy, idy) => {
-      const points: RoadPoint[] = [{ x: 140, y: gy }];
+      const points: RoadPoint[] = [{ x: 300, y: gy }];
       gridX.forEach((gx, crossingIndex) => {
         points.push({ x: gx, y: gy });
       });
-      points.push({ x: WORLD_SIZE - 120, y: gy });
+      points.push({ x: WORLD_SIZE - 300, y: gy });
       this.roads.push({
         ...road(`road_h_${idy}`, avenueNamesY[idy], points, 'arterial', 2, idy === 0 ? 50 : 60, idy < 2 ? 'district-downtown' : 'district-desert', {
           isVertical: false,
@@ -389,11 +390,10 @@ export class CityMap {
         ];
       })(),
       road('road-port-access', 'Портовый проезд', [
-        { x: 140, y: 620 }, { x: 330, y: 790 }, { x: 720, y: 820 }, { x: 980, y: 700 },
+        { x: 300, y: 620 }, { x: 330, y: 790 }, { x: 720, y: 820 }, { x: 980, y: 700 },
       ], 'service', 1, 35, 'district-port', { isVertical: false, directionMode: 'two-way', feature: 'rail_crossing' }),
       road('road-winding-country', 'Загородная извилистая', [
-        { x: 820, y: 3050 }, { x: 650, y: 3260 }, { x: 790, y: 3440 }, { x: 1180, y: 3510 },
-        { x: 1480, y: 3370 }, { x: 1740, y: 3500 }, { x: 2120, y: 3380 }, { x: 2420, y: 3500 },
+        { x: 820, y: 3050 }, { x: 650, y: 3260 }, { x: 790, y: 3280 },
       ], 'dirt', 1, 28, 'district-nature', { isVertical: false, directionMode: 'two-way', feature: 'winding' }),
       // Runs between Broadway and Ленинградский, in the gap north of the
       // construction site. As a floating stub it could never appear in a
@@ -403,7 +403,7 @@ export class CityMap {
         { x: 1320, y: 800 }, { x: 1560, y: 790 }, { x: 1800, y: 800 }, { x: 2200, y: 820 },
       ], 'street', 1, 35, 'district-downtown', { isVertical: false, directionMode: 'one-way', feature: 'roundabout' }),
       road('road-quarry-service', 'Карьерная объездная', [
-        { x: 2500, y: 3000 }, { x: 2800, y: 2860 }, { x: 3240, y: 2920 }, { x: 3480, y: 3180 },
+        { x: 2500, y: 3000 }, { x: 2800, y: 2860 }, { x: 3240, y: 2920 },
       ], 'service', 1, 40, 'district-desert', { isVertical: false, directionMode: 'two-way' }),
 
       // Driveways for POIs that generateCityBlocks() otherwise buries in the
@@ -450,6 +450,7 @@ export class CityMap {
       gridY.forEach((gy, iy) => {
         const interId = `inter_${ix}_${iy}`;
         const interName = `${avenueNamesX[ix]} & ${avenueNamesY[iy]}`;
+        const intersectionSize = ix === 1 && iy === 1 ? 260 : 230;
 
         this.intersections.push({
           id: interId,
@@ -459,17 +460,18 @@ export class CityMap {
           // The box has to cover the carriageways that meet here; at 140 it
           // was narrower than the 220px arterials and the painted junction
           // stopped short of the asphalt it belongs to.
-          size: ix === 1 && iy === 1 ? 260 : 230,
+          size: intersectionSize,
           timer: (ix * 3 + iy * 2) % 12, // staggered timers
           phase: (ix + iy) % 4,
         });
 
-        // 4 Traffic lights per intersection
+        // 4 Traffic lights per intersection, placed on the approach corners.
+        const signalOffset = intersectionSize / 2 + 50;
         this.trafficLights.push(
           {
             id: `tl_${interId}_n`,
-            x: gx - 60,
-            y: gy - 75,
+            x: gx - signalOffset,
+            y: gy - signalOffset,
             intersectionId: interId,
             direction: 'north',
             state: 'red',
@@ -477,8 +479,8 @@ export class CityMap {
           },
           {
             id: `tl_${interId}_s`,
-            x: gx + 60,
-            y: gy + 75,
+            x: gx + signalOffset,
+            y: gy + signalOffset,
             intersectionId: interId,
             direction: 'south',
             state: 'red',
@@ -486,8 +488,8 @@ export class CityMap {
           },
           {
             id: `tl_${interId}_w`,
-            x: gx - 75,
-            y: gy + 60,
+            x: gx - signalOffset,
+            y: gy + signalOffset,
             intersectionId: interId,
             direction: 'west',
             state: 'green',
@@ -495,8 +497,8 @@ export class CityMap {
           },
           {
             id: `tl_${interId}_e`,
-            x: gx + 75,
-            y: gy - 60,
+            x: gx + signalOffset,
+            y: gy - signalOffset,
             intersectionId: interId,
             direction: 'east',
             state: 'green',
@@ -790,7 +792,7 @@ export class CityMap {
     // port access, the market street, the country route and the quarry bypass
     // are drawn and driveable but invisible to missions and NPC routing.
     this.roadNodes.push(
-      { id: 'node-port-west', x: 140, y: 620, kind: 'terminal' },
+      { id: 'node-port-west', x: 300, y: 620, kind: 'terminal' },
       { id: 'node-port-east', x: 980, y: 700, kind: 'junction' },
       { id: 'node-market-in', x: 1320, y: 800, kind: 'junction' },
       { id: 'node-market-out', x: 2200, y: 820, kind: 'junction' },
@@ -798,9 +800,9 @@ export class CityMap {
       // Despite the old name this is the winding road's far (east) end near
       // the quarry bypass, not a stop by the actual Pine Ridge lookout — that
       // POI already sits directly on Южная Магистраль (road_h_3) instead.
-      { id: 'node-country-quarry-link', x: 2420, y: 3500, kind: 'terminal' },
+      { id: 'node-country-quarry-link', x: 790, y: 3280, kind: 'terminal' },
       { id: 'node-quarry-west', x: 2500, y: 3000, kind: 'junction' },
-      { id: 'node-quarry-east', x: 3480, y: 3180, kind: 'terminal' },
+      { id: 'node-quarry-east', x: 3240, y: 2920, kind: 'terminal' },
     );
 
     // Driveways that otherwise dead-end mid-block, linked the same way the
@@ -870,7 +872,6 @@ export class CityMap {
     link('node-country-west', 'node-grid-1-3', 'road_h_3');
     link('node-grid-2-3', 'node-quarry-west', 'road_h_3');
     link('node-quarry-west', 'node-quarry-east', 'road-quarry-service');
-    link('node-grid-3-3', 'node-quarry-east', 'road_h_3');
 
     // POI driveways: a spur to the building plus the sub-links that splice
     // its junction into the parent arterial.

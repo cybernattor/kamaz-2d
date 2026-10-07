@@ -1,5 +1,5 @@
 import { Pedestrian, VehicleInstance } from '../types';
-import { CityMap, Intersection, RoadSegment, WORLD_SIZE } from './cityMap';
+import { CityMap, CROSSWALK_DEPTH, Intersection, RoadSegment, WORLD_SIZE } from './cityMap';
 import { KMH_TO_WORLD_SPEED, VEHICLE_CONFIGS } from './vehicleConfigs';
 import { integrateVehicleSpeed } from './vehicleDynamics';
 import { SpatialHash } from './spatialHash';
@@ -113,6 +113,10 @@ export class TrafficAI {
     );
     let direction = ped.walkDirection ?? 1;
     const destination = direction > 0 ? bounds.upper : bounds.lower;
+
+    if (ped.walkRoadType && ped.walkRoadCoord !== undefined && ped.walkSide !== undefined
+      && Math.abs(destination - current) < 25 && Math.random() < 0.35
+      && this.beginPedestrianCrosswalk(ped, destination, direction)) return;
 
     // A pedestrian follows one side of a block to its end. The previous
     // random destination could be behind them on every update, producing a
@@ -398,6 +402,80 @@ export class TrafficAI {
         : { lower: road + this.sidewalkOffset, upper: Math.min(WORLD_SIZE - 100, road + this.sidewalkOffset + 60) };
     }
     return { lower, upper };
+  }
+
+  private beginPedestrianCrosswalk(ped: Pedestrian, destination: number, direction: -1 | 1) {
+    const axis = ped.walkRoadType || 'vertical';
+    const roadCoord = ped.walkRoadCoord ?? (axis === 'vertical' ? this.gridX[0] : this.gridY[0]);
+    const crossingRoad = destination + direction * this.sidewalkOffset;
+    const inter = this.cityMap.intersections.find((candidate) =>
+      candidate.trafficControlled !== false && (axis === 'vertical'
+        ? Math.abs(candidate.x - roadCoord) < 20 && Math.abs(candidate.y - crossingRoad) < 20
+        : Math.abs(candidate.y - roadCoord) < 20 && Math.abs(candidate.x - crossingRoad) < 20)
+    );
+    if (!inter) return false;
+
+    const lightDirection = axis === 'vertical' ? 'east' : 'north';
+    const light = this.cityMap.trafficLights.find((candidate) =>
+      candidate.intersectionId === inter.id && candidate.direction === lightDirection
+    );
+    if (!light) return false;
+
+    const side = ped.walkSide ?? this.sidewalkOffset;
+    const crossOffset = Math.min(this.sidewalkOffset, inter.size / 2 + CROSSWALK_DEPTH / 2);
+    const farSide = crossingRoad + direction * this.sidewalkOffset;
+    const crosswalk = axis === 'vertical'
+      ? inter.x + Math.sign(side) * crossOffset
+      : inter.y + Math.sign(side) * crossOffset;
+    ped.crosswalk = {
+      signalId: light.id,
+      waypointIndex: 0,
+      waypoints: axis === 'vertical'
+        ? [
+            { x: crosswalk, y: destination },
+            { x: crosswalk, y: farSide },
+            { x: roadCoord + side, y: farSide },
+          ]
+        : [
+            { x: destination, y: crosswalk },
+            { x: farSide, y: crosswalk },
+            { x: farSide, y: roadCoord + side },
+          ],
+    };
+    ped.state = 'waiting';
+    return true;
+  }
+
+  private updatePedestrianCrosswalk(ped: Pedestrian, delta: number) {
+    const crossing = ped.crosswalk;
+    if (!crossing) return false;
+
+    if (ped.state === 'waiting') {
+      const signal = this.cityMap.trafficLights.find((light) => light.id === crossing.signalId);
+      if (signal?.pedestrianState !== 'walk') return true;
+      ped.state = 'walking';
+    }
+
+    const waypoint = crossing.waypoints[crossing.waypointIndex];
+    if (!waypoint) {
+      ped.crosswalk = undefined;
+      ped.state = 'walking';
+      this.choosePedestrianWaypoint(ped);
+      return true;
+    }
+
+    const dx = waypoint.x - ped.x;
+    const dy = waypoint.y - ped.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 8) {
+      crossing.waypointIndex += 1;
+      return true;
+    }
+    const step = Math.min(distance, ped.speed * 60 * delta);
+    ped.angle = Math.atan2(dy, dx);
+    ped.x += (dx / distance) * step;
+    ped.y += (dy / distance) * step;
+    return true;
   }
 
   private getIntersectionApproachDistance(
@@ -731,7 +809,7 @@ export class TrafficAI {
 
   private getStopLineCoordinate(car: VehicleInstance, ai: NPCAIExtra, inter: Intersection) {
     const config = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
-    const distanceFromCenter = inter.size / 2 + config.length / 2 + 8;
+    const distanceFromCenter = inter.size / 2 + CROSSWALK_DEPTH + config.length / 2 + 8;
 
     if (ai.roadType === 'vertical') {
       if (ai.direction === 'south') return inter.y - distanceFromCenter;
@@ -815,6 +893,11 @@ export class TrafficAI {
         this.intersectionReservations.delete(active.inter.id);
         this.intersectionReservationAge.delete(active.inter.id);
         ownerId = undefined;
+      } else if (ownerAi && !ownerAi.isTurning && ownerAi.roadType === ai.roadType) {
+        // The traffic signal already separates north-south from east-west.
+        // Serializing every car through one reservation throttles a green
+        // platoon to one vehicle at a time and creates queues on empty roads.
+        return false;
       } else if (active.approachDistance > 20) {
         return true;
       }
@@ -1436,6 +1519,10 @@ export class TrafficAI {
       if (!car.isSiren && !ai.isTurning) {
         for (const inter of this.cityMap.intersections) {
           if (inter.trafficControlled === false) continue;
+          // Once the car has entered this junction, it must clear it even if
+          // the new direction is red after a turn. Reapplying that signal
+          // clamps a turning car back to the old stop line across the lanes.
+          if (ai.lastIntersectionId === inter.id) continue;
           let distAxis = 9999;
           let lightState: 'red' | 'yellow' | 'green' = 'green';
 
@@ -1501,7 +1588,6 @@ export class TrafficAI {
       }
 
       // 5. Obstacle / Vehicle Distance Safe Braking
-      let blockedBySameLaneTraffic = false;
       let blockedByTraffic = false;
       let blockedByPlayer = false;
       let blockedObstacle: VehicleInstance | null = null;
@@ -1569,16 +1655,16 @@ export class TrafficAI {
               // actually hit a car ahead of it.
               const isPlayerRam = other.isPlayer && TrafficAI.isClosingFast(other, car);
               if (dist < safeFollowingDistance && !isPlayerRam) {
-                shouldStop = true;
-                blockedBySameLaneTraffic = true;
                 if (other.isPlayer) blockedByPlayer = true;
                 blockedObstacle = other;
-                // Put the follower at a deterministic bumper gap immediately
-                // instead of letting braking integrate through the obstacle
-                // and oscillate around it for several frames.
-                car.x = other.x - forwardX * safeFollowingDistance;
-                car.y = other.y - forwardY * safeFollowingDistance;
-                car.speed = 0;
+                if (other.isPlayer) {
+                  targetSpeed = Math.min(targetSpeed, Math.max(0, other.speed * 0.92));
+                } else {
+                  shouldStop = true;
+                  car.x = other.x - forwardX * safeFollowingDistance;
+                  car.y = other.y - forwardY * safeFollowingDistance;
+                  car.speed = 0;
+                }
                 if (
                   activeIntersection &&
                   activeIntersection.approachDistance > -20 &&
@@ -1641,18 +1727,8 @@ export class TrafficAI {
         const isHeadOnThreat = sameLane && aheadDistance > 0 && aheadDistance < 240 && lateralDistance < 58 && headingOpposition < -0.65;
 
         if (isHeadOnThreat) {
-          // A head-on vehicle is neither a leader to follow nor a general
-          // obstacle to weave around. Commit to a single, legal-looking move
-          // to the driver's right. If that shoulder is occupied, brake hard
-          // and let physics resolve a deliberate impact instead of switching
-          // left/right targets every frame and visibly shaking.
-          if (this.startAdaptiveBypass(car, ai, playerVehicle, playerVehicle, -1)) {
-            if (!car.isHonking) {
-              car.isHonking = true;
-              setTimeout(() => { car.isHonking = false; }, 400);
-            }
-            continue;
-          }
+          // Do not steer around the player: let normal braking and physics
+          // resolve a head-on approach instead of orbiting the player's car.
           targetSpeed = 0;
           shouldStop = true;
           blockedByPlayer = true;
@@ -1660,18 +1736,8 @@ export class TrafficAI {
 
         if (!isHeadOnThreat && sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58) {
           if (TrafficAI.isClosingFast(playerVehicle, car)) {
-            // A player closing fast from behind is a ram, not ordinary
-            // traffic to queue behind - a real driver swerves or brakes,
-            // rather than holding a textbook gap and waiting to be hit.
-            if (!ai.isTurning && this.startAdaptiveBypass(car, ai, playerVehicle, playerVehicle)) {
-              if (!car.isHonking) {
-                car.isHonking = true;
-                setTimeout(() => {
-                  car.isHonking = false;
-                }, 400);
-              }
-              continue;
-            }
+            // Keep the NPC in its lane. Bypassing the player here makes the
+            // car fly around them; braking still leaves collisions to physics.
             targetSpeed = 0;
             shouldStop = true;
             blockedByPlayer = true;
@@ -1683,27 +1749,16 @@ export class TrafficAI {
             // One frame's worth of coasting at the car's current speed can
             // cross straight through a gap that still looked safe when this
             // frame started (world units move ~car.speed per frame), so the
-            // clamp below checks where the car will actually be after this
-            // frame's move, not where it already is.
+            // speed target below reacts to the gap before it closes further.
             const projectedAheadDistance = aheadDistance - Math.max(0, car.speed);
             if (projectedAheadDistance <= safeGap) {
-              // Hard safety clamp: a last resort for when the gap is about
-              // to be violated, not a routine way to hold position.
-              shouldStop = true;
-              car.x = playerVehicle.x - forwardX * safeGap;
-              car.y = playerVehicle.y - forwardY * safeGap;
-              car.speed = 0;
+              // Brake through the speed integrator; snapping to a fixed gap
+              // makes the NPC follow the player like it is attached to them.
+              targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92));
             } else {
-              // Let the car actually drive itself: no position override at
-              // all, just match the player's speed and lean on the hard
-              // clamp above as the safety net — exactly the same pattern the
-              // general same-lane obstacle scan already uses for one NPC
-              // following another (below). Overriding car.x/y every frame —
-              // first as a hard snap, then as an eased lerp toward the same
-              // fixed offset — was never really "braking", it was the AI
-              // puppeting the car's position off the player every frame,
-              // which reads as magnetically glued to the player no matter
-              // how smooth the easing is.
+              // Match the player's speed without overriding position. The
+              // speed integrator brakes smoothly while physics keeps control
+              // of any contact.
               targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92));
             }
           }
@@ -1762,7 +1817,7 @@ export class TrafficAI {
         const stuckLimit = nearIntersection ? 12 : 2.5;
         if (
           ai.progressTimer > stuckLimit &&
-          (!waitingForTrafficLight || !blockedBySameLaneTraffic || ai.progressTimer > 18)
+          (!waitingForTrafficLight || ai.progressTimer > 18)
         ) {
           ai.stuckTimer = 0;
           const activeIntersection = this.getActiveIntersection(car, ai);
@@ -1793,11 +1848,8 @@ export class TrafficAI {
           const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
           if (ai.roadType === 'vertical') car.x = lane.x!;
           else car.y = lane.y!;
-          // Pull a deadlocked car back along its own lane instead of teleporting
-          // it sideways through the junction. This is only reached after a
-          // long stationary timeout, so it is a recovery path, not normal AI.
-          car.x -= Math.cos(car.angle) * 42;
-          car.y -= Math.sin(car.angle) * 42;
+          // Recovery may realign the car to its lane, but must not teleport it
+          // backward; that rollback looked like a sudden position snap.
           car.angle = lane.angle;
           car.speed = waitingForTrafficLight ? 0 : cruiseSpeed * 0.8;
           ai.progressTimer = 0;
@@ -1840,6 +1892,7 @@ export class TrafficAI {
                 // yielding before the arc prevents the visible orbit/dance.
                 shouldStop = true;
                 targetSpeed = 0;
+                ai.lastIntersectionId = undefined;
                 break;
               }
               const turnResult = this.calculateIntersectionTurn(
@@ -1944,7 +1997,7 @@ export class TrafficAI {
       // Clear intersection trigger once safely past
       if (ai.lastIntersectionId && !ai.isTurning) {
         const inter = this.cityMap.intersections.find((i) => i.id === ai.lastIntersectionId);
-        if (inter && Math.hypot(inter.x - car.x, inter.y - car.y) > 95) {
+        if (inter && Math.hypot(inter.x - car.x, inter.y - car.y) > inter.size / 2 + CROSSWALK_DEPTH + 24) {
           ai.lastIntersectionId = undefined;
         }
       }
@@ -1985,24 +2038,18 @@ export class TrafficAI {
         }
       }
 
-      // 11. World boundary seamless wrap
-      if (car.x < 80) {
-        car.x = WORLD_SIZE - 100;
-      }
-      if (car.x > WORLD_SIZE - 80) {
-        car.x = 100;
-      }
-      if (car.y < 80) {
-        car.y = WORLD_SIZE - 100;
-      }
-      if (car.y > WORLD_SIZE - 80) {
-        car.y = 100;
+      // Turn around before reaching the capped road ends; never teleport
+      // traffic from one side of the map to the other.
+      if (ai.roadType === 'vertical') {
+        if (car.y < 340 && ai.direction === 'north') ai.direction = 'south';
+        if (car.y > WORLD_SIZE - 340 && ai.direction === 'south') ai.direction = 'north';
+      } else {
+        if (car.x < 340 && ai.direction === 'west') ai.direction = 'east';
+        if (car.x > WORLD_SIZE - 340 && ai.direction === 'east') ai.direction = 'west';
       }
     }
 
-    // Cars may have crossed the seamless world edge during this tick. The
-    // broad-phase built at tick start then has stale cells, so rebuild before
-    // the final queue-separation pass instead of missing a newly adjacent pair.
+    // Rebuild the broad-phase after movement before the final queue-separation pass.
     this.vehicleIndex.clear();
     this.vehicleIndex.insertAll(this.npcVehicles);
     this.resolveNpcSpacing();
@@ -2134,6 +2181,7 @@ export class TrafficAI {
     }
     ped.panicTimer = 0.9;
     ped.panicCooldown = 1.5;
+    ped.crosswalk = undefined;
     ped.state = 'fleeing';
     ped.angle = angleAway;
   }
@@ -2410,6 +2458,8 @@ export class TrafficAI {
           continue;
         }
       }
+
+      if (this.updatePedestrianCrosswalk(ped, delta)) continue;
 
       // Standard sidewalk pathfinding
       const distToTarget = Math.hypot(ped.targetX - ped.x, ped.targetY - ped.y);

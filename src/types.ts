@@ -113,6 +113,7 @@ export interface Pedestrian {
   walkSide?: number;
   /** Current sidewalk travel direction; pedestrians reverse only at a block end. */
   walkDirection?: -1 | 1;
+  crosswalk?: { signalId: string; waypoints: Array<{ x: number; y: number }>; waypointIndex: number };
   /** Lightweight city-life cycle: a resident walks to a real building entrance, stays inside, then leaves. */
   buildingId?: string;
   indoorTimer?: number;

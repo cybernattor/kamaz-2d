@@ -97,7 +97,7 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
         ((value - view.center[axis]) / WORLD_SIZE) * FULL_MAP_SIZE * view.zoom + FULL_MAP_SIZE / 2;
 
       if (map !== staticMap) {
-        staticScene = staticRenderer.getStaticScene(map);
+        staticScene = staticRenderer.getStaticScene(map, true);
         staticMap = map;
       }
       if (staticScene) {
