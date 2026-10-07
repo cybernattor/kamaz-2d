@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { PointOfInterest, RemotePlayer, VehicleInstance } from '../types';
 import { CityMap, WORLD_SIZE } from '../game/cityMap';
 import { GameRenderer } from '../game/renderer';
@@ -15,6 +15,9 @@ interface FullMapCanvasProps {
   trafficCars: VehicleInstance[];
   remotePlayers: RemotePlayer[];
   targetPoi: PointOfInterest | null;
+  selectedPoi: PointOfInterest | null;
+  zoom: number;
+  center: { x: number; y: number };
 }
 
 const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
@@ -26,6 +29,9 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
   trafficCars,
   remotePlayers,
   targetPoi,
+  selectedPoi,
+  zoom,
+  center,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const playerRef = useRef({ x: playerX, y: playerY, angle: playerAngle, speed: playerSpeed, updatedAt: performance.now() });
@@ -33,6 +39,8 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
   const trafficCarsRef = useRef(trafficCars);
   const remotePlayersRef = useRef(remotePlayers);
   const targetPoiRef = useRef(targetPoi);
+  const selectedPoiRef = useRef(selectedPoi);
+  const viewRef = useRef({ zoom, center });
 
   // Props are refreshed by React at HUD cadence, but the simulation mutates
   // vehicle objects every frame. The canvas loop reads those live objects and
@@ -42,6 +50,8 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
   trafficCarsRef.current = trafficCars;
   remotePlayersRef.current = remotePlayers;
   targetPoiRef.current = targetPoi;
+  selectedPoiRef.current = selectedPoi;
+  viewRef.current = { zoom, center };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -82,18 +92,23 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
       ctx.fillRect(0, 0, FULL_MAP_SIZE, FULL_MAP_SIZE);
 
       const map = cityMapRef.current;
-      const toMapCoord = (value: number) => (value / WORLD_SIZE) * FULL_MAP_SIZE;
+      const view = viewRef.current;
+      const toMapCoord = (value: number, axis: 'x' | 'y') =>
+        ((value - view.center[axis]) / WORLD_SIZE) * FULL_MAP_SIZE * view.zoom + FULL_MAP_SIZE / 2;
 
       if (map !== staticMap) {
         staticScene = staticRenderer.getStaticScene(map);
         staticMap = map;
       }
       if (staticScene) {
-        ctx.drawImage(staticScene, 0, 0, WORLD_SIZE, WORLD_SIZE, 0, 0, FULL_MAP_SIZE, FULL_MAP_SIZE);
+        const size = FULL_MAP_SIZE * view.zoom;
+        ctx.drawImage(staticScene, 0, 0, WORLD_SIZE, WORLD_SIZE,
+          FULL_MAP_SIZE / 2 - (view.center.x / WORLD_SIZE) * size,
+          FULL_MAP_SIZE / 2 - (view.center.y / WORLD_SIZE) * size, size, size);
       }
       for (const district of map.districts) {
-        const x = toMapCoord(district.x - district.width / 2);
-        const y = toMapCoord(district.y - district.height / 2);
+        const x = toMapCoord(district.x - district.width / 2, 'x');
+        const y = toMapCoord(district.y - district.height / 2, 'y');
         ctx.fillStyle = `${district.accent}bb`;
         ctx.font = 'bold 12px "JetBrains Mono", sans-serif';
         ctx.fillText(district.name, x + 12, y + 20);
@@ -101,15 +116,22 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
 
       // POI emphasis is dynamic because the selected mission can change.
       for (const poi of map.pois) {
-        const x = toMapCoord(poi.x - poi.width / 2);
-        const y = toMapCoord(poi.y - poi.height / 2);
-        const width = toMapCoord(poi.width);
-        const height = toMapCoord(poi.height);
-        ctx.fillStyle = targetPoiRef.current?.id === poi.id ? 'rgba(234, 179, 8, 0.55)' : 'rgba(15, 23, 42, 0.92)';
-        ctx.strokeStyle = targetPoiRef.current?.id === poi.id ? '#facc15' : poi.color;
+        const x = toMapCoord(poi.x - poi.width / 2, 'x');
+        const y = toMapCoord(poi.y - poi.height / 2, 'y');
+        const width = (poi.width / WORLD_SIZE) * FULL_MAP_SIZE * view.zoom;
+        const height = (poi.height / WORLD_SIZE) * FULL_MAP_SIZE * view.zoom;
+        const highlighted = targetPoiRef.current?.id === poi.id || selectedPoiRef.current?.id === poi.id;
+        ctx.fillStyle = highlighted ? 'rgba(234, 179, 8, 0.55)' : 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = highlighted ? '#facc15' : poi.color;
         ctx.lineWidth = 2;
         ctx.fillRect(x, y, width, height);
         ctx.strokeRect(x, y, width, height);
+        if (selectedPoiRef.current?.id === poi.id) {
+          ctx.fillStyle = '#fef08a';
+          ctx.font = 'bold 12px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(poi.nameRu, toMapCoord(poi.x, 'x'), y - 8);
+        }
       }
 
       // Live traffic positions prevent the old two-times-per-second React
@@ -118,15 +140,15 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
         if (car.health <= 0) continue;
         ctx.fillStyle = car.isBraking ? '#fb7185' : '#fbbf24';
         ctx.beginPath();
-        ctx.arc(toMapCoord(car.x), toMapCoord(car.y), 3.5, 0, Math.PI * 2);
+        ctx.arc(toMapCoord(car.x, 'x'), toMapCoord(car.y, 'y'), 3.5, 0, Math.PI * 2);
         ctx.fill();
       }
 
       // Other online players get their own marker + name tag so a squadmate
       // is easy to spot next to NPC traffic and the mission target.
       for (const rp of remotePlayersRef.current) {
-        const x = toMapCoord(rp.x);
-        const y = toMapCoord(rp.y);
+        const x = toMapCoord(rp.x, 'x');
+        const y = toMapCoord(rp.y, 'y');
         if (x < -20 || x > FULL_MAP_SIZE + 20 || y < -20 || y > FULL_MAP_SIZE + 20) continue;
         ctx.save();
         ctx.translate(x, y);
@@ -155,8 +177,8 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
       const age = Math.min((now - player.updatedAt) / 1000, 0.65);
       const estimatedX = player.x + Math.cos(player.angle) * player.speed * 60 * age;
       const estimatedY = player.y + Math.sin(player.angle) * player.speed * 60 * age;
-      const playerXOnMap = toMapCoord(estimatedX);
-      const playerYOnMap = toMapCoord(estimatedY);
+      const playerXOnMap = toMapCoord(estimatedX, 'x');
+      const playerYOnMap = toMapCoord(estimatedY, 'y');
       ctx.save();
       ctx.translate(playerXOnMap, playerYOnMap);
       ctx.rotate(player.angle + Math.PI / 2);
@@ -220,6 +242,10 @@ export const FullMapModal: React.FC<FullMapModalProps> = ({
   targetPoi,
   onClose,
 }) => {
+  const [selectedPoi, setSelectedPoi] = useState<PointOfInterest | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [center, setCenter] = useState({ x: WORLD_SIZE / 2, y: WORLD_SIZE / 2 });
+
   return (
     <div
       id="modal-fullmap-backdrop"
@@ -230,7 +256,7 @@ export const FullMapModal: React.FC<FullMapModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-fullmap-title"
-        className="my-0.5 sm:my-4 bg-slate-900 border-2 border-slate-700 rounded-2xl max-w-4xl w-full max-h-[calc(100vh-0.5rem)] sm:max-h-[calc(100vh-2rem)] overflow-hidden shadow-2xl flex flex-col"
+        className="my-0.5 sm:my-4 bg-slate-900 border-2 border-slate-700 rounded-2xl max-w-4xl w-full max-h-[calc(100dvh-0.5rem)] sm:max-h-[calc(100dvh-2rem)] overflow-hidden shadow-2xl flex flex-col"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-3.5 border-b border-slate-800 bg-slate-950">
@@ -255,12 +281,17 @@ export const FullMapModal: React.FC<FullMapModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="min-h-0 overflow-y-auto p-3 sm:p-6 grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-6 items-center justify-center">
+        <div className="min-h-0 overflow-hidden p-3 sm:p-6 grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-6 items-center justify-center">
           {/* Map Display Viewport */}
           <div className="md:col-span-8 flex justify-center min-w-0">
             <div
-              className="relative bg-slate-950 border-2 border-slate-700 rounded-xl overflow-hidden shadow-inner w-full max-w-[580px] aspect-square"
+              className="relative bg-slate-950 border-2 border-slate-700 rounded-xl overflow-hidden shadow-inner w-[min(100%,45dvh)] md:w-[min(100%,calc(100dvh-12rem))] max-w-[580px] aspect-square"
             >
+              <div className="absolute right-2 top-2 z-10 flex overflow-hidden rounded-lg border border-slate-600 bg-slate-950/90 shadow">
+                <button aria-label="Увеличить карту" onClick={() => setZoom((value) => Math.min(4, value * 1.5))} className="h-9 w-9 text-lg text-white hover:bg-slate-700">+</button>
+                <button aria-label="Уменьшить карту" onClick={() => setZoom((value) => Math.max(1, value / 1.5))} className="h-9 w-9 border-l border-slate-700 text-lg text-white hover:bg-slate-700">−</button>
+                <button aria-label="Показать весь город" onClick={() => { setZoom(1); setCenter({ x: WORLD_SIZE / 2, y: WORLD_SIZE / 2 }); setSelectedPoi(null); }} className="border-l border-slate-700 px-2 text-[10px] text-cyan-200 hover:bg-slate-700">Весь город</button>
+              </div>
               <FullMapCanvas
                 playerX={playerX}
                 playerY={playerY}
@@ -270,28 +301,40 @@ export const FullMapModal: React.FC<FullMapModalProps> = ({
                 trafficCars={trafficCars}
                 remotePlayers={remotePlayers}
                 targetPoi={targetPoi}
+                selectedPoi={selectedPoi}
+                zoom={zoom}
+                center={center}
               />
             </div>
           </div>
 
           {/* Right Column: POI Directory & Legend */}
-          <div className="md:col-span-4 space-y-3 max-h-[580px] overflow-y-auto pr-1 text-xs font-mono">
+          <div className="md:col-span-4 space-y-3 max-h-[25dvh] md:max-h-[calc(100dvh-12rem)] overflow-y-auto pr-1 text-xs font-mono">
             <div className="text-slate-400 uppercase tracking-wider text-[11px] font-bold">
               Объекты Города ({cityMap.pois.length})
             </div>
 
             {cityMap.pois.map((poi) => (
-              <div
+              <button
                 key={poi.id}
-                className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 space-y-1"
+                onClick={() => { setSelectedPoi(poi); setCenter({ x: poi.x, y: poi.y }); setZoom((value) => Math.max(value, 2)); }}
+                aria-pressed={selectedPoi?.id === poi.id}
+                className={`block w-full p-2.5 rounded-lg border text-left space-y-1 ${selectedPoi?.id === poi.id ? 'bg-amber-950/50 border-amber-500' : 'bg-slate-950/80 border-slate-800 hover:border-slate-600'}`}
               >
                 <div className="font-bold text-slate-200 flex items-center gap-1.5">
                   <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: poi.color }} />
                   <span>{poi.nameRu}</span>
                 </div>
                 <p className="text-[11px] text-slate-400 font-sans leading-tight">{poi.description}</p>
-              </div>
+              </button>
             ))}
+            <div className="rounded-lg border border-slate-700 bg-slate-950/95 p-3 space-y-2 text-[11px] text-slate-300">
+              <div className="font-bold uppercase tracking-wide text-slate-400">Обозначения</div>
+              <div className="flex items-center gap-2"><span className="text-cyan-400">▲</span> Вы</div>
+              <div className="flex items-center gap-2"><span className="text-amber-400">●</span> Трафик</div>
+              <div className="flex items-center gap-2"><span className="text-fuchsia-400">▲</span> Игроки онлайн</div>
+              <div className="flex items-center gap-2"><span className="text-yellow-300">●</span> Цель задания / выбранный объект</div>
+            </div>
           </div>
         </div>
       </div>
