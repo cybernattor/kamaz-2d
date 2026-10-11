@@ -10,6 +10,14 @@ const ROAD_END_TURN_DISTANCE = 90;
 const ROAD_END_CRAWL_SPEED = 1.5;
 /** How far past its start point a road-end U-turn reaches. */
 const ROAD_END_UTURN_REACH = 40;
+/**
+ * Steepest heading, relative to the lane, a car takes while shifting
+ * sideways (tan of ~24 degrees). Lateral movement comes only from forward
+ * motion along that heading, so a car never slides sideways on the spot.
+ */
+const MAX_LANE_SHIFT_SLOPE = 0.45;
+/** Speed an NPC backs up at to get room to pull out around a stopped vehicle. */
+const BYPASS_REVERSE_SPEED = 1.2;
 /** Parking bays stay this far from a capped arterial end. */
 const ROAD_END_PARKING_MARGIN = 260;
 
@@ -33,6 +41,41 @@ function getStoppingCurveSpeed(config: VehicleConfig, room: number) {
   return Math.sqrt((2 * getPlanningBraking(config) * Math.max(0, room)) / 60);
 }
 
+type BodyPose = { x: number; y: number; angle: number; type: VehicleInstance['type'] };
+
+/**
+ * Gap between two vehicle bodies as oriented rectangles (separating axis
+ * test); negative when they overlap. Circles sized by vehicle length are far
+ * wider than a car, so a bus counted a car standing beside its path as
+ * blocking it.
+ */
+function getBodyClearance(first: BodyPose, second: BodyPose) {
+  const corners = (body: BodyPose) => {
+    const config = VEHICLE_CONFIGS[body.type] || VEHICLE_CONFIGS.sedan;
+    const fx = Math.cos(body.angle);
+    const fy = Math.sin(body.angle);
+    const hl = config.length / 2;
+    const hw = config.width / 2;
+    return [[hl, hw], [hl, -hw], [-hl, -hw], [-hl, hw]]
+      .map(([a, b]) => ({ x: body.x + fx * a - fy * b, y: body.y + fy * a + fx * b }));
+  };
+  const a = corners(first);
+  const b = corners(second);
+  let best = -Infinity;
+  for (const body of [first, second]) {
+    for (const axis of [
+      { x: Math.cos(body.angle), y: Math.sin(body.angle) },
+      { x: -Math.sin(body.angle), y: Math.cos(body.angle) },
+    ]) {
+      let minA = Infinity; let maxA = -Infinity; let minB = Infinity; let maxB = -Infinity;
+      for (const point of a) { const p = point.x * axis.x + point.y * axis.y; minA = Math.min(minA, p); maxA = Math.max(maxA, p); }
+      for (const point of b) { const p = point.x * axis.x + point.y * axis.y; minB = Math.min(minB, p); maxB = Math.max(maxB, p); }
+      best = Math.max(best, minB - maxA, minA - maxB);
+    }
+  }
+  return best;
+}
+
 export type TrafficDirection = 'north' | 'south' | 'east' | 'west';
 
 interface NPCAIExtra {
@@ -48,6 +91,12 @@ interface NPCAIExtra {
   isTurning: boolean;
   /** The active turn is a U-turn at a capped arterial end: same road, opposite direction. */
   isUTurn?: boolean;
+  /**
+   * Stopped (or stopping) for an ordinary traffic reason this frame: a red
+   * light, a leader in the queue, a yield. Nobody overtakes a car waiting in
+   * a queue.
+   */
+  holding?: boolean;
   turnStartPos?: { x: number; y: number };
   turnEndPos?: { x: number; y: number };
   turnControlPos?: { x: number; y: number };
@@ -67,10 +116,20 @@ interface NPCAIExtra {
     waypoints: Array<{ x: number; y: number }>;
     waypointIndex: number;
   };
-  adaptiveBypass?: {
-    obstacleId: string;
-    waypoints: Array<{ x: number; y: number }>;
-    waypointIndex: number;
+  /**
+   * A sideways shift from the lane centre, driven like a real lane change
+   * (see driveLaneShift): an emergency swerve toward the kerb for a head-on
+   * threat, or a pass around a stopped obstacle. Released once the target is
+   * behind, after which the car eases back to the lane centre.
+   */
+  laneShift?: {
+    kind: 'evade' | 'bypass' | 'park';
+    targetId: string;
+    /** Signed shift from the lane centre along the road's lateral axis. */
+    offset: number;
+    released: boolean;
+    /** Bypass only: backing up to get room to pull out. */
+    reversing?: boolean;
   };
   activity: 'driving' | 'parked';
   driveTimer: number;
@@ -103,7 +162,7 @@ export class TrafficAI {
   private gridX: number[];
   private gridY: number[];
   /** Along-axis extent of each grid arterial, keyed by `${roadType}:${roadCoord}`. */
-  private arterialExtents = new Map<string, { min: number; max: number }>();
+  private arterialExtents = new Map<string, { min: number; max: number; halfWidth: number; lanesPerDirection: number }>();
   private laneOffset = 34;
   private laneSpacing = 54;
   // Arterials are 220px wide. Keeping people another 32px beyond the curb
@@ -221,6 +280,10 @@ export class TrafficAI {
 
   private planParkingStop(car: VehicleInstance, ai: NPCAIExtra) {
     if (ai.parkingCoordinate !== undefined) return;
+    // Pull over only from the kerb lane: from an inner lane the move cuts
+    // across traffic in the outer one.
+    const extentForLanes = this.getArterialExtent(ai);
+    if (extentForLanes && ai.laneIndex !== extentForLanes.lanesPerDirection - 1) return;
     const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
     const candidates = this.cityMap.pois
       .map((poi) => ({
@@ -232,12 +295,24 @@ export class TrafficAI {
     const forward = (value: number) => ai.direction === 'south' || ai.direction === 'east'
       ? value - (ai.roadType === 'vertical' ? car.y : car.x)
       : (ai.roadType === 'vertical' ? car.y : car.x) - value;
-    const selected = candidates.find((candidate) => forward(candidate.along) > 180) || candidates[0];
+    // A bay already taken - parked in or claimed by another car on this
+    // road - is not free: two cars pulling into the same spot collided.
+    const bayTaken = (along: number) => this.npcVehicles.some((other) => {
+      if (other.id === car.id || other.health <= 0) return false;
+      const otherAi = this.aiData.get(other.id);
+      if (!otherAi || otherAi.roadType !== ai.roadType || otherAi.roadCoord !== ai.roadCoord) return false;
+      const otherAlong = otherAi.parkingCoordinate
+        ?? (otherAi.activity === 'parked' ? (ai.roadType === 'vertical' ? other.y : other.x) : undefined);
+      return otherAlong !== undefined && Math.abs(otherAlong - along) < 140;
+    });
+    const selected = candidates.find((candidate) => forward(candidate.along) > 180 && !bayTaken(candidate.along));
     if (!selected) return;
     ai.parkingPoiId = selected.poi.id;
-    ai.parkingSide = (ai.roadType === 'vertical'
-      ? selected.poi.x - lane.x!
-      : selected.poi.y - lane.y!) >= 0 ? 1 : -1;
+    // Always the kerb on this car's own side: parking toward a building
+    // across the road put the car in the oncoming lane, where it blocked
+    // traffic until it left.
+    const laneCoord = ai.roadType === 'vertical' ? lane.x! : lane.y!;
+    ai.parkingSide = Math.sign(laneCoord - ai.roadCoord) >= 0 ? 1 : -1;
     // Keep the bay clear of the capped road ends, where cars slow down and
     // turn around; a bay past the end parks the car off the asphalt.
     const extent = this.getArterialExtent(ai);
@@ -258,7 +333,7 @@ export class TrafficAI {
       );
       if (!road) return undefined;
       const along = road.points.map((point) => (ai.roadType === 'vertical' ? point.y : point.x));
-      extent = { min: Math.min(...along), max: Math.max(...along) };
+      extent = { min: Math.min(...along), max: Math.max(...along), halfWidth: road.width / 2, lanesPerDirection: road.lanesPerDirection };
       this.arterialExtents.set(key, extent);
     }
     return extent;
@@ -283,7 +358,8 @@ export class TrafficAI {
    * Running it as a turn keeps the arc on the road and makes the spacing
    * pass treat the car as manoeuvring.
    */
-  private beginRoadEndUTurn(car: VehicleInstance, ai: NPCAIExtra) {
+  /** Geometry of a road-end U-turn into the opposite lane from the car's current spot. */
+  private planRoadEndUTurn(car: VehicleInstance, ai: NPCAIExtra) {
     const targetDirection: TrafficDirection = ai.direction === 'north' ? 'south'
       : ai.direction === 'south' ? 'north'
       : ai.direction === 'west' ? 'east'
@@ -297,23 +373,414 @@ export class TrafficAI {
     // Rotate toward the side the opposite lane is on (+angle turns right
     // in screen space, where y points down).
     const turnSign = toEndX * -forwardY + toEndY * forwardX >= 0 ? 1 : -1;
-
-    ai.isTurning = true;
-    ai.isUTurn = true;
-    ai.turnProgress = 0;
-    ai.turnStartPos = { x: car.x, y: car.y };
-    ai.turnEndPos = endPos;
     // The arc's furthest point is half the control point's reach.
-    ai.turnControlPos = {
+    const controlPos = {
       x: (car.x + endPos.x) / 2 + forwardX * ROAD_END_UTURN_REACH * 2,
       y: (car.y + endPos.y) / 2 + forwardY * ROAD_END_UTURN_REACH * 2,
     };
+    return { targetDirection, startPos: { x: car.x, y: car.y }, endPos, controlPos, turnSign };
+  }
+
+  /**
+   * A U-turn crosses the opposite lane, so - like a real driver - only start
+   * it when nothing is on or near the arc. Swinging into an occupied lane
+   * shoved the car waiting there off the asphalt.
+   */
+  private isRoadEndUTurnClear(car: VehicleInstance, plan: ReturnType<TrafficAI['planRoadEndUTurn']>) {
+    for (const t of [0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1]) {
+      const u = 1 - t;
+      // The body itself, posed along the arc, must clear everyone.
+      const pose: BodyPose = {
+        x: u * u * plan.startPos.x + 2 * u * t * plan.controlPos.x + t * t * plan.endPos.x,
+        y: u * u * plan.startPos.y + 2 * u * t * plan.controlPos.y + t * t * plan.endPos.y,
+        angle: car.angle + plan.turnSign * Math.PI * t,
+        type: car.type,
+      };
+      const blocked = this.npcVehicles.some((other) =>
+        other.id !== car.id && other.health > 0 &&
+        Math.hypot(other.x - pose.x, other.y - pose.y) < 160 &&
+        getBodyClearance(pose, other) < 8
+      );
+      if (blocked) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Turn around at a capped arterial end on a U-shaped Bezier into the
+   * opposite lane. Flipping `direction` alone left the lane-keeping
+   * controller to improvise the arc: it swung wide off the asphalt, and
+   * while the car still faced its old heading the spacing pass misread
+   * which car was in front and shoved queued cars past the road end.
+   * Running it as a turn keeps the arc on the road and makes the spacing
+   * pass treat the car as manoeuvring.
+   */
+  private beginRoadEndUTurn(car: VehicleInstance, ai: NPCAIExtra, plan: ReturnType<TrafficAI['planRoadEndUTurn']>) {
+    ai.isTurning = true;
+    ai.isUTurn = true;
+    ai.turnProgress = 0;
+    ai.turnStartPos = plan.startPos;
+    ai.turnEndPos = plan.endPos;
+    ai.turnControlPos = plan.controlPos;
     ai.turnStartAngle = car.angle;
     // Just short of pi so the interpolation keeps the chosen turn side.
-    ai.turnTargetAngle = car.angle + turnSign * (Math.PI - 1e-3);
+    ai.turnTargetAngle = car.angle + plan.turnSign * (Math.PI - 1e-3);
     ai.targetRoadCoord = ai.roadCoord;
-    ai.targetDirection = targetDirection;
-    car.turnSignal = turnSign > 0 ? 'right' : 'left';
+    ai.targetDirection = plan.targetDirection;
+    car.turnSignal = plan.turnSign > 0 ? 'right' : 'left';
+  }
+
+  /**
+   * Commit to one swerve toward the kerb for a vehicle coming head-on in
+   * this car's lane. Real drivers brake hard and steer for the shoulder,
+   * never into oncoming traffic, and do not change their minds mid-swerve;
+   * re-choosing a side every frame is what made the old bypass orbit the
+   * player. Returns false when there is no room, leaving braking alone.
+   */
+  private beginEvasion(car: VehicleInstance, ai: NPCAIExtra, threat: VehicleInstance) {
+    const extent = this.getArterialExtent(ai);
+    if (!extent) return false;
+    const config = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const laneCoord = ai.roadType === 'vertical' ? lane.x! : lane.y!;
+    const kerbSide = Math.sign(laneCoord - ai.roadCoord) || 1;
+    // Room between the lane centre and the kerb, keeping the whole body on
+    // the asphalt.
+    const room = extent.halfWidth - Math.abs(laneCoord - ai.roadCoord) - config.width / 2 - 6;
+    const shift = Math.min(room, config.width * 1.6);
+    if (shift < config.width * 0.5) return false;
+    const offset = kerbSide * shift;
+
+    // The kerb-side path must be free of other traffic (parked cars, a
+    // neighbouring lane) along the stretch the swerve covers.
+    const forwardX = Math.cos(lane.angle);
+    const forwardY = Math.sin(lane.angle);
+    const along = ai.roadType === 'vertical' ? car.y : car.x;
+    for (const ahead of [0, 40, 80, 120]) {
+      const point = ai.roadType === 'vertical'
+        ? { x: laneCoord + offset, y: along + forwardY * ahead }
+        : { x: along + forwardX * ahead, y: laneCoord + offset };
+      const blocked = this.npcVehicles.some((other) => {
+        if (other.id === car.id || other.id === threat.id || other.health <= 0) return false;
+        const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
+        return Math.hypot(other.x - point.x, other.y - point.y) < (config.length + otherConfig.length) * 0.5 + 8;
+      });
+      if (blocked) return false;
+    }
+
+    ai.laneShift = { kind: 'evade', targetId: threat.id, offset, released: false };
+    TrafficAI.honk(car, 600);
+    return true;
+  }
+
+  /**
+   * Drive along the lane while shifting sideways toward the lane-shift offset
+   * (or back to the lane centre once released). The sideways step is bounded
+   * by forward travel times MAX_LANE_SHIFT_SLOPE and the heading follows the
+   * actual path, so the car steers like a car: no sliding when stopped and
+   * no spinning on the spot.
+   */
+  private driveLaneShift(car: VehicleInstance, ai: NPCAIExtra, delta: number) {
+    const shift = ai.laneShift!;
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const laneCoord = ai.roadType === 'vertical' ? lane.x! : lane.y!;
+    const current = ai.roadType === 'vertical' ? car.x : car.y;
+    let target = laneCoord + (shift.released ? 0 : shift.offset);
+    if (shift.released && this.isLaneOccupiedAlongside(car, ai)) {
+      // Someone is beside us in the lane we are returning to: hold the
+      // offset until they have gone by instead of merging into them.
+      target = current;
+    }
+    const forwardStep = Math.max(0, car.speed) * 60 * delta;
+    const maxLateral = forwardStep * MAX_LANE_SHIFT_SLOPE;
+    const lateralStep = Math.max(-maxLateral, Math.min(maxLateral, target - current));
+    const forwardX = Math.cos(lane.angle);
+    const forwardY = Math.sin(lane.angle);
+    const moveX = forwardX * forwardStep + (ai.roadType === 'vertical' ? lateralStep : 0);
+    const moveY = forwardY * forwardStep + (ai.roadType === 'vertical' ? 0 : lateralStep);
+    car.x += moveX;
+    car.y += moveY;
+    if (Math.hypot(moveX, moveY) > 0.05) car.angle = Math.atan2(moveY, moveX);
+    // Reversing: straight back along the current heading.
+    if (car.speed < 0) {
+      car.x += Math.cos(car.angle) * car.speed * 60 * delta;
+      car.y += Math.sin(car.angle) * car.speed * 60 * delta;
+    }
+    if (shift.released && Math.abs(target - (ai.roadType === 'vertical' ? car.x : car.y)) < 0.5) {
+      ai.laneShift = undefined;
+      car.angle = lane.angle;
+      car.turnSignal = 'none';
+    }
+  }
+
+  /** Indicator for a sideways shift: the driver's right is (-sin, cos) of the heading in screen space. */
+  private getShiftSignal(ai: NPCAIExtra, offset: number): 'left' | 'right' {
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const rightAxis = ai.roadType === 'vertical' ? -Math.sin(lane.angle) : Math.cos(lane.angle);
+    return offset * rightAxis > 0 ? 'right' : 'left';
+  }
+
+  /**
+   * The lane centre is taken within a body length ahead or behind, or a car
+   * coming up from behind would reach us before we finish merging.
+   */
+  private isLaneOccupiedAlongside(car: VehicleInstance, ai: NPCAIExtra) {
+    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const laneCoord = ai.roadType === 'vertical' ? lane.x! : lane.y!;
+    return this.npcVehicles.some((other) => {
+      if (other.id === car.id || other.health <= 0) return false;
+      const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
+      const { along } = this.getLaneRelation(car, ai, other);
+      const otherAcross = ai.roadType === 'vertical' ? other.x : other.y;
+      const closingFromBehind = along < 0 ? Math.max(0, other.speed - car.speed) * 60 * 1.5 : 0;
+      return along > -((carConfig.length + otherConfig.length) / 2 + 10 + closingFromBehind) &&
+        along < (carConfig.length + otherConfig.length) / 2 + 10 &&
+        Math.abs(otherAcross - laneCoord) < (carConfig.width + otherConfig.width) / 2 + 2;
+    });
+  }
+
+  /**
+   * Mirror check: a vehicle behind in the corridor at `targetAcross` that
+   * would reach us within a couple of seconds at its closing speed.
+   */
+  private isCorridorThreatFromBehind(car: VehicleInstance, ai: NPCAIExtra, targetAcross: number, playerVehicle?: VehicleInstance | null) {
+    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const vehicles = playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles;
+    return vehicles.some((other) => {
+      if (other.id === car.id || other.health <= 0) return false;
+      const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
+      const { along } = this.getLaneRelation(car, ai, other);
+      if (along >= (carConfig.length + otherConfig.length) / 2) return false;
+      const otherAcross = ai.roadType === 'vertical' ? other.x : other.y;
+      if (Math.abs(otherAcross - targetAcross) >= (carConfig.width + otherConfig.width) / 2 + 4) return false;
+      const closing = Math.max(0, Math.abs(other.speed) - Math.max(0, car.speed));
+      return along > -((carConfig.length + otherConfig.length) / 2 + 20 + closing * 60 * 2);
+    });
+  }
+
+  /** Position of `other` in this car's lane frame: along the lane and across it. */
+  private getLaneRelation(car: VehicleInstance, ai: NPCAIExtra, other: VehicleInstance) {
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const forwardX = Math.cos(lane.angle);
+    const forwardY = Math.sin(lane.angle);
+    const dx = other.x - car.x;
+    const dy = other.y - car.y;
+    return {
+      along: dx * forwardX + dy * forwardY,
+      across: ai.roadType === 'vertical' ? other.x - car.x : other.y - car.y,
+    };
+  }
+
+  /** True when two vehicles' bodies overlap across the lane (would collide if aligned). */
+  private overlapsAcross(car: VehicleInstance, ai: NPCAIExtra, other: VehicleInstance, margin = 2) {
+    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
+    const { across } = this.getLaneRelation(car, ai, other);
+    return Math.abs(across) < (carConfig.width + otherConfig.width) / 2 + margin;
+  }
+
+  /**
+   * Plan a pass around a stopped vehicle in this car's lane: the side with a
+   * clear corridor that stays on the asphalt. The pass itself is a lane
+   * shift, so the car steers out on a real curve instead of chasing
+   * waypoints it cannot physically reach - the old waypoint bypass put its
+   * first point straight beside the car, which a car with a turning radius
+   * can only circle, and stopped for good whenever it came within a
+   * centre-to-centre safe gap of the obstacle, which passing alongside always
+   * does.
+   */
+  private startBypass(car: VehicleInstance, ai: NPCAIExtra, obstacle: VehicleInstance, playerVehicle?: VehicleInstance | null) {
+    if (ai.laneShift || ai.groundBypass || ai.isTurning) return false;
+    if (Math.abs(obstacle.speed) > 1) return false;
+    // Overtake a stopped player, or an NPC stopped for no traffic reason -
+    // never a car simply waiting its turn in a queue or at a light.
+    if (!obstacle.isPlayer && this.aiData.get(obstacle.id)?.holding) return false;
+
+    // Only one NPC may pull out around obstacles on a road segment at a time,
+    // so two passes never converge on the same gap.
+    const competing = this.npcVehicles.some((other) => {
+      if (other.id === car.id || other.health <= 0 || other.isCrashed) return false;
+      const otherAi = this.aiData.get(other.id);
+      return Boolean(
+        otherAi?.laneShift?.kind === 'bypass' && !otherAi.laneShift.released &&
+          otherAi.roadType === ai.roadType &&
+          otherAi.roadCoord === ai.roadCoord &&
+          otherAi.direction === ai.direction &&
+          Math.hypot(other.x - car.x, other.y - car.y) < 260
+      );
+    });
+    if (competing) return false;
+
+    const extent = this.getArterialExtent(ai);
+    if (!extent) return false;
+    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const obstacleConfig = VEHICLE_CONFIGS[obstacle.type] || VEHICLE_CONFIGS.sedan;
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const laneCoord = ai.roadType === 'vertical' ? lane.x! : lane.y!;
+    const obstacleAcross = ai.roadType === 'vertical' ? obstacle.x : obstacle.y;
+    const clearance = (carConfig.width + obstacleConfig.width) / 2 + 10;
+    const { along: obstacleAlong } = this.getLaneRelation(car, ai, obstacle);
+    const passEnd = obstacleAlong + (carConfig.length + obstacleConfig.length) / 2 + 40;
+    const forwardX = Math.cos(lane.angle);
+    const forwardY = Math.sin(lane.angle);
+    const vehicles = playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles;
+
+    const options = ([-1, 1] as const).map((side) => {
+      const targetAcross = obstacleAcross + side * clearance;
+      const onAsphalt = Math.abs(targetAcross - ai.roadCoord) <= extent.halfWidth - carConfig.width / 2 - 4;
+      // Pass on this direction's own carriageway, never across the centre
+      // line: the corridor check is a snapshot, and oncoming traffic closes
+      // on a car in its lane faster than any pass completes.
+      const ownCarriageway = Math.sign(targetAcross - ai.roadCoord) === Math.sign(laneCoord - ai.roadCoord) &&
+        Math.abs(targetAcross - ai.roadCoord) >= carConfig.width / 2 + 2;
+      let freeSpace = Infinity;
+      for (let along = 0; along <= passEnd; along += 30) {
+        const point = ai.roadType === 'vertical'
+          ? { x: targetAcross, y: car.y + forwardY * along }
+          : { x: car.x + forwardX * along, y: targetAcross };
+        for (const other of vehicles) {
+          if (other.id === car.id || other.id === obstacle.id || other.health <= 0) continue;
+          const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
+          const room = Math.hypot(other.x - point.x, other.y - point.y) - (carConfig.length + otherConfig.length) / 2 - 6;
+          freeSpace = Math.min(freeSpace, room);
+        }
+      }
+      const mirrorClear = !this.isCorridorThreatFromBehind(car, ai, targetAcross, playerVehicle);
+      return { side, offset: targetAcross - laneCoord, onAsphalt: onAsphalt && ownCarriageway && mirrorClear, freeSpace };
+    });
+
+    const selected = options
+      .filter((option) => option.onAsphalt && option.freeSpace >= 0)
+      .sort((first, second) => second.freeSpace - first.freeSpace)[0];
+    if (!selected) return false;
+
+    ai.laneShift = { kind: 'bypass', targetId: obstacle.id, offset: selected.offset, released: false };
+    ai.progressTimer = 0;
+    ai.stuckTimer = 0;
+    car.turnSignal = this.getShiftSignal(ai, selected.offset);
+    return true;
+  }
+
+  /**
+   * Speed and gear for an active bypass. Returns a speed cap, or 'reverse'
+   * when the car must back up for room to pull out.
+   */
+  private controlBypass(
+    car: VehicleInstance,
+    ai: NPCAIExtra,
+    cruiseSpeed: number,
+    playerVehicle?: VehicleInstance | null
+  ): number | 'reverse' {
+    const shift = ai.laneShift!;
+    const obstacle = (playerVehicle && playerVehicle.id === shift.targetId)
+      ? playerVehicle
+      : this.npcVehicles.find((candidate) => candidate.id === shift.targetId);
+    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    if (!obstacle || obstacle.health <= 0 || Math.abs(obstacle.speed) > 2) {
+      shift.released = true;
+      shift.reversing = false;
+      return cruiseSpeed;
+    }
+    const obstacleConfig = VEHICLE_CONFIGS[obstacle.type] || VEHICLE_CONFIGS.sedan;
+    const { along } = this.getLaneRelation(car, ai, obstacle);
+    const halfLengths = (carConfig.length + obstacleConfig.length) / 2;
+    if (along < -(halfLengths + 20)) {
+      // Rear bumper is clear of the obstacle's front: merge back.
+      shift.released = true;
+      shift.reversing = false;
+      return cruiseSpeed;
+    }
+
+    const passSpeed = Math.max(3, Math.min(6.5, cruiseSpeed * 0.55));
+    // Still mostly in our own lane and someone is coming up fast in the
+    // corridor we are moving into: call the pass off and stay put.
+    const laneForShift = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const laneCoordForShift = ai.roadType === 'vertical' ? laneForShift.x! : laneForShift.y!;
+    const acrossNow = ai.roadType === 'vertical' ? car.x : car.y;
+    if (
+      Math.abs(acrossNow - laneCoordForShift) < Math.abs(shift.offset) / 2 &&
+      this.isCorridorThreatFromBehind(car, ai, laneCoordForShift + shift.offset, playerVehicle)
+    ) {
+      shift.released = true;
+      shift.reversing = false;
+      car.turnSignal = 'none';
+      return 0;
+    }
+    if (!this.overlapsAcross(car, ai, obstacle)) {
+      shift.reversing = false;
+      return passSpeed;
+    }
+
+    // Still overlapping across the lane: the nose must not reach the
+    // obstacle before the shift has cleared it. Lateral travel comes only
+    // from forward travel, so the room needed is the remaining sideways
+    // distance divided by the shift slope.
+    const current = ai.roadType === 'vertical' ? car.x : car.y;
+    const obstacleAcross = ai.roadType === 'vertical' ? obstacle.x : obstacle.y;
+    const needAcross = (carConfig.width + obstacleConfig.width) / 2 + 2 - Math.abs(current - obstacleAcross);
+    const neededRoom = Math.max(0, needAcross) / MAX_LANE_SHIFT_SLOPE + 6;
+    const bumperGap = along - halfLengths;
+
+    if (shift.reversing || (bumperGap < neededRoom && Math.abs(car.speed) < 0.3)) {
+      if (bumperGap >= neededRoom) {
+        shift.reversing = false;
+        return 0;
+      }
+      // Back up only on asphalt and only if the lane behind is clear.
+      const extent = this.getArterialExtent(ai);
+      const position = ai.roadType === 'vertical' ? car.y : car.x;
+      const roadBehind = !extent ? 0 : (ai.direction === 'south' || ai.direction === 'east')
+        ? position - extent.min
+        : extent.max - position;
+      const behindClear = roadBehind > carConfig.length / 2 + 30 && !this.npcVehicles.some((other) => {
+        if (other.id === car.id || other.health <= 0) return false;
+        const relation = this.getLaneRelation(car, ai, other);
+        const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
+        return relation.along < 0 &&
+          relation.along > -((carConfig.length + otherConfig.length) / 2 + 30) &&
+          Math.abs(relation.across) < (carConfig.width + otherConfig.width) / 2 + 4;
+      });
+      if (!behindClear) {
+        // Boxed in: give up on the pass and queue normally.
+        ai.laneShift = undefined;
+        car.turnSignal = 'none';
+        return 0;
+      }
+      shift.reversing = true;
+      return 'reverse';
+    }
+    return Math.min(passSpeed, getStoppingCurveSpeed(carConfig, bumperGap - 4));
+  }
+
+  /** Any vehicle in or overlapping the kerbside bay this car is heading for. */
+  private isParkingBayOccupied(car: VehicleInstance, ai: NPCAIExtra, bayOffset: number) {
+    if (ai.parkingCoordinate === undefined) return false;
+    const config = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const bayAcross = (ai.roadType === 'vertical' ? lane.x! : lane.y!) + bayOffset;
+    const bay = ai.roadType === 'vertical'
+      ? { x: bayAcross, y: ai.parkingCoordinate }
+      : { x: ai.parkingCoordinate, y: bayAcross };
+    return this.npcVehicles.some((other) => {
+      if (other.id === car.id || other.health <= 0) return false;
+      const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
+      const along = ai.roadType === 'vertical' ? Math.abs(other.y - bay.y) : Math.abs(other.x - bay.x);
+      const across = ai.roadType === 'vertical' ? Math.abs(other.x - bay.x) : Math.abs(other.y - bay.y);
+      return along < (config.length + otherConfig.length) / 2 + 10 && across < (config.width + otherConfig.width) / 2 + 4;
+    });
+  }
+
+  /** Shift from the lane centre to a kerbside bay: tight against the kerb, body just on the asphalt. */
+  private getParkingBayOffset(car: VehicleInstance, ai: NPCAIExtra) {
+    const config = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const extent = this.getArterialExtent(ai);
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+    const laneCoord = ai.roadType === 'vertical' ? lane.x! : lane.y!;
+    // Kerb on this car's own side of the road it is on now.
+    const side = Math.sign(laneCoord - ai.roadCoord) || 1;
+    const bayCentre = ai.roadCoord + side * ((extent?.halfWidth ?? 110) - config.width / 2 - 2);
+    return bayCentre - laneCoord;
   }
 
   private beginParking(car: VehicleInstance, ai: NPCAIExtra) {
@@ -325,9 +792,11 @@ export class TrafficAI {
     ai.driveTimer = 0;
     ai.nextParkingIn = 30 + (Number(car.id.replace(/\D/g, '')) % 6) * 8;
     const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
-    const parkingOffset = 118 * (ai.parkingSide || 1);
-    if (ai.roadType === 'vertical') car.x = lane.x! + parkingOffset;
-    else car.y = lane.y! + parkingOffset;
+    // The car has already pulled into the bay (see the 'park' lane shift);
+    // it stays where it stopped instead of being teleported sideways.
+    car.angle = lane.angle;
+    ai.laneShift = undefined;
+    car.turnSignal = 'none';
     car.speed = 0;
     car.isBraking = true;
     car.npcParked = true;
@@ -610,6 +1079,12 @@ export class TrafficAI {
    * gap-keeping below uses this to step aside for a genuine ram instead of
    * teleporting the NPC clear of a collision the player was trying to make.
    */
+  private static honk(car: VehicleInstance, durationMs: number) {
+    if (car.isHonking) return;
+    car.isHonking = true;
+    setTimeout(() => { car.isHonking = false; }, durationMs);
+  }
+
   private static isClosingFast(mover: VehicleInstance, target: VehicleInstance, threshold = 5.5) {
     const dx = target.x - mover.x;
     const dy = target.y - mover.y;
@@ -717,6 +1192,29 @@ export class TrafficAI {
     }
 
     const bypassSpeed = Math.min(7.5, Math.max(5.5, cruiseSpeed * 0.55));
+    // The detour runs off the lanes, where no queue logic protects it: stop
+    // for anything in the way instead of driving through it.
+    // Look as far along the path as it takes to stop from this speed.
+    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
+    const stoppingDistance = (60 * Math.max(0, car.speed) ** 2) / (2 * carConfig.braking);
+    const lookAhead = Math.min(distance, Math.max(40, stoppingDistance + 30));
+    const pathBlocked = this.npcVehicles.some((other) => {
+      if (other.id === car.id || other.health <= 0) return false;
+      const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
+      const reach = (carConfig.length + otherConfig.length) / 2 + 6;
+      for (let ahead = 10; ahead <= lookAhead; ahead += 15) {
+        const probe = { x: car.x + (dx / distance) * ahead, y: car.y + (dy / distance) * ahead };
+        if (Math.hypot(other.x - probe.x, other.y - probe.y) < reach) return true;
+      }
+      return false;
+    });
+    if (pathBlocked) {
+      car.speed = integrateVehicleSpeed(car.speed, carConfig, { brake: true }, delta);
+      car.isBraking = true;
+      car.x += Math.cos(car.angle) * car.speed * 60 * delta;
+      car.y += Math.sin(car.angle) * car.speed * 60 * delta;
+      return true;
+    }
     const desiredAngle = Math.atan2(dy, dx);
     const angleDelta = Math.atan2(
       Math.sin(desiredAngle - car.angle),
@@ -732,184 +1230,6 @@ export class TrafficAI {
     );
     car.isBraking = false;
     car.turnSignal = 'hazard';
-    car.x += Math.cos(car.angle) * car.speed * 60 * delta;
-    car.y += Math.sin(car.angle) * car.speed * 60 * delta;
-    return true;
-  }
-
-  private getAdaptiveWaypointClearance(
-    car: VehicleInstance,
-    waypoint: { x: number; y: number },
-    playerVehicle?: VehicleInstance | null
-  ) {
-    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
-    const vehicles = playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles;
-    return vehicles.reduce((minimum, other) => {
-      if (other.id === car.id || other.health <= 0 || other.isCrashed) return minimum;
-      const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
-      const minimumClearance = (carConfig.width + otherConfig.width) * 0.5 + 12;
-      return Math.min(minimum, Math.hypot(other.x - waypoint.x, other.y - waypoint.y) - minimumClearance);
-    }, Infinity);
-  }
-
-  private isAdaptiveWaypointClear(
-    car: VehicleInstance,
-    waypoint: { x: number; y: number },
-    playerVehicle?: VehicleInstance | null
-  ) {
-    return this.getAdaptiveWaypointClearance(car, waypoint, playerVehicle) >= 0;
-  }
-
-  private startAdaptiveBypass(
-    car: VehicleInstance,
-    ai: NPCAIExtra,
-    obstacle: VehicleInstance,
-    playerVehicle?: VehicleInstance | null,
-    preferredSide?: -1 | 1
-  ) {
-    if (ai.adaptiveBypass || ai.groundBypass || ai.isTurning) return false;
-
-    // Only one NPC may actively change lanes on a road segment at a time.
-    // Two independently selected bypass arcs can otherwise converge on the
-    // same lane and make the spacing solver push one car back every frame.
-    const competingBypass = this.npcVehicles.some((other) => {
-      if (other.id === car.id || other.health <= 0 || other.isCrashed) return false;
-      const otherAi = this.aiData.get(other.id);
-      return Boolean(
-        otherAi?.adaptiveBypass &&
-          otherAi.roadType === ai.roadType &&
-          otherAi.roadCoord === ai.roadCoord &&
-          otherAi.direction === ai.direction &&
-          Math.hypot(other.x - car.x, other.y - car.y) < 220
-      );
-    });
-    if (competingBypass) return false;
-
-    const forwardX = Math.cos(car.angle);
-    const forwardY = Math.sin(car.angle);
-    const lateralX = -forwardY;
-    const lateralY = forwardX;
-    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
-    const obstacleConfig = VEHICLE_CONFIGS[obstacle.type] || VEHICLE_CONFIGS.sedan;
-    const lateralOffset = Math.min(48, Math.max(34, carConfig.width * 0.9));
-    const passDistance = (carConfig.length + obstacleConfig.length) * 0.5 + 38;
-    const rejoinDistance = passDistance + 58;
-    const sides = [-1, 1] as const;
-
-    const options = sides.map((side) => {
-      const sidePoint = {
-        // First move sideways at the current longitudinal position. Advancing
-        // here would shorten the bumper gap diagonally before the pass starts.
-        x: car.x + lateralX * side * lateralOffset,
-        y: car.y + lateralY * side * lateralOffset,
-      };
-      const passPoint = {
-        x: obstacle.x + forwardX * passDistance + lateralX * side * lateralOffset,
-        y: obstacle.y + forwardY * passDistance + lateralY * side * lateralOffset,
-      };
-      const rejoinPoint = {
-        x: obstacle.x + forwardX * rejoinDistance,
-        y: obstacle.y + forwardY * rejoinDistance,
-      };
-      const clearance = Math.min(
-        ...[sidePoint, passPoint, rejoinPoint].map((point) =>
-          this.getAdaptiveWaypointClearance(car, point, playerVehicle)
-        )
-      );
-      return { side, sidePoint, passPoint, rejoinPoint, clearance };
-    });
-
-    const selected = options
-      .filter((option) => option.clearance >= 0 && (preferredSide === undefined || option.side === preferredSide))
-      .sort((first, second) => second.clearance - first.clearance)[0];
-    if (!selected) return false;
-
-    ai.adaptiveBypass = {
-      obstacleId: obstacle.id,
-      waypoints: [selected.sidePoint, selected.passPoint, selected.rejoinPoint],
-      waypointIndex: 0,
-    };
-    ai.progressTimer = 0;
-    ai.stuckTimer = 0;
-    car.isBraking = false;
-    car.turnSignal = selected.side < 0 ? 'left' : 'right';
-    return true;
-  }
-
-  private updateAdaptiveBypass(
-    car: VehicleInstance,
-    ai: NPCAIExtra,
-    delta: number,
-    cruiseSpeed: number,
-    playerVehicle?: VehicleInstance | null
-  ) {
-    const bypass = ai.adaptiveBypass;
-    if (!bypass) return false;
-
-    const waypoint = bypass.waypoints[bypass.waypointIndex];
-    if (!waypoint) {
-      ai.adaptiveBypass = undefined;
-      car.turnSignal = 'none';
-      car.angle = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex).angle;
-      car.speed = cruiseSpeed * 0.72;
-      return false;
-    }
-
-    // Re-check the route every frame. A route that was free when selected can
-    // become occupied by another NPC before the pass point is reached.
-    if (!this.isAdaptiveWaypointClear(car, waypoint, playerVehicle)) {
-      car.speed = Math.max(0, car.speed - 5 * delta);
-      car.isBraking = true;
-      return true;
-    }
-
-    const dx = waypoint.x - car.x;
-    const dy = waypoint.y - car.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance < 14) {
-      bypass.waypointIndex += 1;
-      return true;
-    }
-
-    const desiredAngle = Math.atan2(dy, dx);
-    const angleDelta = Math.atan2(
-      Math.sin(desiredAngle - car.angle),
-      Math.cos(desiredAngle - car.angle)
-    );
-    const maxTurnPerFrame = Math.min(0.18, Math.max(0.06, 11 * delta));
-    car.angle += Math.max(-maxTurnPerFrame, Math.min(maxTurnPerFrame, angleDelta));
-    const alignment = Math.max(0.22, Math.cos(angleDelta));
-    const carConfig = VEHICLE_CONFIGS[car.type] || VEHICLE_CONFIGS.sedan;
-    const bypassSpeed = Math.min(8.5, Math.max(5.0, cruiseSpeed * 0.62));
-    const nextSpeed = Math.min(
-      bypassSpeed * Math.min(1, alignment * 1.45),
-      distance / Math.max(delta * 60, 1)
-    );
-    const projectedPosition = {
-      x: car.x + Math.cos(car.angle) * nextSpeed * 60 * delta,
-      y: car.y + Math.sin(car.angle) * nextSpeed * 60 * delta,
-    };
-    const obstacle = (playerVehicle ? [...this.npcVehicles, playerVehicle] : this.npcVehicles)
-      .find((candidate) => candidate.id === bypass.obstacleId);
-    if (obstacle) {
-      const obstacleConfig = VEHICLE_CONFIGS[obstacle.type] || VEHICLE_CONFIGS.sedan;
-      const safeGap = (carConfig.length + obstacleConfig.length) * 0.5 + 24;
-      if (Math.hypot(projectedPosition.x - obstacle.x, projectedPosition.y - obstacle.y) < safeGap) {
-        car.speed = 0;
-        car.isBraking = true;
-        return true;
-      }
-    }
-    if (!this.isAdaptiveWaypointClear(car, projectedPosition, playerVehicle)) {
-      // Keep steering toward the selected side while stationary. This avoids
-      // cutting diagonally into the obstacle during the first half of a lane
-      // change, then resumes as soon as the projected position is clear.
-      car.speed = 0;
-      car.isBraking = true;
-      return true;
-    }
-    car.speed = nextSpeed;
-    car.isBraking = false;
     car.x += Math.cos(car.angle) * car.speed * 60 * delta;
     car.y += Math.sin(car.angle) * car.speed * 60 * delta;
     return true;
@@ -1074,9 +1394,19 @@ export class TrafficAI {
               firstAi.direction === secondAi.direction &&
               firstAi.laneIndex === secondAi.laneIndex
           );
-          // Keep a vehicle in its assigned queue even while it is easing
-          // around an obstacle. Using only the instantaneous angle here made
-          // an adaptive bypass temporarily lose its longitudinal clearance.
+          // Two cars side by side on the same road - in neighbouring lanes,
+          // or one shifted out to pass or swerve - do not touch, however
+          // close their centres are. Circle-based separation (radii of up to
+          // half a bus length) is wider than a lane, so it shoved a car
+          // passing a stopped neighbour sideways into oncoming traffic, and
+          // shoved an overtaking car back behind the obstacle it was passing.
+          if (
+            firstAi && secondAi && !firstAi.isTurning && !secondAi.isTurning &&
+            firstAi.roadType === secondAi.roadType && firstAi.roadCoord === secondAi.roadCoord
+          ) {
+            const across = firstAi.roadType === 'vertical' ? second.x - first.x : second.y - first.y;
+            if (Math.abs(across) >= (firstConfig.width + secondConfig.width) / 2 + 2) continue;
+          }
           const sameHeading = sameAssignedLane;
           const sameRoadOppositeLane = Boolean(
             firstAi && secondAi &&
@@ -1130,14 +1460,13 @@ export class TrafficAI {
             // this transient conflict on the contact normal; lane control then
             // eases the car back instead of making it oscillate across lanes.
             if (sameRoadDirection) {
-              const bypassing = firstAi?.adaptiveBypass ? first : secondAi?.adaptiveBypass ? second : null;
+              const bypassing = firstAi?.laneShift?.kind === 'bypass' ? first : secondAi?.laneShift?.kind === 'bypass' ? second : null;
               const bypassingAi = bypassing ? this.aiData.get(bypassing.id) : undefined;
-              if (bypassingAi?.adaptiveBypass) {
-                // The target lane became occupied after the bypass was chosen.
-                // Abort that plan and let normal queue braking take over;
-                // otherwise the waypoint controller re-enters the conflict on
-                // every frame and produces the reported dancing motion.
-                bypassingAi.adaptiveBypass = undefined;
+              if (bypassingAi?.laneShift?.kind === 'bypass' && !bypassingAi.laneShift.released) {
+                // The pass corridor became occupied after it was chosen.
+                // Abandon the pass and ease back into the queue.
+                bypassingAi.laneShift.released = true;
+                bypassingAi.laneShift.reversing = false;
                 bypassingAi.progressTimer = 0;
                 bypassing.turnSignal = 'none';
                 bypassing.speed = 0;
@@ -1495,26 +1824,45 @@ export class TrafficAI {
         continue;
       }
       ai.driveTimer += delta;
-      if (ai.driveTimer >= ai.nextParkingIn && !ai.isTurning && !ai.adaptiveBypass && !ai.groundBypass) {
+      if (ai.driveTimer >= ai.nextParkingIn && !ai.isTurning && !ai.laneShift && !ai.groundBypass) {
         this.planParkingStop(car, ai);
       }
-      if (ai.parkingCoordinate !== undefined) {
+      let parkingDistance: number | undefined;
+      if (ai.parkingCoordinate !== undefined && !ai.isTurning) {
         const current = ai.roadType === 'vertical' ? car.y : car.x;
-        const distance = ai.direction === 'south' || ai.direction === 'east'
+        parkingDistance = ai.direction === 'south' || ai.direction === 'east'
           ? ai.parkingCoordinate - current
           : current - ai.parkingCoordinate;
-        if (distance >= -18 && distance < 28) {
-          this.beginParking(car, ai);
-          continue;
+        const bayOffset = this.getParkingBayOffset(car, ai);
+        // Signal and start pulling over early enough for the sideways
+        // move, which only happens while rolling forward.
+        const pullOverRoom = Math.abs(bayOffset) / MAX_LANE_SHIFT_SLOPE + 30;
+        if (parkingDistance > 0 && parkingDistance < pullOverRoom + 60 && this.isParkingBayOccupied(car, ai, bayOffset)) {
+          // Someone got there first: drive on rather than pull into them.
+          ai.parkingCoordinate = undefined;
+          if (ai.laneShift?.kind === 'park') ai.laneShift.released = true;
+        } else if (!ai.laneShift && parkingDistance > 0 && parkingDistance < pullOverRoom) {
+          ai.laneShift = { kind: 'park', targetId: '', offset: bayOffset, released: false };
+          car.turnSignal = this.getShiftSignal(ai, bayOffset);
+        }
+        if (ai.laneShift?.kind === 'park' && !ai.laneShift.released) {
+          const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+          const laneCoord = ai.roadType === 'vertical' ? lane.x! : lane.y!;
+          const across = ai.roadType === 'vertical' ? car.x : car.y;
+          if (Math.abs(across - (laneCoord + ai.laneShift.offset)) < 1.5 && Math.abs(car.speed) < 0.4) {
+            this.beginParking(car, ai);
+            continue;
+          }
+        }
+        if (parkingDistance < -60) {
+          // Overshot the bay (held up by traffic): give up on this stop.
+          ai.parkingCoordinate = undefined;
+          if (ai.laneShift?.kind === 'park') ai.laneShift.released = true;
+          parkingDistance = undefined;
         }
       }
       const cruiseSpeed = this.getNpcCruiseSpeed(car, ai);
       if (this.updateGroundBypass(car, ai, delta, cruiseSpeed)) {
-        ai.lastX = car.x;
-        ai.lastY = car.y;
-        continue;
-      }
-      if (this.updateAdaptiveBypass(car, ai, delta, cruiseSpeed, playerVehicle)) {
         ai.lastX = car.x;
         ai.lastY = car.y;
         continue;
@@ -1565,6 +1913,9 @@ export class TrafficAI {
       // prevents the first frame burst from turning into a traffic pile-up.
       let targetSpeed = cruiseSpeed;
       let shouldStop = false;
+      // Full brake-pedal stop for an imminent collision, rather than the
+      // service braking the speed target produces.
+      let emergencyBrake = false;
       let waitingForTrafficLight = false;
       let stopLineIntersection: Intersection | null = null;
 
@@ -1684,6 +2035,11 @@ export class TrafficAI {
         }
       }
 
+      // Waiting out a red light is not a lack of progress. Counting it let a
+      // long red trip the stuck-recovery on the first green frame, which
+      // snapped the car into its lane and kicked it from 0 to cruise speed.
+      if (waitingForTrafficLight) ai.progressTimer = 0;
+
       // 4. Intersection Conflict Avoidance
       // Traffic lights control normal flow, but cars can still arrive during
       // phase changes or while another vehicle is completing a turn. Reserve
@@ -1701,13 +2057,25 @@ export class TrafficAI {
       let blockedObstacle: VehicleInstance | null = null;
       const activeIntersection = this.getActiveIntersection(car, ai);
       if (!ai.isTurning) {
-        const allObstacles = this.vehicleIndex.queryRadius(car.x, car.y, 220);
-        if (playerVehicle && Math.hypot(playerVehicle.x - car.x, playerVehicle.y - car.y) <= 220) {
+        // Look as far ahead as this car needs to stop: a fixed short range
+        // left a car at cruise speed short of braking room behind a queue.
+        const scanRange = Math.max(220, (60 * Math.max(0, car.speed) ** 2) / (2 * getPlanningBraking(config)) + 80);
+        const allObstacles = this.vehicleIndex.queryRadius(car.x, car.y, scanRange);
+        if (playerVehicle && Math.hypot(playerVehicle.x - car.x, playerVehicle.y - car.y) <= scanRange) {
           allObstacles.push(playerVehicle);
         }
+        // The scan reacts to the first leader it finds, so it must be the
+        // nearest one; the spatial hash returns neighbours in cell order.
+        allObstacles.sort((first, second) =>
+          Math.hypot(first.x - car.x, first.y - car.y) - Math.hypot(second.x - car.x, second.y - car.y)
+        );
         for (const other of allObstacles) {
           if (other.id === car.id) continue;
           if (!other.isPlayer && (other.health <= 0 || other.isCrashed)) continue;
+          // Mid lane shift, only bodies that actually overlap across the
+          // lane are in the way; the vehicle being passed is handled by
+          // controlBypass.
+          if (ai.laneShift && (other.id === ai.laneShift.targetId || !this.overlapsAcross(car, ai, other))) continue;
 
           // Perpendicular cars are governed by the intersection reservation
           // system. Treating them as a same-lane obstacle here made a car at
@@ -1720,7 +2088,18 @@ export class TrafficAI {
             other.isPlayer && Math.cos(other.angle - car.angle) > 0.35
           );
           if (!sameTrafficLane) {
+            // An oncoming car waiting in its own lane on this same road -
+            // going straight, not turning - crosses nobody's path. Treating
+            // it as a junction conflict let an oncoming queue lock this
+            // approach (and, at road ends, deadlock both directions).
+            const oncomingSameRoad = Boolean(
+              otherAi && !otherAi.isTurning && !ai.isTurning &&
+                otherAi.roadType === ai.roadType &&
+                otherAi.roadCoord === ai.roadCoord &&
+                otherAi.direction !== ai.direction
+            );
             const otherInConflictZone = Boolean(
+              !oncomingSameRoad &&
               activeIntersection &&
               otherAi &&
               activeIntersection.approachDistance > -20 &&
@@ -1740,7 +2119,7 @@ export class TrafficAI {
             const dy = other.y - car.y;
             const dist = Math.hypot(dx, dy);
 
-          if (dist < 180 && dist > 1) {
+          if (dist < scanRange && dist > 1) {
             const forwardX = Math.cos(car.angle);
             const forwardY = Math.sin(car.angle);
             const dot = (dx * forwardX + dy * forwardY) / dist;
@@ -1753,9 +2132,15 @@ export class TrafficAI {
 
             if (dot > 0.82 && playerInSameLane) {
               const otherConfig = VEHICLE_CONFIGS[other.type] || VEHICLE_CONFIGS.sedan;
+              // Bumper-to-bumper queue gap. The NPC value used to be shorter
+              // than a car (bodies overlapping), so this snap and the spacing
+              // pass (which wants half-lengths + 8) fought every frame.
+              // Plus a margin that grows with speed: drivers keep more room
+              // the faster they go, so a leader braking hard does not leave
+              // the follower nowhere to stop.
               const safeFollowingDistance = other.isPlayer
                 ? (config.length + otherConfig.length) * 0.5 + 24
-                : (config.length + otherConfig.length) * 0.38 + 6;
+                : (config.length + otherConfig.length) * 0.5 + 12 + Math.max(0, car.speed) * 4;
               // A player closing in hard enough to count as a hit (physics.ts
               // uses the same 5.5 threshold to trigger crash damage) should
               // land one - not get dodged by the AI teleporting itself to a
@@ -1768,10 +2153,12 @@ export class TrafficAI {
                 if (other.isPlayer) {
                   targetSpeed = Math.min(targetSpeed, Math.max(0, other.speed * 0.92));
                 } else {
+                  // Inside the queue gap: stop hard. No position override -
+                  // teleporting the follower to the gap could jump it a car
+                  // length or more, and any residual overlap is the spacing
+                  // pass's job.
                   shouldStop = true;
-                  car.x = other.x - forwardX * safeFollowingDistance;
-                  car.y = other.y - forwardY * safeFollowingDistance;
-                  car.speed = 0;
+                  if (car.speed > 0.5) emergencyBrake = true;
                 }
                 if (
                   activeIntersection &&
@@ -1788,10 +2175,15 @@ export class TrafficAI {
                   }, 500);
                 }
               } else if (!isPlayerRam) {
-                const followingSpeed = other.isPlayer
-                  ? Math.max(0, (other.speed || 0) * 0.92)
-                  : Math.max(0, (other.speed || 0) * 0.85);
-                targetSpeed = Math.min(targetSpeed, followingSpeed);
+                // Follow on a stopping curve: match the leader's speed when
+                // close, and only as fast as can still stop at the queue gap.
+                const leaderSpeed = Math.max(0, other.speed || 0);
+                const room = dist - safeFollowingDistance - Math.max(0, car.speed);
+                // Match the leader exactly: a fraction of its speed compounds
+                // down a platoon and slowed every queue behind the first car.
+                targetSpeed = Math.min(targetSpeed, leaderSpeed + getStoppingCurveSpeed(config, room));
+                const closingSpeed = Math.max(0, car.speed - leaderSpeed);
+                if (closingSpeed > 0.5 && room < (60 * closingSpeed ** 2) / (2 * config.braking * 0.72)) emergencyBrake = true;
               }
               break;
             }
@@ -1820,26 +2212,43 @@ export class TrafficAI {
       // Dedicated player following controller. It works independently of the
       // short-radius obstacle scan, so a stopped player is caught early enough
       // for the NPC to settle behind the bumper rather than tap it first.
+      if (ai.laneShift?.kind === 'evade' && !ai.laneShift.released && (!playerVehicle || playerVehicle.id !== ai.laneShift.targetId)) {
+        ai.laneShift.released = true;
+      }
       if (playerVehicle && !ai.isTurning) {
         const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
         const playerDx = playerVehicle.x - car.x;
         const playerDy = playerVehicle.y - car.y;
-        const forwardX = Math.cos(car.angle);
-        const forwardY = Math.sin(car.angle);
+        // Judge the player in the lane's frame, not the body's: mid-swerve
+        // the body is yawed, which would swing a head-on threat out of the
+        // "same lane" window and cancel the braking.
+        const forwardX = Math.cos(lane.angle);
+        const forwardY = Math.sin(lane.angle);
         const aheadDistance = playerDx * forwardX + playerDy * forwardY;
         const lateralDistance = Math.abs(playerDx * -forwardY + playerDy * forwardX);
         const sameLane = ai.roadType === 'vertical'
           ? Math.abs(playerVehicle.x - lane.x!) < 58
           : Math.abs(playerVehicle.y - lane.y!) < 58;
-        const headingOpposition = Math.cos(playerVehicle.angle - car.angle);
+        const headingOpposition = Math.cos(playerVehicle.angle - lane.angle);
         const isHeadOnThreat = sameLane && aheadDistance > 0 && aheadDistance < 240 && lateralDistance < 58 && headingOpposition < -0.65;
 
         if (isHeadOnThreat) {
-          // Do not steer around the player: let normal braking and physics
-          // resolve a head-on approach instead of orbiting the player's car.
+          // Emergency response: full braking plus, room permitting, one
+          // committed swerve toward the kerb. Contact, if it still happens,
+          // is left to physics.
           targetSpeed = 0;
           shouldStop = true;
+          emergencyBrake = true;
           blockedByPlayer = true;
+          if (!ai.laneShift) this.beginEvasion(car, ai, playerVehicle);
+        }
+        if (ai.laneShift?.kind === 'evade' && !ai.laneShift.released && ai.laneShift.targetId === playerVehicle.id) {
+          // Hold the swerve until the threat has passed alongside or turned
+          // away, then ease back into the lane.
+          const threatPassed = aheadDistance < -(config.length + (VEHICLE_CONFIGS[playerVehicle.type] || VEHICLE_CONFIGS.sedan).length) * 0.5;
+          if (threatPassed || (!isHeadOnThreat && aheadDistance > 260) || headingOpposition > -0.3) {
+            ai.laneShift.released = true;
+          }
         }
 
         const playerConfig = VEHICLE_CONFIGS[playerVehicle.type] || VEHICLE_CONFIGS.sedan;
@@ -1847,8 +2256,14 @@ export class TrafficAI {
         const stoppingDistance = (60 * Math.max(0, car.speed) ** 2) / (2 * getPlanningBraking(config));
         const followRange = Math.max(210, safeGap + stoppingDistance + 40);
         const playerClosingFast = TrafficAI.isClosingFast(playerVehicle, car);
+        // Passing or swerving past the player: following rules do not apply
+        // once the bodies no longer overlap across the lane.
+        const followPlayer = !(ai.laneShift && (
+          (ai.laneShift.kind === 'bypass' && ai.laneShift.targetId === playerVehicle.id && !ai.laneShift.released) ||
+          !this.overlapsAcross(car, ai, playerVehicle)
+        ));
 
-        if (!isHeadOnThreat && !playerClosingFast && sameLane && aheadDistance > 0 && aheadDistance < followRange && lateralDistance < 58) {
+        if (followPlayer && !isHeadOnThreat && !playerClosingFast && sameLane && aheadDistance > 0 && aheadDistance < followRange && lateralDistance < 58) {
           // Brake along a stopping curve: the fastest speed from which
           // service braking can still settle at safeGap behind the player.
           // Seeing the player only at the old fixed 210 range left a car at
@@ -1857,15 +2272,28 @@ export class TrafficAI {
           // target only, so following a moving player stays smooth.
           const room = aheadDistance - safeGap - Math.max(0, car.speed);
           targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92) + getStoppingCurveSpeed(config, room));
+          // Closing on a slower player too fast for service braking to stop
+          // in the room left: stand on the brake, as a driver would.
+          const closingSpeed = Math.max(0, car.speed - Math.max(0, playerVehicle.speed));
+          const serviceStoppingDistance = (60 * closingSpeed ** 2) / (2 * config.braking * 0.72);
+          if (closingSpeed > 0.5 && room < serviceStoppingDistance) emergencyBrake = true;
         }
 
-        if (!isHeadOnThreat && sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58) {
+        if (sameLane && aheadDistance < 0 && aheadDistance > -200 && lateralDistance < 58 && playerClosingFast) {
+          // Rammed from behind: a real driver cannot dodge sideways in time.
+          // Lean on the horn and keep driving rather than braking into it.
+          TrafficAI.honk(car, 700);
+        }
+
+        if (followPlayer && !isHeadOnThreat && sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58) {
           if (playerClosingFast) {
-            // Keep the NPC in its lane. Bypassing the player here makes the
-            // car fly around them; braking still leaves collisions to physics.
+            // The player is backing into the NPC. There is nowhere sensible
+            // to swerve to from a standstill-speed queue: sound the horn,
+            // stop, and leave any contact to physics.
             targetSpeed = 0;
             shouldStop = true;
             blockedByPlayer = true;
+            TrafficAI.honk(car, 700);
           } else {
             blockedByPlayer = true;
             blockedObstacle = playerVehicle;
@@ -1887,7 +2315,7 @@ export class TrafficAI {
         }
       }
       if (blockedObstacle && !activeIntersection && ai.progressTimer > 0.45) {
-        if (this.startAdaptiveBypass(car, ai, blockedObstacle, playerVehicle)) continue;
+        this.startBypass(car, ai, blockedObstacle, playerVehicle);
       }
       if (blockedByPlayer && activeIntersection && ai.progressTimer > 2.5) {
         if (this.startGroundBypass(car, ai, activeIntersection.inter)) continue;
@@ -1942,6 +2370,14 @@ export class TrafficAI {
           (!waitingForTrafficLight || ai.progressTimer > 18)
         ) {
           ai.stuckTimer = 0;
+          if (ai.laneShift) {
+            // Never snap a car that is beside an obstacle back into its
+            // lane; drop the manoeuvre and let it ease back on its own.
+            ai.laneShift.released = true;
+            ai.laneShift.reversing = false;
+            ai.progressTimer = 0;
+            continue;
+          }
           const activeIntersection = this.getActiveIntersection(car, ai);
           if (activeIntersection) {
             const ownerId = this.intersectionReservations.get(activeIntersection.inter.id);
@@ -1973,7 +2409,8 @@ export class TrafficAI {
           // Recovery may realign the car to its lane, but must not teleport it
           // backward; that rollback looked like a sudden position snap.
           car.angle = lane.angle;
-          car.speed = waitingForTrafficLight ? 0 : cruiseSpeed * 0.8;
+          // Speed is left to the integrator: setting it outright launched a
+          // stationary car straight to cruise speed in one frame.
           ai.progressTimer = 0;
           ai.stuckTimer = 0;
           ai.lastX = car.x;
@@ -2051,6 +2488,9 @@ export class TrafficAI {
         }
       }
 
+      // A turn takes over steering; an unfinished swerve does not carry into it.
+      if (ai.isTurning) ai.laneShift = undefined;
+
       // 8. Execute Smooth Bezier Intersection Turn
       if (ai.isTurning && ai.turnStartPos && ai.turnEndPos && ai.turnControlPos) {
         // ~23 km/h on the tight city turn; the same cap governs every model
@@ -2073,6 +2513,8 @@ export class TrafficAI {
             ai.roadType = ai.roadType === 'vertical' ? 'horizontal' : 'vertical';
             ai.roadCoord = ai.targetRoadCoord;
             ai.direction = ai.targetDirection;
+            // A parking stop planned on the previous road means nothing here.
+            ai.parkingCoordinate = undefined;
             ai.routeIndex = Math.min(ai.routeRoadIds.length, ai.routeIndex + 1);
             if (ai.routeIndex >= ai.routeRoadIds.length - 1 && ai.routeTargetPoiId) {
               const nextPoi = this.cityMap.pois[(Number(car.id.replace(/\D/g, '')) + ai.routeIndex + 3) % this.cityMap.pois.length];
@@ -2121,6 +2563,7 @@ export class TrafficAI {
         } else {
           ai.roadType = ai.roadType === 'vertical' ? 'horizontal' : 'vertical';
           ai.roadCoord = ai.targetRoadCoord;
+          ai.parkingCoordinate = undefined;
         }
         ai.direction = ai.targetDirection;
       }
@@ -2133,6 +2576,15 @@ export class TrafficAI {
         }
       }
 
+      if (ai.laneShift?.kind === 'park' && !ai.laneShift.released && parkingDistance !== undefined) {
+        // Roll to a stop at the bay, slowly enough to complete the pull-in.
+        targetSpeed = Math.min(targetSpeed, 1.2 + getStoppingCurveSpeed(config, parkingDistance));
+        const lane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
+        const across = ai.roadType === 'vertical' ? car.x : car.y;
+        const laneCoord = ai.roadType === 'vertical' ? lane.x! : lane.y!;
+        if (Math.abs(across - (laneCoord + ai.laneShift.offset)) < 1.5) shouldStop = true;
+      }
+
       // Approaching the capped end of an arterial: slow to a crawl on a
       // stopping curve so the turnaround below happens at walking pace. At
       // cruise speed the lane-keeping controller swung the U-turn wide, past
@@ -2143,21 +2595,43 @@ export class TrafficAI {
         if (roadEndDistance !== undefined) {
           const room = roadEndDistance - ROAD_END_TURN_DISTANCE;
           targetSpeed = Math.min(targetSpeed, ROAD_END_CRAWL_SPEED + getStoppingCurveSpeed(config, room));
+          // Too fast to make the turn point on service braking: brake hard
+          // rather than sail past the end of the asphalt.
+          const excess = Math.max(0, car.speed - ROAD_END_CRAWL_SPEED);
+          if (excess > 0.5 && room < (60 * excess ** 2) / (2 * config.braking * 0.72)) emergencyBrake = true;
+          // At the turn point with the arc occupied: wait for a gap.
+          if (room < 4 && !this.isRoadEndUTurnClear(car, this.planRoadEndUTurn(car, ai))) shouldStop = true;
         }
+      }
+
+      ai.holding = shouldStop || targetSpeed < 0.5;
+
+      let reverseForRoom = false;
+      if (ai.laneShift?.kind === 'bypass' && !ai.laneShift.released && !ai.isTurning) {
+        const bypassControl = this.controlBypass(car, ai, cruiseSpeed, playerVehicle);
+        if (bypassControl === 'reverse') reverseForRoom = true;
+        else targetSpeed = Math.min(targetSpeed, bypassControl);
       }
 
       // 9. Speed Integration. NPCs use the same physically-scaled
       // acceleration/braking model as the player and only target the road
       // cruise speed chosen by the traffic controller.
       const speedBeforeIntegration = car.speed;
-      car.speed = integrateVehicleSpeed(car.speed, config, {
-        targetSpeed: shouldStop ? 0 : targetSpeed,
-      }, delta);
+      if (reverseForRoom && !shouldStop) {
+        // Creep back at walking pace to make room to pull out.
+        car.speed = Math.max(-BYPASS_REVERSE_SPEED, integrateVehicleSpeed(car.speed, config, { reverse: true }, delta));
+      } else {
+        car.speed = integrateVehicleSpeed(car.speed, config, emergencyBrake
+          ? { brake: true }
+          : { targetSpeed: shouldStop ? 0 : targetSpeed }, delta);
+      }
       car.isBraking = shouldStop || car.speed < speedBeforeIntegration - 0.01;
       car.isReversing = car.speed < -0.3;
 
       // 10. Straight Road Driving & Active Lane-Centering
-      if (!ai.isTurning) {
+      if (!ai.isTurning && ai.laneShift) {
+        this.driveLaneShift(car, ai, delta);
+      } else if (!ai.isTurning) {
         const targetLane = this.getTargetLane(ai.roadType, ai.roadCoord, ai.direction, ai.laneIndex);
 
         // Integrate forward motion along current heading
@@ -2187,7 +2661,8 @@ export class TrafficAI {
       if (!ai.isTurning) {
         const roadEndDistance = this.getRoadEndDistance(car, ai);
         if (roadEndDistance !== undefined && roadEndDistance < ROAD_END_TURN_DISTANCE) {
-          this.beginRoadEndUTurn(car, ai);
+          const plan = this.planRoadEndUTurn(car, ai);
+          if (this.isRoadEndUTurnClear(car, plan)) this.beginRoadEndUTurn(car, ai, plan);
         }
       }
     }
@@ -2469,6 +2944,13 @@ export class TrafficAI {
             }
             parkedVehicle.npcParked = false;
             parkedVehicle.isBraking = false;
+            // Pull out of the bay the way it pulled in: a gradual shift back
+            // to the lane that waits for a gap in passing traffic.
+            const parkedLane = this.getTargetLane(parkedAi.roadType, parkedAi.roadCoord, parkedAi.direction, parkedAi.laneIndex);
+            const bayOffset = parkedAi.roadType === 'vertical'
+              ? parkedVehicle.x - parkedLane.x!
+              : parkedVehicle.y - parkedLane.y!;
+            parkedAi.laneShift = { kind: 'park', targetId: '', offset: bayOffset, released: true };
           } else {
             // Passengers disappear into the vehicle; only the driver controls
             // when the parked NPC is allowed to resume driving.

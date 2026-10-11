@@ -35,7 +35,16 @@ export function integrateVehicleSpeed(
   if (input.targetSpeed !== undefined) {
     const target = Math.max(0, Math.min(maxForward, input.targetSpeed));
     if (speed > target) {
-      const deceleration = target < speed - 0.5 ? config.braking * 0.72 : resistance;
+      // Service braking when well above the target or stopping; within half
+      // a unit of the target, modulate the brake in proportion to the excess
+      // like a driver easing off. A dead band with only rolling resistance
+      // let a car told to stop creep past stop lines, and let a follower
+      // close on a slowing leader until it was too late.
+      const serviceBraking = config.braking * 0.72;
+      const excess = speed - target;
+      const deceleration = excess > 0.5 || target <= 0.01
+        ? serviceBraking
+        : Math.max(resistance, serviceBraking * (excess / 0.5));
       return moveToward(speed, target, deceleration * delta);
     }
     if (speed < target) {
