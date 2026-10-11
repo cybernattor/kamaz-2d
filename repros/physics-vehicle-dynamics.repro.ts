@@ -15,8 +15,11 @@ function accelerate(type: keyof typeof VEHICLE_CONFIGS, seconds: number, targetS
 }
 
 function testAllVehiclesReachTheirWorkingTopSpeed() {
+  // Drive force is scaled by 0.8 ("Refine driving UI and vehicle collisions")
+  // for a heavier launch. That leaves terminal speed unchanged but stretches
+  // the time to reach it by 1/0.8, so the old 60 s budget becomes 75 s.
   for (const config of Object.values(VEHICLE_CONFIGS)) {
-    const speedKmh = accelerate(config.id, 60) * 3.6;
+    const speedKmh = accelerate(config.id, 75) * 3.6;
     if (speedKmh < config.maxSpeed * 0.95) {
       throw new Error(`${config.id} only reached ${speedKmh.toFixed(1)} km/h of ${config.maxSpeed}`);
     }
@@ -214,7 +217,10 @@ function testWorldEdgeDampensImpactSpeed() {
     steerRight: false,
     handbrake: false,
   }, DELTA);
-  if (vehicle.x !== 80 || Math.abs(vehicle.speed) >= 2) {
+  // The bounce keeps 35% of the impact speed ("Refine driving UI and vehicle
+  // collisions" raised it from 12% for a more readable rebound), i.e. ~12%
+  // of the kinetic energy. Fail if more than 15% of the energy survives.
+  if (vehicle.x !== 80 || (vehicle.speed / 12) ** 2 > 0.15) {
     throw new Error(`world edge did not dampen impact: x=${vehicle.x}, speed=${vehicle.speed}`);
   }
 }

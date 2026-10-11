@@ -4,6 +4,15 @@ import { VehicleInstance } from '../src/types';
 
 const DELTA = 1 / 60;
 
+/**
+ * A player driving head-on at an NPC in its lane. The NPC used to swerve to
+ * its right; that was removed on purpose ("Polish map junctions and traffic
+ * behavior") because steering around the player made NPCs orbit the player's
+ * car. The intended response is now: hold the lane, brake hard for as long
+ * as the threat is ahead, and leave any contact to physics. This repro runs
+ * TrafficAI alone (no physics), so the cars pass through each other; only
+ * the NPC's own response is checked.
+ */
 function main() {
   const traffic = new TrafficAI(new CityMap());
   const npc = traffic.npcVehicles[0];
@@ -26,26 +35,36 @@ function main() {
   };
 
   const startX = npc.x;
-  const xSamples: number[] = [];
+  const startSpeed = npc.speed;
+  let maxLateralOffset = 0;
+  let threatFrames = 0;
+  let speedAfterThreat = npc.speed;
   for (let frame = 0; frame < 36; frame += 1) {
+    const playerAhead = player.y - npc.y > 0;
+    const speedBefore = npc.speed;
     traffic.updateTraffic(DELTA, player);
-    xSamples.push(npc.x);
+    maxLateralOffset = Math.max(maxLateralOffset, Math.abs(npc.x - startX));
+    if (playerAhead) {
+      threatFrames += 1;
+      if (npc.speed > speedBefore + 1e-6) {
+        throw new Error(`NPC accelerated toward a head-on player at frame ${frame}: ${speedBefore.toFixed(2)} -> ${npc.speed.toFixed(2)}`);
+      }
+      if (!npc.isBraking) throw new Error(`NPC was not braking for a head-on player at frame ${frame}`);
+      speedAfterThreat = npc.speed;
+    }
     player.x += Math.cos(player.angle) * player.speed * 60 * DELTA;
     player.y += Math.sin(player.angle) * player.speed * 60 * DELTA;
   }
 
-  const lateralOffset = Math.abs(npc.x - startX);
-  const directionChanges = xSamples.slice(2).reduce((count, x, index) => {
-    const previousDelta = xSamples[index + 1] - xSamples[index];
-    const delta = x - xSamples[index + 1];
-    return count + (previousDelta * delta < -0.02 ? 1 : 0);
-  }, 0);
-  if (npc.speed > 1 && lateralOffset < 12) {
-    throw new Error(`NPC neither braked nor committed to a right-side escape: speed=${npc.speed.toFixed(1)}, offset=${lateralOffset.toFixed(1)}`);
+  if (threatFrames < 3) throw new Error(`Fixture broken: player was ahead for only ${threatFrames} frames`);
+  if (maxLateralOffset > 2) {
+    throw new Error(`NPC left its lane instead of braking: lateral offset ${maxLateralOffset.toFixed(1)}px`);
   }
-  if (directionChanges > 1) throw new Error(`NPC oscillated during head-on response (${directionChanges} lateral direction changes)`);
 
-  console.log(`traffic-head-on-response: OK - NPC chose one stable response (offset ${lateralOffset.toFixed(1)}px, speed ${npc.speed.toFixed(1)}).`);
+  console.log(
+    `traffic-head-on-response: OK - NPC held its lane (offset ${maxLateralOffset.toFixed(1)}px) and braked ` +
+      `for ${threatFrames} threat frames (speed ${startSpeed.toFixed(1)} -> ${speedAfterThreat.toFixed(1)}).`
+  );
 }
 
 main();
