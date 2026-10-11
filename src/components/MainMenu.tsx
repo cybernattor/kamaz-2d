@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Loader2, Settings, RotateCw, Github, Scale } from 'lucide-react';
+import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Settings, RotateCw, Github, Scale } from 'lucide-react';
 
 interface MainMenuProps {
   isTouchDevice: boolean;
@@ -31,54 +31,15 @@ const TIPS_TOUCH = [
 ];
 
 /**
- * Silent bot-check: no puzzle for the player to solve. The Play button stays
- * disabled until we've seen a real pointer/touch/key event and a short delay
- * has passed — a scripted client that clicks Play immediately on load, or
- * never dispatches input events at all, never gets past this. `navigator.
- * webdriver` catches the common automation case outright.
+ * Silent bot-check: no puzzle for the player to solve. `navigator.webdriver`
+ * catches the common automation case outright; the Play handler additionally
+ * ignores untrusted clicks (`el.click()`, `dispatchEvent`). The button is
+ * never disabled while waiting for a "warm-up" interaction — on touch devices
+ * there is no hover, so the first tap would land on a disabled button and be
+ * dropped, forcing a second tap. Real protection lives server-side.
  */
-function useHumanCheck() {
-  const [ready, setReady] = useState(false);
-  const [blocked, setBlocked] = useState(false);
-
-  useEffect(() => {
-    if (typeof navigator !== 'undefined' && navigator.webdriver) {
-      setBlocked(true);
-      return;
-    }
-
-    let sawInteraction = false;
-    let delayElapsed = false;
-
-    const tryReady = () => {
-      if (sawInteraction && delayElapsed) setReady(true);
-    };
-
-    const onInteraction = () => {
-      sawInteraction = true;
-      tryReady();
-    };
-
-    window.addEventListener('pointermove', onInteraction, { once: true });
-    window.addEventListener('pointerdown', onInteraction, { once: true });
-    window.addEventListener('touchstart', onInteraction, { once: true });
-    window.addEventListener('keydown', onInteraction, { once: true });
-
-    const timer = setTimeout(() => {
-      delayElapsed = true;
-      tryReady();
-    }, 700);
-
-    return () => {
-      window.removeEventListener('pointermove', onInteraction);
-      window.removeEventListener('pointerdown', onInteraction);
-      window.removeEventListener('touchstart', onInteraction);
-      window.removeEventListener('keydown', onInteraction);
-      clearTimeout(timer);
-    };
-  }, []);
-
-  return { ready, blocked };
+function isAutomated() {
+  return typeof navigator !== 'undefined' && navigator.webdriver === true;
 }
 
 /**
@@ -114,7 +75,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onToggleFps,
   onPlay,
 }) => {
-  const { ready, blocked } = useHumanCheck();
+  const blocked = isAutomated();
   const isPortrait = useIsPortrait();
   const tips = isTouchDevice ? TIPS_TOUCH : TIPS_DESKTOP;
   const [tipIndex, setTipIndex] = useState(0);
@@ -184,23 +145,24 @@ export const MainMenu: React.FC<MainMenuProps> = ({
         {/* Play button */}
         <button
           id="btn-play"
-          onClick={onPlay}
-          disabled={!ready || blocked}
-          className={`w-full max-w-xs min-h-14 flex items-center justify-center gap-2 text-lg font-extrabold rounded-2xl shadow-2xl transition-all cursor-pointer ${
-            ready && !blocked
-              ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black active:scale-95'
+          type="button"
+          onClick={(e) => {
+            // A real tap/click is trusted on the very first try; script-
+            // dispatched clicks are not.
+            if (!e.nativeEvent.isTrusted) return;
+            onPlay();
+          }}
+          disabled={blocked}
+          className={`w-full max-w-xs min-h-14 flex items-center justify-center gap-2 text-lg font-extrabold rounded-2xl shadow-2xl transition-all touch-manipulation ${
+            !blocked
+              ? 'cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black active:scale-95'
               : 'bg-slate-800 text-slate-500 cursor-not-allowed'
           }`}
         >
           {blocked ? (
             <span className="text-sm font-mono">Автоматический запуск не поддерживается</span>
-          ) : ready ? (
-            <>▶ Играть</>
           ) : (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              <span className="text-sm font-mono">Загрузка...</span>
-            </>
+            <>▶ Играть</>
           )}
         </button>
 
