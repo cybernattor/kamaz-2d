@@ -31,18 +31,6 @@ const TIPS_TOUCH = [
 ];
 
 /**
- * Silent bot-check: no puzzle for the player to solve. `navigator.webdriver`
- * catches the common automation case outright; the Play handler additionally
- * ignores untrusted clicks (`el.click()`, `dispatchEvent`). The button is
- * never disabled while waiting for a "warm-up" interaction — on touch devices
- * there is no hover, so the first tap would land on a disabled button and be
- * dropped, forcing a second tap. Real protection lives server-side.
- */
-function isAutomated() {
-  return typeof navigator !== 'undefined' && navigator.webdriver === true;
-}
-
-/**
  * The whole touch control scheme (wheel bottom-left, pedals bottom-right)
  * is laid out for a wide, short viewport. Nothing elsewhere in the app
  * checks orientation, so a player who opens the game in portrait (a
@@ -75,7 +63,6 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onToggleFps,
   onPlay,
 }) => {
-  const blocked = isAutomated();
   const isPortrait = useIsPortrait();
   const tips = isTouchDevice ? TIPS_TOUCH : TIPS_DESKTOP;
   const [tipIndex, setTipIndex] = useState(0);
@@ -147,23 +134,15 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           id="btn-play"
           type="button"
           onClick={(e) => {
-            // A real tap/click is trusted on the very first try; script-
-            // dispatched clicks are not.
+            // Ignore script-dispatched clicks (el.click(), dispatchEvent);
+            // real taps and browser automation (Playwright/Puppeteer) are
+            // trusted and start the game on the first try.
             if (!e.nativeEvent.isTrusted) return;
             onPlay();
           }}
-          disabled={blocked}
-          className={`w-full max-w-xs min-h-14 flex items-center justify-center gap-2 text-lg font-extrabold rounded-2xl shadow-2xl transition-all touch-manipulation ${
-            !blocked
-              ? 'cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black active:scale-95'
-              : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-          }`}
+          className="w-full max-w-xs min-h-14 flex items-center justify-center gap-2 text-lg font-extrabold rounded-2xl shadow-2xl transition-all touch-manipulation cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black active:scale-95"
         >
-          {blocked ? (
-            <span className="text-sm font-mono">Автоматический запуск не поддерживается</span>
-          ) : (
-            <>▶ Играть</>
-          )}
+          ▶ Играть
         </button>
 
         {/* Rotating tip */}
