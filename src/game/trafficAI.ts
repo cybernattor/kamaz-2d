@@ -1,8 +1,37 @@
-import { Pedestrian, VehicleInstance } from '../types';
+import { Pedestrian, VehicleConfig, VehicleInstance } from '../types';
 import { CityMap, CROSSWALK_DEPTH, Intersection, RoadSegment, WORLD_SIZE } from './cityMap';
 import { KMH_TO_WORLD_SPEED, VEHICLE_CONFIGS } from './vehicleConfigs';
 import { integrateVehicleSpeed } from './vehicleDynamics';
 import { SpatialHash } from './spatialHash';
+
+/** Distance before a capped arterial end at which an NPC turns around. */
+const ROAD_END_TURN_DISTANCE = 90;
+/** Speed an NPC turns around at the end of an arterial. */
+const ROAD_END_CRAWL_SPEED = 1.5;
+/** How far past its start point a road-end U-turn reaches. */
+const ROAD_END_UTURN_REACH = 40;
+/** Parking bays stay this far from a capped arterial end. */
+const ROAD_END_PARKING_MARGIN = 260;
+
+/**
+ * Deceleration an NPC plans its stops with. The speed integrator brakes at
+ * config.braking * 0.72 once the target is well below the current speed;
+ * a quarter of that is held in reserve because it only brakes once the
+ * target is 0.5 below the current speed, so a car planned at full service
+ * braking lags its curve and arrives short.
+ */
+function getPlanningBraking(config: VehicleConfig) {
+  return config.braking * 0.72 * 0.75;
+}
+
+/**
+ * Fastest speed from which an NPC can still stop within `room` world units.
+ * Speed moves a car `speed` units per 1/60 s, so braking from v to 0 at
+ * rate b covers 60 * v^2 / (2 * b) units.
+ */
+function getStoppingCurveSpeed(config: VehicleConfig, room: number) {
+  return Math.sqrt((2 * getPlanningBraking(config) * Math.max(0, room)) / 60);
+}
 
 export type TrafficDirection = 'north' | 'south' | 'east' | 'west';
 
@@ -17,6 +46,8 @@ interface NPCAIExtra {
   routeSourcePoiId?: string;
   routeTargetPoiId?: string;
   isTurning: boolean;
+  /** The active turn is a U-turn at a capped arterial end: same road, opposite direction. */
+  isUTurn?: boolean;
   turnStartPos?: { x: number; y: number };
   turnEndPos?: { x: number; y: number };
   turnControlPos?: { x: number; y: number };
@@ -71,6 +102,8 @@ export class TrafficAI {
 
   private gridX: number[];
   private gridY: number[];
+  /** Along-axis extent of each grid arterial, keyed by `${roadType}:${roadCoord}`. */
+  private arterialExtents = new Map<string, { min: number; max: number }>();
   private laneOffset = 34;
   private laneSpacing = 54;
   // Arterials are 220px wide. Keeping people another 32px beyond the curb
@@ -205,7 +238,82 @@ export class TrafficAI {
     ai.parkingSide = (ai.roadType === 'vertical'
       ? selected.poi.x - lane.x!
       : selected.poi.y - lane.y!) >= 0 ? 1 : -1;
-    ai.parkingCoordinate = Math.max(180, Math.min(WORLD_SIZE - 180, selected.along));
+    // Keep the bay clear of the capped road ends, where cars slow down and
+    // turn around; a bay past the end parks the car off the asphalt.
+    const extent = this.getArterialExtent(ai);
+    const parkingMin = extent ? extent.min + ROAD_END_PARKING_MARGIN : 180;
+    const parkingMax = extent ? extent.max - ROAD_END_PARKING_MARGIN : WORLD_SIZE - 180;
+    ai.parkingCoordinate = Math.max(parkingMin, Math.min(parkingMax, selected.along));
+  }
+
+  /** Along-axis extent of the grid arterial the car is driving on, if any. */
+  private getArterialExtent(ai: NPCAIExtra) {
+    const key = `${ai.roadType}:${ai.roadCoord}`;
+    let extent = this.arterialExtents.get(key);
+    if (!extent) {
+      const road = this.cityMap.roads.find((candidate) =>
+        candidate.roadClass === 'arterial' &&
+        candidate.isVertical === (ai.roadType === 'vertical') &&
+        Math.abs((ai.roadType === 'vertical' ? candidate.x1 : candidate.y1) - ai.roadCoord) < 1
+      );
+      if (!road) return undefined;
+      const along = road.points.map((point) => (ai.roadType === 'vertical' ? point.y : point.x));
+      extent = { min: Math.min(...along), max: Math.max(...along) };
+      this.arterialExtents.set(key, extent);
+    }
+    return extent;
+  }
+
+  /** Distance left to the capped end of the arterial in the car's direction of travel. */
+  private getRoadEndDistance(car: VehicleInstance, ai: NPCAIExtra) {
+    const extent = this.getArterialExtent(ai);
+    if (!extent) return undefined;
+    const position = ai.roadType === 'vertical' ? car.y : car.x;
+    return ai.direction === 'south' || ai.direction === 'east'
+      ? extent.max - position
+      : position - extent.min;
+  }
+
+  /**
+   * Turn around at a capped arterial end on a U-shaped Bezier into the
+   * opposite lane. Flipping `direction` alone left the lane-keeping
+   * controller to improvise the arc: it swung wide off the asphalt, and
+   * while the car still faced its old heading the spacing pass misread
+   * which car was in front and shoved queued cars past the road end.
+   * Running it as a turn keeps the arc on the road and makes the spacing
+   * pass treat the car as manoeuvring.
+   */
+  private beginRoadEndUTurn(car: VehicleInstance, ai: NPCAIExtra) {
+    const targetDirection: TrafficDirection = ai.direction === 'north' ? 'south'
+      : ai.direction === 'south' ? 'north'
+      : ai.direction === 'west' ? 'east'
+      : 'west';
+    const lane = this.getTargetLane(ai.roadType, ai.roadCoord, targetDirection, ai.laneIndex);
+    const endPos = ai.roadType === 'vertical' ? { x: lane.x!, y: car.y } : { x: car.x, y: lane.y! };
+    const forwardX = Math.cos(car.angle);
+    const forwardY = Math.sin(car.angle);
+    const toEndX = endPos.x - car.x;
+    const toEndY = endPos.y - car.y;
+    // Rotate toward the side the opposite lane is on (+angle turns right
+    // in screen space, where y points down).
+    const turnSign = toEndX * -forwardY + toEndY * forwardX >= 0 ? 1 : -1;
+
+    ai.isTurning = true;
+    ai.isUTurn = true;
+    ai.turnProgress = 0;
+    ai.turnStartPos = { x: car.x, y: car.y };
+    ai.turnEndPos = endPos;
+    // The arc's furthest point is half the control point's reach.
+    ai.turnControlPos = {
+      x: (car.x + endPos.x) / 2 + forwardX * ROAD_END_UTURN_REACH * 2,
+      y: (car.y + endPos.y) / 2 + forwardY * ROAD_END_UTURN_REACH * 2,
+    };
+    ai.turnStartAngle = car.angle;
+    // Just short of pi so the interpolation keeps the chosen turn side.
+    ai.turnTargetAngle = car.angle + turnSign * (Math.PI - 1e-3);
+    ai.targetRoadCoord = ai.roadCoord;
+    ai.targetDirection = targetDirection;
+    car.turnSignal = turnSign > 0 ? 'right' : 'left';
   }
 
   private beginParking(car: VehicleInstance, ai: NPCAIExtra) {
@@ -1734,32 +1842,46 @@ export class TrafficAI {
           blockedByPlayer = true;
         }
 
+        const playerConfig = VEHICLE_CONFIGS[playerVehicle.type] || VEHICLE_CONFIGS.sedan;
+        const safeGap = (config.length + playerConfig.length) * 0.5 + 24;
+        const stoppingDistance = (60 * Math.max(0, car.speed) ** 2) / (2 * getPlanningBraking(config));
+        const followRange = Math.max(210, safeGap + stoppingDistance + 40);
+        const playerClosingFast = TrafficAI.isClosingFast(playerVehicle, car);
+
+        if (!isHeadOnThreat && !playerClosingFast && sameLane && aheadDistance > 0 && aheadDistance < followRange && lateralDistance < 58) {
+          // Brake along a stopping curve: the fastest speed from which
+          // service braking can still settle at safeGap behind the player.
+          // Seeing the player only at the old fixed 210 range left a car at
+          // cruise speed several hundred units short of the room it needs
+          // to stop, so it ploughed into a stopped player. This is a speed
+          // target only, so following a moving player stays smooth.
+          const room = aheadDistance - safeGap - Math.max(0, car.speed);
+          targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92) + getStoppingCurveSpeed(config, room));
+        }
+
         if (!isHeadOnThreat && sameLane && aheadDistance > 0 && aheadDistance < 210 && lateralDistance < 58) {
-          if (TrafficAI.isClosingFast(playerVehicle, car)) {
+          if (playerClosingFast) {
             // Keep the NPC in its lane. Bypassing the player here makes the
             // car fly around them; braking still leaves collisions to physics.
             targetSpeed = 0;
             shouldStop = true;
             blockedByPlayer = true;
           } else {
-            const playerConfig = VEHICLE_CONFIGS[playerVehicle.type] || VEHICLE_CONFIGS.sedan;
-            const safeGap = (config.length + playerConfig.length) * 0.5 + 24;
             blockedByPlayer = true;
             blockedObstacle = playerVehicle;
             // One frame's worth of coasting at the car's current speed can
             // cross straight through a gap that still looked safe when this
-            // frame started (world units move ~car.speed per frame), so the
-            // speed target below reacts to the gap before it closes further.
+            // frame started (world units move ~car.speed per frame).
             const projectedAheadDistance = aheadDistance - Math.max(0, car.speed);
-            if (projectedAheadDistance <= safeGap) {
-              // Brake through the speed integrator; snapping to a fixed gap
-              // makes the NPC follow the player like it is attached to them.
-              targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92));
-            } else {
-              // Match the player's speed without overriding position. The
-              // speed integrator brakes smoothly while physics keeps control
-              // of any contact.
-              targetSpeed = Math.min(targetSpeed, Math.max(0, playerVehicle.speed * 0.92));
+            if (projectedAheadDistance <= safeGap && Math.abs(playerVehicle.speed) < 0.5) {
+              // Last resort for a stationary player only, e.g. a car that
+              // spawned or turned in too close to stop on the curve above.
+              // A moving player is never snapped to, so the NPC cannot read
+              // as glued to their bumper.
+              shouldStop = true;
+              car.x = playerVehicle.x - forwardX * safeGap;
+              car.y = playerVehicle.y - forwardY * safeGap;
+              car.speed = 0;
             }
           }
         }
@@ -1944,17 +2066,22 @@ export class TrafficAI {
           car.angle = ai.turnTargetAngle;
           car.turnSignal = 'none';
 
-          ai.roadType = ai.roadType === 'vertical' ? 'horizontal' : 'vertical';
-          ai.roadCoord = ai.targetRoadCoord;
-          ai.direction = ai.targetDirection;
-          ai.routeIndex = Math.min(ai.routeRoadIds.length, ai.routeIndex + 1);
-          if (ai.routeIndex >= ai.routeRoadIds.length - 1 && ai.routeTargetPoiId) {
-            const nextPoi = this.cityMap.pois[(Number(car.id.replace(/\D/g, '')) + ai.routeIndex + 3) % this.cityMap.pois.length];
-            if (nextPoi) {
-              ai.routeSourcePoiId = ai.routeTargetPoiId;
-              ai.routeTargetPoiId = nextPoi.id;
-              ai.routeRoadIds = this.cityMap.getRouteBetweenPois(ai.routeSourcePoiId, ai.routeTargetPoiId);
-              ai.routeIndex = 0;
+          if (ai.isUTurn) {
+            ai.isUTurn = false;
+            ai.direction = ai.targetDirection;
+          } else {
+            ai.roadType = ai.roadType === 'vertical' ? 'horizontal' : 'vertical';
+            ai.roadCoord = ai.targetRoadCoord;
+            ai.direction = ai.targetDirection;
+            ai.routeIndex = Math.min(ai.routeRoadIds.length, ai.routeIndex + 1);
+            if (ai.routeIndex >= ai.routeRoadIds.length - 1 && ai.routeTargetPoiId) {
+              const nextPoi = this.cityMap.pois[(Number(car.id.replace(/\D/g, '')) + ai.routeIndex + 3) % this.cityMap.pois.length];
+              if (nextPoi) {
+                ai.routeSourcePoiId = ai.routeTargetPoiId;
+                ai.routeTargetPoiId = nextPoi.id;
+                ai.routeRoadIds = this.cityMap.getRouteBetweenPois(ai.routeSourcePoiId, ai.routeTargetPoiId);
+                ai.routeIndex = 0;
+              }
             }
           }
         } else {
@@ -1989,8 +2116,12 @@ export class TrafficAI {
         }
         car.angle = ai.turnTargetAngle;
         car.turnSignal = 'none';
-        ai.roadType = ai.roadType === 'vertical' ? 'horizontal' : 'vertical';
-        ai.roadCoord = ai.targetRoadCoord;
+        if (ai.isUTurn) {
+          ai.isUTurn = false;
+        } else {
+          ai.roadType = ai.roadType === 'vertical' ? 'horizontal' : 'vertical';
+          ai.roadCoord = ai.targetRoadCoord;
+        }
         ai.direction = ai.targetDirection;
       }
 
@@ -1999,6 +2130,19 @@ export class TrafficAI {
         const inter = this.cityMap.intersections.find((i) => i.id === ai.lastIntersectionId);
         if (inter && Math.hypot(inter.x - car.x, inter.y - car.y) > inter.size / 2 + CROSSWALK_DEPTH + 24) {
           ai.lastIntersectionId = undefined;
+        }
+      }
+
+      // Approaching the capped end of an arterial: slow to a crawl on a
+      // stopping curve so the turnaround below happens at walking pace. At
+      // cruise speed the lane-keeping controller swung the U-turn wide, past
+      // the end of the asphalt, and the spacing pass shoved the queue behind
+      // it further off the road.
+      if (!ai.isTurning) {
+        const roadEndDistance = this.getRoadEndDistance(car, ai);
+        if (roadEndDistance !== undefined) {
+          const room = roadEndDistance - ROAD_END_TURN_DISTANCE;
+          targetSpeed = Math.min(targetSpeed, ROAD_END_CRAWL_SPEED + getStoppingCurveSpeed(config, room));
         }
       }
 
@@ -2040,12 +2184,11 @@ export class TrafficAI {
 
       // Turn around before reaching the capped road ends; never teleport
       // traffic from one side of the map to the other.
-      if (ai.roadType === 'vertical') {
-        if (car.y < 340 && ai.direction === 'north') ai.direction = 'south';
-        if (car.y > WORLD_SIZE - 340 && ai.direction === 'south') ai.direction = 'north';
-      } else {
-        if (car.x < 340 && ai.direction === 'west') ai.direction = 'east';
-        if (car.x > WORLD_SIZE - 340 && ai.direction === 'east') ai.direction = 'west';
+      if (!ai.isTurning) {
+        const roadEndDistance = this.getRoadEndDistance(car, ai);
+        if (roadEndDistance !== undefined && roadEndDistance < ROAD_END_TURN_DISTANCE) {
+          this.beginRoadEndUTurn(car, ai);
+        }
       }
     }
 
