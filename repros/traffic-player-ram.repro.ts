@@ -8,24 +8,15 @@ const DELTA = 1 / 60;
 /**
  * The AI used to keep an NPC clear of the player's bumper unconditionally,
  * teleporting it back to a fixed gap every step regardless of how the gap was
- * closing. That is correct for a fast NPC queueing behind a stopped player
- * (see traffic-player-following.repro.ts) but also dodged a player
- * deliberately reversing into a trailing NPC, so the player could never
- * actually make contact - the NPC kept getting shoved back to the same
- * offset every tick, reading as it "flying" behind the player.
+ * closing, so a player reversing into a trailing NPC could never make
+ * contact. A later version made the NPC swerve out of the way instead; that
+ * was removed on purpose ("Polish map junctions and traffic behavior")
+ * because bypassing the player made the NPC fly around them.
  *
- * Same fixture geometry as traffic-player-following.repro.ts (an NPC ahead
- * of a stopped/slow player it must not rear-end), except the player now
- * drives backward into the NPC. Two outcomes are checked:
- *  - with room to move, the NPC now steers out of the way of the reversing
- *    player (a real driver reacts, rather than either teleporting or
- *    sitting still to be hit);
- *  - with no room to dodge, it takes the hit for real: physics.ts's
- *    collision response applies pushback and damage. startAdaptiveBypass is
- *    stubbed out here rather than boxed in geometrically - the AI's own
- *    "no clearance" behavior is exercised by the existing bypass repros;
- *    this isolates the one thing that changed, that a denied dodge no
- *    longer falls back to the old teleport-away.
+ * Intended behavior now: the NPC keeps its lane, does not teleport, and a
+ * player ramming it lands a real hit - physics.ts applies pushback and
+ * damage. Same fixture geometry as traffic-player-following.repro.ts, except
+ * the player drives backward into the NPC behind it.
  */
 function buildScene() {
   const cityMap = new CityMap();
@@ -70,37 +61,23 @@ function runSimulation(traffic: TrafficAI, npc: VehicleInstance, player: Vehicle
   return { crashed, lateralOffset: Math.abs(npc.x - startX) };
 }
 
-function testEvadesWithRoom() {
+function testHoldsLaneAndTakesTheHit() {
   const { traffic, npc, player } = buildScene();
   const physics = new PhysicsEngine();
   const { crashed, lateralOffset } = runSimulation(traffic, npc, player, physics);
 
-  if (crashed) {
-    throw new Error('NPC took the hit instead of using the open road to dodge it');
+  if (lateralOffset > 2) {
+    throw new Error(`NPC swerved around the ramming player: lateral offset ${lateralOffset.toFixed(1)}px`);
   }
-  if (lateralOffset < 15) {
-    throw new Error(`NPC neither dodged nor got hit - it just held still: lateral offset ${lateralOffset.toFixed(1)}px`);
-  }
-  console.log(`FIXED: with room to move, the NPC steers clear of the player reversing into it (lateral offset ${lateralOffset.toFixed(1)}px).`);
-}
-
-function testHitWhenNoRoomToDodge() {
-  const { traffic, npc, player } = buildScene();
-  const physics = new PhysicsEngine();
-  // Force the "nowhere to go" branch deterministically instead of trying to
-  // box the NPC in with hand-placed geometry.
-  (traffic as unknown as { startAdaptiveBypass: () => boolean }).startAdaptiveBypass = () => false;
-
-  const { crashed } = runSimulation(traffic, npc, player, physics);
-
   if (!crashed) {
-    throw new Error('NPC with no dodge available was never hit - the player still cannot make contact');
+    throw new Error('NPC was never hit - the player still cannot make contact');
   }
   if (npc.health >= 100) {
     throw new Error(`crash callback fired but the NPC took no damage: health ${npc.health}`);
   }
-  console.log(`FIXED: with no room to dodge, the NPC still takes a real hit (health ${npc.health}).`);
+  console.log(
+    `FIXED: the NPC held its lane (offset ${lateralOffset.toFixed(1)}px) and took a real hit (health ${npc.health}).`
+  );
 }
 
-testEvadesWithRoom();
-testHitWhenNoRoomToDodge();
+testHoldsLaneAndTakesTheHit();
