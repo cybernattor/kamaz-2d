@@ -2,6 +2,7 @@ import { CityMap } from '../src/game/cityMap';
 import { PhysicsEngine } from '../src/game/physics';
 import { TrafficAI } from '../src/game/trafficAI';
 import { VEHICLE_CONFIGS } from '../src/game/vehicleConfigs';
+import { bodyClearance } from './support/bodyClearance';
 
 const DELTA = 1 / 60;
 const SIMULATION_SECONDS = 60;
@@ -52,31 +53,13 @@ function main() {
         const second = traffic.npcVehicles[j];
         if (second.health <= 0) continue;
         const secondConfig = VEHICLE_CONFIGS[second.type];
-        const distance = Math.hypot(second.x - first.x, second.y - first.y);
-        const aiData = (traffic as unknown as { aiData: Map<string, { roadType: string; roadCoord: number; direction: string; isTurning: boolean; laneIndex?: number }> }).aiData;
-        const firstAi = aiData.get(first.id);
-        const secondAi = aiData.get(second.id);
-        const sameRoadOppositeLane = Boolean(
-          firstAi && secondAi &&
-            !firstAi.isTurning && !secondAi.isTurning &&
-            firstAi.roadType === secondAi.roadType &&
-            firstAi.roadCoord === secondAi.roadCoord &&
-            firstAi.laneIndex === secondAi.laneIndex &&
-            firstAi.direction !== secondAi.direction
-        );
-        const sameHeading = Boolean(
-          firstAi && secondAi && !firstAi.isTurning && !secondAi.isTurning &&
-            firstAi.direction === secondAi.direction &&
-            firstAi.roadType === secondAi.roadType && firstAi.roadCoord === secondAi.roadCoord
-            && firstAi.laneIndex === secondAi.laneIndex
-        );
-        const allowedDistance = sameRoadOppositeLane
-          ? (firstConfig.width + secondConfig.width) / 2 + 6
-          : sameHeading
-          ? (firstConfig.length + secondConfig.length) / 2 + 8
-          : Math.hypot(firstConfig.length / 2, firstConfig.width / 2) +
-            Math.hypot(secondConfig.length / 2, secondConfig.width / 2) + 2;
-        const clearance = distance - allowedDistance;
+        const aiData = (traffic as unknown as { aiData: Map<string, unknown> }).aiData;
+        // Real body overlap (oriented rectangles). A centre-distance rule
+        // flagged a car passing alongside a stopped one as a collision.
+        // Bodies further apart than their half-diagonals cannot touch.
+        const reach = Math.hypot(firstConfig.length, firstConfig.width) / 2 + Math.hypot(secondConfig.length, secondConfig.width) / 2;
+        if (Math.hypot(second.x - first.x, second.y - first.y) > reach + 10) continue;
+        const clearance = bodyClearance(first, second);
         if (clearance < minNpcClearance) {
           minNpcClearance = clearance;
           minNpcClearancePair = `${first.id}/${second.id}`;
