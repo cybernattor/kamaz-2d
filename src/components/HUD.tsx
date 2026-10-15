@@ -17,6 +17,9 @@ import {
   Lightbulb,
   ChevronDown,
   ChevronUp,
+  CarFront,
+  PersonStanding,
+  TriangleAlert,
 } from 'lucide-react';
 import { Minimap } from './Minimap';
 import { NetworkFeed, FeedEvent } from './NetworkFeed';
@@ -156,8 +159,12 @@ export const HUD: React.FC<HUDProps> = ({
             <div className="hidden sm:block h-4 w-px bg-slate-700 mx-0.5" />
 
             <div className="hidden sm:block text-xs text-slate-400 font-mono whitespace-nowrap shrink-0">
-              <span>{carCount}🚗</span>
-              <span className="mx-1">{pedCount}🚶</span>
+              <span className="inline-flex items-center gap-1" aria-label={`${carCount} машин`}>
+                <CarFront className="h-3.5 w-3.5 text-cyan-300" aria-hidden="true" /> {carCount}
+              </span>
+              <span className="mx-1 inline-flex items-center gap-1" aria-label={`${pedCount} пешеходов`}>
+                <PersonStanding className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" /> {pedCount}
+              </span>
             </div>
           </div>
 
@@ -353,7 +360,7 @@ export const HUD: React.FC<HUDProps> = ({
             }`}
             aria-label="Аварийка"
           >
-            ⚠
+            <TriangleAlert className="h-4 w-4" aria-hidden="true" />
           </button>
 
           <button
@@ -643,7 +650,9 @@ export const HUD: React.FC<HUDProps> = ({
               }`}
               title="Hazard Lights [X]"
             >
-              ⚠ X
+              <span className="inline-flex items-center gap-1">
+                <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" /> X
+              </span>
             </button>
           </div>
           </div>

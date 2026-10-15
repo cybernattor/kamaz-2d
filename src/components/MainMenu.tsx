@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Settings, RotateCw, Github, Scale, UserRound } from 'lucide-react';
+import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Settings, RotateCw, Github, Scale, UserRound, Play } from 'lucide-react';
 
 interface MainMenuProps {
   isTouchDevice: boolean;
@@ -82,34 +82,34 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       id="main-menu-overlay"
       className="absolute inset-0 z-[150] flex items-center justify-center bg-slate-950/97 backdrop-blur-sm p-4 select-none"
     >
-      <div className="w-full max-w-md flex flex-col items-center text-center gap-5">
+      <div className="w-full max-w-md flex flex-col items-center text-center gap-5 lg:max-w-6xl lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(20rem,1.1fr)_minmax(0,1fr)] lg:items-center lg:gap-x-10 lg:gap-y-6">
         {/* Orientation nudge: the wheel/pedals layout needs a wide, short
             viewport. A firm suggestion beats letting the player discover a
             cramped control layout mid-drive. Not a hard gate — some tablets
             are perfectly playable in portrait. */}
         {isTouchDevice && isPortrait && (
-          <div className="w-full flex items-center gap-2 text-xs text-amber-300 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
+          <div className="w-full flex items-center gap-2 text-xs text-amber-300 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2 lg:col-span-3 lg:max-w-xl lg:justify-self-center">
             <RotateCw className="w-4 h-4 shrink-0 animate-pulse" />
             <span>Поверните телефон горизонтально — руль и педали рассчитаны на альбомную ориентацию</span>
           </div>
         )}
 
         {/* Title */}
-        <div className="flex flex-col items-center gap-2">
+        <div className="flex flex-col items-center gap-2 lg:col-start-2 lg:row-start-1">
           <div className="p-3 rounded-2xl bg-gradient-to-br from-orange-500 to-amber-600 shadow-2xl shadow-orange-950/50">
             <Truck className="w-10 h-10 text-white" />
           </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight">
+          <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight">
             KAMAZ City Simulator <span className="text-cyan-400">2D</span>
           </h1>
-          <p className="text-xs sm:text-sm text-slate-400 font-mono">
+          <p className="text-xs sm:text-sm text-slate-400">
             Живой город, грузы, мультиплеер — прямо в браузере
           </p>
         </div>
 
         {/* Multiplayer callout — the game's headline feature gets its own
             banner instead of blending into the badge row below. */}
-        <div className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-950/50 border border-emerald-500/50 px-3 py-2 shadow-[0_0_20px_rgba(16,185,129,0.15)]">
+        <div className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-950/50 border border-emerald-500/50 px-3 py-2 shadow-[0_0_20px_rgba(16,185,129,0.15)] lg:col-start-1 lg:row-start-1 lg:flex-wrap lg:text-center">
           <span className="relative flex h-2.5 w-2.5">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
@@ -121,7 +121,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
         </div>
 
         {/* Feature badges */}
-        <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono text-slate-300">
+        <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] text-slate-300 lg:col-start-1 lg:row-start-2 lg:content-start">
           <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-slate-900/80 border border-slate-700/80">
             <Briefcase className="w-3 h-3 text-amber-400" /> Задания
           </span>
@@ -134,8 +134,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
         </div>
 
         {/* Player identity is chosen before joining the multiplayer server. */}
-        <div className="w-full max-w-xs space-y-2 text-left">
-          <label htmlFor="main-menu-player-name" className="flex items-center gap-2 text-xs font-mono text-slate-300">
+        <div className="w-full max-w-xs space-y-2 rounded-2xl border border-slate-800 bg-slate-900/60 p-5 text-left lg:col-start-3 lg:row-start-1 lg:row-span-2 lg:max-w-none lg:justify-self-stretch">
+          <label htmlFor="main-menu-player-name" className="flex items-center gap-2 text-xs font-semibold text-slate-300">
             <UserRound className="h-4 w-4 text-cyan-400" /> Имя игрока
           </label>
           <input
@@ -146,7 +146,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             maxLength={18}
             placeholder="Дальнобойщик..."
             autoComplete="nickname"
-            className="w-full select-text rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 text-sm font-mono text-slate-100 outline-none transition focus:border-cyan-500"
+            className="w-full select-text rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-cyan-500"
           />
         </div>
 
@@ -161,26 +161,26 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             if (!e.nativeEvent.isTrusted) return;
             onPlay();
           }}
-          className="w-full max-w-xs min-h-14 flex items-center justify-center gap-2 text-lg font-extrabold rounded-2xl shadow-2xl transition-all touch-manipulation cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black active:scale-95"
+          className="w-full max-w-xs min-h-14 flex items-center justify-center gap-2 text-lg font-extrabold rounded-2xl shadow-2xl transition-all touch-manipulation cursor-pointer bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black active:scale-95 lg:col-start-2 lg:row-start-2 lg:justify-self-center"
         >
-          ▶ Играть
+          <Play className="h-4 w-4 fill-current" aria-hidden="true" /> Играть
         </button>
 
         {/* Rotating tip */}
         <div
           key={tipIndex}
-          className="animate-[fadeIn_0.3s_ease-out] flex items-center gap-2 text-xs text-slate-300 bg-slate-900/70 border border-slate-800 rounded-lg px-3 py-2 min-h-10 max-w-sm"
+          className="animate-[fadeIn_0.3s_ease-out] flex items-center gap-2 text-xs text-slate-300 bg-slate-900/70 border border-slate-800 rounded-lg px-3 py-2 min-h-10 max-w-sm lg:col-start-2 lg:row-start-3 lg:justify-self-center"
         >
           <Volume2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
           <span>{tips[tipIndex]}</span>
         </div>
 
-        <p className="text-[10px] text-slate-600 font-mono">
+        <p className="text-[10px] text-slate-600 lg:col-start-2 lg:row-start-4">
           Работает прямо в браузере — ничего скачивать не нужно
         </p>
 
         {/* Source & license */}
-        <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono text-slate-400">
+        <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] text-slate-400 lg:col-span-3 lg:row-start-5">
           <a
             href="https://github.com/cybernattor/kamaz-2d"
             target="_blank"
@@ -206,7 +206,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               <button
                 type="button"
                 onClick={onToggleMute}
-                className="rounded-lg border border-slate-700 px-2 py-1 text-xs font-mono text-slate-300 transition hover:border-cyan-500 hover:text-cyan-300"
+                className="rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-300 transition hover:border-cyan-500 hover:text-cyan-300"
                 aria-pressed={isMuted}
               >
                 {isMuted ? 'Включить' : 'Выключить'}
@@ -231,7 +231,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 type="button"
                 onClick={onToggleFps}
                 aria-pressed={showFps}
-                className={`rounded-lg border px-2 py-1 text-xs font-mono transition ${showFps ? 'border-emerald-500/60 text-emerald-300' : 'border-slate-700 text-slate-500'}`}
+              className={`rounded-lg border px-2 py-1 text-xs transition ${showFps ? 'border-emerald-500/60 text-emerald-300' : 'border-slate-700 text-slate-500'}`}
               >
                 {showFps ? 'Вкл' : 'Выкл'}
               </button>

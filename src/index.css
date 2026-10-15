@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Chakra Petch", "Plus Jakarta Sans", ui-sans-serif, sans-serif;
+}
+
 /* Used by the on-screen network feed (chat + join/leave toasts). */
 @keyframes fadeIn {
   from {

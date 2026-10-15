@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ChatMessage, RemotePlayer } from '../types';
-import { X, Users, MessageSquare, Send, Globe, Wifi, Radio } from 'lucide-react';
+import { X, Users, MessageSquare, Send, Globe, Wifi, Radio, Star } from 'lucide-react';
 import { nameColorForId } from '../game/nameGenerator';
 
 interface MultiplayerModalProps {
@@ -73,7 +73,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
 
           <div className="flex items-center gap-3">
             <div
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono border ${
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs border ${
                 status === 'connected'
                   ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300'
                   : 'bg-rose-950/60 border-rose-500 text-rose-300'
@@ -100,7 +100,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
           <div className="md:col-span-5 space-y-4">
             {/* Room Switcher */}
             <div className="bg-slate-950/70 p-4 rounded-xl border border-slate-800 space-y-2">
-              <label className="text-xs font-mono text-slate-300 flex items-center gap-1.5">
+              <label className="text-xs text-slate-300 flex items-center gap-1.5">
                 <Globe className="w-4 h-4 text-emerald-400" />
                 Комната / Номер Сервера:
               </label>
@@ -116,7 +116,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
                 <button
                   id="btn-join-room"
                   onClick={() => onJoinRoom(roomInput)}
-                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-mono font-bold cursor-pointer transition-colors"
+                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors"
                 >
                   Войти
                 </button>
@@ -125,7 +125,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
 
             {/* Connected Drivers List */}
             <div className="bg-slate-950/70 p-4 rounded-xl border border-slate-800 space-y-2">
-              <div className="text-xs font-mono text-slate-300 flex items-center justify-between">
+              <div className="text-xs text-slate-300 flex items-center justify-between">
                 <span className="flex items-center gap-1.5">
                   <Wifi className="w-4 h-4 text-amber-400" />
                   Игроки в Сети ({remotePlayers.length + 1})
@@ -135,8 +135,10 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
 
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
                 {/* You */}
-                <div className="p-2 rounded-lg bg-cyan-950/40 border border-cyan-500/30 flex items-center justify-between text-xs font-mono">
-                  <span className="font-bold" style={{ color: nameColorForId(myPlayerId) }}>★ {playerName} (Вы)</span>
+                <div className="p-2 rounded-lg bg-cyan-950/40 border border-cyan-500/30 flex items-center justify-between text-xs">
+                  <span className="inline-flex items-center gap-1 font-bold" style={{ color: nameColorForId(myPlayerId) }}>
+                    <Star className="h-3 w-3 fill-current" aria-hidden="true" /> {playerName} (Вы)
+                  </span>
                   <span className="text-emerald-400 font-mono">0 ms</span>
                 </div>
 
@@ -144,7 +146,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
                 {remotePlayers.map((rp) => (
                   <div
                     key={rp.id}
-                    className="p-2 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between text-xs font-mono"
+                    className="p-2 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between text-xs"
                   >
                     <span className="font-bold" style={{ color: nameColorForId(rp.id) }}>{rp.name}</span>
                     <span className="text-slate-400">{rp.vehicleType}</span>
@@ -157,7 +159,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
           {/* Right Column: Live Radio / Chat */}
           <div className="md:col-span-7 flex flex-col h-[400px] bg-slate-950/70 p-4 rounded-xl border border-slate-800">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
-              <div className="flex items-center gap-2 text-xs font-mono text-slate-300">
+              <div className="flex items-center gap-2 text-xs text-slate-300">
                 <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
                 <span>Рация Водителей (Чат Комнаты)</span>
               </div>
@@ -166,12 +168,12 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
             {/* Messages Feed */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1 mb-3 text-xs">
               {chatMessages.length === 0 ? (
-                <div className="text-center text-slate-500 font-mono pt-12">
+                <div className="text-center text-slate-500 pt-12">
                   Эфир рации свободен. Напишите сообщение или нажмите быструю фразу!
                 </div>
               ) : (
                 chatMessages.map((msg) => (
-                  <div key={msg.id} className="p-2 rounded-lg bg-slate-900/90 border border-slate-800 font-mono">
+                  <div key={msg.id} className="p-2 rounded-lg bg-slate-900/90 border border-slate-800">
                     <span className="font-bold mr-1.5" style={{ color: nameColorForId(msg.playerId) }}>{msg.name}:</span>
                     <span className="text-slate-200">{msg.text}</span>
                   </div>
@@ -185,7 +187,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
                 <button
                   key={phrase}
                   onClick={() => onSendChat(phrase)}
-                  className="text-[10px] font-mono px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
+                  className="text-[10px] px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
                 >
                   {phrase}
                 </button>
@@ -200,7 +202,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 placeholder="Сообщение в рацию..."
-                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
               />
               <button
                 id="btn-send-chat"
