@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Settings, RotateCw, Github, Scale } from 'lucide-react';
+import { Truck, Users, Wrench, Briefcase, Moon, Volume2, VolumeX, Settings, RotateCw, Github, Scale, UserRound } from 'lucide-react';
 
 interface MainMenuProps {
   isTouchDevice: boolean;
@@ -9,6 +9,8 @@ interface MainMenuProps {
   onVolumeChange: (volume: number) => void;
   showFps: boolean;
   onToggleFps: () => void;
+  playerName: string;
+  onPlayerNameChange: (name: string) => void;
   onPlay: () => void;
 }
 
@@ -61,6 +63,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onVolumeChange,
   showFps,
   onToggleFps,
+  playerName,
+  onPlayerNameChange,
   onPlay,
 }) => {
   const isPortrait = useIsPortrait();
@@ -127,6 +131,23 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-slate-900/80 border border-slate-700/80">
             <Moon className="w-3 h-3 text-indigo-400" /> День/Ночь
           </span>
+        </div>
+
+        {/* Player identity is chosen before joining the multiplayer server. */}
+        <div className="w-full max-w-xs space-y-2 text-left">
+          <label htmlFor="main-menu-player-name" className="flex items-center gap-2 text-xs font-mono text-slate-300">
+            <UserRound className="h-4 w-4 text-cyan-400" /> Имя игрока
+          </label>
+          <input
+            id="main-menu-player-name"
+            type="text"
+            value={playerName}
+            onChange={(event) => onPlayerNameChange(event.target.value)}
+            maxLength={18}
+            placeholder="Дальнобойщик..."
+            autoComplete="nickname"
+            className="w-full select-text rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 text-sm font-mono text-slate-100 outline-none transition focus:border-cyan-500"
+          />
         </div>
 
         {/* Play button */}

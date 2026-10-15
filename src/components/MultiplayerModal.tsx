@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
 import { ChatMessage, RemotePlayer } from '../types';
-import { X, Users, MessageSquare, Send, Globe, Wifi, Radio, UserCheck } from 'lucide-react';
+import { X, Users, MessageSquare, Send, Globe, Wifi, Radio } from 'lucide-react';
 import { nameColorForId } from '../game/nameGenerator';
 
 interface MultiplayerModalProps {
   status: 'disconnected' | 'connecting' | 'connected';
   playerName: string;
   myPlayerId: string | null;
-  onUpdatePlayerName: (name: string) => void;
   currentRoomId: string;
   onJoinRoom: (roomId: string) => void;
   remotePlayers: RemotePlayer[];
@@ -20,7 +19,6 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
   status,
   playerName,
   myPlayerId,
-  onUpdatePlayerName,
   currentRoomId,
   onJoinRoom,
   remotePlayers,
@@ -28,7 +26,6 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
   onSendChat,
   onClose,
 }) => {
-  const [nameInput, setNameInput] = useState(playerName);
   const [roomInput, setRoomInput] = useState(currentRoomId);
   const [chatInput, setChatInput] = useState('');
 
@@ -101,32 +98,6 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
         <div className="p-6 grid grid-cols-1 md:grid-cols-12 gap-6 overflow-y-auto">
           {/* Left Column: Room & Profile Settings */}
           <div className="md:col-span-5 space-y-4">
-            {/* Nickname Form */}
-            <div className="bg-slate-950/70 p-4 rounded-xl border border-slate-800 space-y-2">
-              <label className="text-xs font-mono text-slate-300 flex items-center gap-1.5">
-                <UserCheck className="w-4 h-4 text-cyan-400" />
-                Ваш Позывной / Никнейм:
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="input-player-name"
-                  type="text"
-                  value={nameInput}
-                  onChange={(e) => setNameInput(e.target.value)}
-                  className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
-                  placeholder="Дальнобойщик..."
-                  maxLength={18}
-                />
-                <button
-                  id="btn-save-name"
-                  onClick={() => onUpdatePlayerName(nameInput)}
-                  className="px-3 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-mono font-bold cursor-pointer transition-colors"
-                >
-                  OK
-                </button>
-              </div>
-            </div>
-
             {/* Room Switcher */}
             <div className="bg-slate-950/70 p-4 rounded-xl border border-slate-800 space-y-2">
               <label className="text-xs font-mono text-slate-300 flex items-center gap-1.5">
