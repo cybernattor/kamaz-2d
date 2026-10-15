@@ -748,7 +748,7 @@ async function startServer() {
     });
   }
 
-  console.log(`KAMAZ City Simulator Server listening on port ${port}`);
+  console.log(`KAMAZ RP server listening on port ${port}`);
   console.log(`  Local:   http://localhost:${port}/`);
   console.log(`  Network: http://127.0.0.1:${port}/`);
 }

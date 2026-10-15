@@ -100,7 +100,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             <Truck className="w-10 h-10 text-white" />
           </div>
           <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight">
-            KAMAZ City Simulator <span className="text-cyan-400">2D</span>
+            KAMAZ <span className="text-cyan-400">RP</span>
           </h1>
           <p className="text-xs sm:text-sm text-slate-400">
             Живой город, грузы, мультиплеер — прямо в браузере

@@ -1,4 +1,4 @@
-# KAMAZ City Simulator 2D
+# KAMAZ RP
 
 2D top-down driving sandbox with KAMAZ trucks, traffic, pedestrians, missions,
 destructible environments and multiplayer.
