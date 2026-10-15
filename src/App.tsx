@@ -1038,6 +1038,8 @@ export default function App() {
             onVolumeChange={setVolume}
             showFps={showFps}
             onToggleFps={() => setShowFps((current) => !current)}
+            playerName={playerName}
+            onPlayerNameChange={setPlayerName}
           onPlay={() => {
             sound.init();
             setGameStarted(true);
@@ -1122,9 +1124,6 @@ export default function App() {
           status={mpStatus}
           playerName={playerName}
           myPlayerId={myPlayerId}
-          onUpdatePlayerName={(name) => {
-            multiplayerRef.current?.rename(name);
-          }}
           currentRoomId={mpRoomId}
           onJoinRoom={(roomId) => {
             setMpRoomId(roomId);
