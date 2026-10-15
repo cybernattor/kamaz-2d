@@ -132,12 +132,16 @@ export const HUD: React.FC<HUDProps> = ({
   // separately-positioned fixed layer) never compete with HUD chrome for
   // the same strip of screen. Only a small gap is kept so toast messages
   // don't visually kiss the pedals.
-  const bottomReserveClass = isTouchDevice ? 'pb-4' : 'pb-2.5';
-
   return (
     <div
       id="game-hud-root"
-      className={`absolute inset-0 pointer-events-none flex flex-col justify-between gap-1.5 p-2 sm:p-2.5 ${bottomReserveClass} select-none overflow-hidden font-sans`}
+      className="absolute inset-0 pointer-events-none flex flex-col justify-between gap-1.5 select-none overflow-hidden font-sans"
+      style={{
+        paddingTop: `max(env(safe-area-inset-top), ${isTouchDevice ? '0.5rem' : '0.625rem'})`,
+        paddingRight: `max(env(safe-area-inset-right), ${isTouchDevice ? '0.5rem' : '0.625rem'})`,
+        paddingBottom: `max(env(safe-area-inset-bottom), ${isTouchDevice ? '1rem' : '0.625rem'})`,
+        paddingLeft: `max(env(safe-area-inset-left), ${isTouchDevice ? '0.5rem' : '0.625rem'})`,
+      }}
     >
       {/* 1. TOP STATUS BAR — a single compact row; the minimap reserves space on the right */}
       <div id="hud-top-bar" className="relative w-full pointer-events-auto">
@@ -214,7 +218,7 @@ export const HUD: React.FC<HUDProps> = ({
             <button
               id="btn-open-garage"
               onClick={onOpenGarage}
-              className="min-h-8 flex items-center gap-1 px-2 rounded-md bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow cursor-pointer transition-all"
+              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow cursor-pointer transition-all`}
               title="Гараж [G]"
               aria-label="Открыть гараж"
             >
@@ -225,7 +229,7 @@ export const HUD: React.FC<HUDProps> = ({
             <button
               id="btn-open-missions"
               onClick={onOpenMissions}
-              className="min-h-8 flex items-center gap-1 px-2 rounded-md bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow cursor-pointer transition-all"
+              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow cursor-pointer transition-all`}
               title="Задания [J]"
               aria-label="Открыть задания"
             >
@@ -236,7 +240,7 @@ export const HUD: React.FC<HUDProps> = ({
             <button
               id="btn-open-multiplayer"
               onClick={onOpenMultiplayer}
-              className={`min-h-8 flex items-center gap-1 px-2 rounded-md border transition-colors cursor-pointer ${
+              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md border transition-colors cursor-pointer ${
                 multiplayerStatus === 'connected'
                   ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 hover:bg-emerald-900/60'
                   : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700'
@@ -303,7 +307,7 @@ export const HUD: React.FC<HUDProps> = ({
           <button
             id="btn-enter-exit-vehicle"
             onClick={onToggleEnterExitVehicle}
-            className="min-h-10 flex items-center gap-1 px-2.5 rounded-lg bg-amber-500 active:bg-amber-400 text-black font-bold shadow-lg transition-transform active:scale-95 cursor-pointer"
+            className="min-h-11 min-w-11 flex items-center gap-1 px-2.5 rounded-lg bg-amber-500 active:bg-amber-400 text-black font-bold shadow-lg transition-transform active:scale-95 cursor-pointer"
             aria-label={inVehicle ? 'Выйти из авто' : 'Сесть в авто'}
           >
             <Car className="w-4 h-4" />
@@ -313,7 +317,7 @@ export const HUD: React.FC<HUDProps> = ({
           <button
             id="btn-toggle-headlights"
             onClick={onToggleHeadlights}
-            className={`min-h-10 min-w-10 flex items-center justify-center rounded-lg border cursor-pointer ${
+            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border cursor-pointer ${
               playerVehicle && playerVehicle.headlights > 0
                 ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
                 : 'bg-slate-800/80 text-slate-300 border-slate-700'
@@ -327,7 +331,7 @@ export const HUD: React.FC<HUDProps> = ({
           <button
             id="btn-turn-left"
             onClick={() => onToggleTurnSignal('left')}
-            className={`min-h-10 min-w-10 flex items-center justify-center rounded-lg border font-bold cursor-pointer ${
+            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border font-bold cursor-pointer ${
               playerVehicle?.turnSignal === 'left'
                 ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
                 : 'bg-slate-800/80 text-slate-300 border-slate-700'
@@ -340,7 +344,7 @@ export const HUD: React.FC<HUDProps> = ({
           <button
             id="btn-turn-right"
             onClick={() => onToggleTurnSignal('right')}
-            className={`min-h-10 min-w-10 flex items-center justify-center rounded-lg border font-bold cursor-pointer ${
+            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border font-bold cursor-pointer ${
               playerVehicle?.turnSignal === 'right'
                 ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
                 : 'bg-slate-800/80 text-slate-300 border-slate-700'
@@ -353,7 +357,7 @@ export const HUD: React.FC<HUDProps> = ({
           <button
             id="btn-hazard-lights"
             onClick={() => onToggleTurnSignal('hazard')}
-            className={`min-h-10 min-w-10 flex items-center justify-center rounded-lg border cursor-pointer ${
+            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border cursor-pointer ${
               playerVehicle?.turnSignal === 'hazard'
                 ? 'hazard-active bg-red-950 text-red-100 border-red-400'
                 : 'bg-slate-800/80 text-slate-300 border-slate-700'
@@ -366,7 +370,7 @@ export const HUD: React.FC<HUDProps> = ({
           <button
             id="btn-repair-car"
             onClick={onRepairVehicle}
-            className="min-h-10 min-w-10 flex items-center justify-center rounded-lg bg-slate-800/80 text-cyan-300 border border-cyan-500/30 cursor-pointer"
+            className="min-h-11 min-w-11 flex items-center justify-center rounded-lg bg-slate-800/80 text-cyan-300 border border-cyan-500/30 cursor-pointer"
             aria-label="Ремонт авто"
             title="Ремонт авто"
           >

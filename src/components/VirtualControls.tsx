@@ -176,7 +176,12 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput, onSte
   return (
     <div
       id="virtual-controls-container"
-      className="fixed inset-x-0 bottom-2 pointer-events-none flex items-end justify-between px-3 z-40 select-none"
+      className="fixed inset-x-0 bottom-0 pointer-events-none flex items-end justify-between z-40 select-none"
+      style={{
+        paddingBottom: 'max(env(safe-area-inset-bottom), 0.5rem)',
+        paddingLeft: 'max(env(safe-area-inset-left), 0.75rem)',
+        paddingRight: 'max(env(safe-area-inset-right), 0.75rem)',
+      }}
     >
       {/* Left: analog steering wheel */}
       <SteeringWheel onChange={onSteerChange} keyboardSteer={keyboardSteer} />
