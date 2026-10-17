@@ -20,6 +20,8 @@ import {
   CarFront,
   PersonStanding,
   TriangleAlert,
+  Menu,
+  X,
 } from 'lucide-react';
 import { Minimap } from './Minimap';
 import { NetworkFeed, FeedEvent } from './NetworkFeed';
@@ -132,6 +134,8 @@ export const HUD: React.FC<HUDProps> = ({
   // separately-positioned fixed layer) never compete with HUD chrome for
   // the same strip of screen. Only a small gap is kept so toast messages
   // don't visually kiss the pedals.
+  const [showMenu, setShowMenu] = useState(false);
+
   return (
     <div
       id="game-hud-root"
@@ -145,6 +149,48 @@ export const HUD: React.FC<HUDProps> = ({
     >
       {/* 1. TOP STATUS BAR — a single compact row; the minimap reserves space on the right */}
       <div id="hud-top-bar" className="relative w-full pointer-events-auto">
+        {isTouchDevice ? (
+          <div className="flex items-center gap-0 pr-[126px] bg-slate-950/90 border border-slate-700/80 rounded-xl shadow-lg overflow-hidden">
+            <div className="min-w-0 flex-1 flex items-center gap-1.5 px-2.5 py-1.5">
+              <Compass className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span className="font-mono truncate text-xs font-bold text-cyan-400">{streetName}</span>
+              {showFps && <span className="text-xs text-emerald-400 font-mono shrink-0">{fps}</span>}
+            </div>
+            <div className="flex items-center gap-1 border-l border-slate-700/70 px-1 py-1 shrink-0">
+            <button
+              id="btn-open-multiplayer"
+              onClick={() => { setShowMenu(false); onOpenMultiplayer(); }}
+              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md border transition-colors cursor-pointer ${
+                multiplayerStatus === 'connected'
+                  ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 hover:bg-emerald-900/60'
+                  : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700'
+              }`}
+              title={multiplayerStatus === 'connected' ? `Чат — онлайн (${onlineCount + 1}) [Enter]` : 'Открыть чат [Enter]'}
+              aria-label="Открыть чат"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold">Чат</span>
+              {unreadChat > 0 && (
+                <span className="min-w-4 rounded-full bg-rose-500 px-1 text-center text-[10px] font-bold leading-4 text-white animate-pulse">
+                  {unreadChat > 9 ? '9+' : unreadChat}
+                </span>
+              )}
+              <span className="text-[10px] font-bold font-mono">
+                {multiplayerStatus === 'connected' ? onlineCount + 1 : '—'}
+              </span>
+            </button>
+              <button
+                id="btn-touch-menu"
+                onClick={() => setShowMenu((v) => !v)}
+                className="min-h-11 min-w-11 flex items-center justify-center rounded-md bg-slate-800/80 text-slate-200 cursor-pointer"
+                aria-label={showMenu ? 'Закрыть меню' : 'Открыть меню'}
+                aria-expanded={showMenu}
+              >
+                {showMenu ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+        ) : (
         <div className="flex flex-wrap items-center gap-0 pr-[126px] bg-slate-950/90 border border-slate-700/80 rounded-xl shadow-lg overflow-hidden">
           {/* Street Name + FPS + Stats */}
           <div className="min-w-0 flex-1 flex items-center gap-1.5 px-2.5 py-1.5">
@@ -172,8 +218,6 @@ export const HUD: React.FC<HUDProps> = ({
             </div>
           </div>
 
-          {/* Quick Controls Toggles — icon-only with a hover tooltip, so the
-              whole cluster stays compact instead of spelling everything out */}
           <div className="flex items-center gap-1 border-l border-slate-700/70 px-1 py-1 shrink-0">
             <button
               id="btn-toggle-day-night"
@@ -217,7 +261,7 @@ export const HUD: React.FC<HUDProps> = ({
 
             <button
               id="btn-open-garage"
-              onClick={onOpenGarage}
+              onClick={() => { setShowMenu(false); onOpenGarage(); }}
               className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow cursor-pointer transition-all`}
               title="Гараж [G]"
               aria-label="Открыть гараж"
@@ -228,7 +272,7 @@ export const HUD: React.FC<HUDProps> = ({
 
             <button
               id="btn-open-missions"
-              onClick={onOpenMissions}
+              onClick={() => { setShowMenu(false); onOpenMissions(); }}
               className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow cursor-pointer transition-all`}
               title="Задания [J]"
               aria-label="Открыть задания"
@@ -239,7 +283,7 @@ export const HUD: React.FC<HUDProps> = ({
 
             <button
               id="btn-open-multiplayer"
-              onClick={onOpenMultiplayer}
+              onClick={() => { setShowMenu(false); onOpenMultiplayer(); }}
               className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md border transition-colors cursor-pointer ${
                 multiplayerStatus === 'connected'
                   ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 hover:bg-emerald-900/60'
@@ -261,6 +305,7 @@ export const HUD: React.FC<HUDProps> = ({
             </button>
           </div>
         </div>
+        )}
 
         {/* Top Right: Minimap Radar */}
         <div className="pointer-events-auto absolute top-0 right-0">
@@ -276,44 +321,73 @@ export const HUD: React.FC<HUDProps> = ({
             onOpenFullMap={onOpenMap}
           />
         </div>
-      </div>
 
-      {/* Touch-only compact quickbar: speed/gear/condition readout plus the
-          actions that used to live in the big bottom instrument pod
-          (enter/exit, headlights, turn signals, hazard, repair). Sitting
-          right under the top bar instead of stacked above the pedals keeps
-          the entire bottom strip free for the wheel/pedals and stops the
-          HUD from eating into the driving view. */}
-      {isTouchDevice && (
-        <div
-          id="hud-touch-quickbar"
-          className="pointer-events-auto flex flex-wrap items-center gap-1.5"
-        >
-          <div className="flex items-center gap-1.5 bg-slate-950/95 border border-slate-700/80 rounded-lg px-2.5 py-1.5 shadow-lg font-mono">
-            <span className="text-base font-extrabold text-cyan-400">{speedKmH}</span>
-            <span className="text-[10px] text-slate-500">км/ч</span>
-            <span className="h-3 w-px bg-slate-700 mx-0.5" />
-            <span className="text-xs font-bold text-amber-400">{gear}</span>
-            <span className="h-3 w-px bg-slate-700 mx-0.5" />
-            <span
-              className={`text-xs font-bold ${
-                condition > 60 ? 'text-emerald-400' : condition > 30 ? 'text-amber-400' : 'text-rose-500'
-              }`}
-            >
-              {condition}%
-            </span>
-          </div>
-
-          <button
-            id="btn-enter-exit-vehicle"
-            onClick={onToggleEnterExitVehicle}
-            className="min-h-11 min-w-11 flex items-center gap-1 px-2.5 rounded-lg bg-amber-500 active:bg-amber-400 text-black font-bold shadow-lg transition-transform active:scale-95 cursor-pointer"
-            aria-label={inVehicle ? 'Выйти из авто' : 'Сесть в авто'}
+        {isTouchDevice && showMenu && (
+          <div
+            id="hud-touch-menu"
+            className="absolute left-0 top-full z-30 mt-1 flex max-w-[calc(100%-134px)] flex-wrap items-center gap-1.5 rounded-xl border border-slate-700/80 bg-slate-950/95 p-1.5 shadow-xl"
           >
-            <Car className="w-4 h-4" />
-            <span className="text-[10px] font-mono">{inVehicle ? 'Выйти' : 'Сесть'}</span>
-          </button>
+            <button
+              id="btn-toggle-day-night"
+              onClick={onToggleDayNight}
+              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8 min-w-8'} flex items-center justify-center rounded-md bg-slate-800/80 hover:bg-slate-700 transition-colors cursor-pointer`}
+              title={isNight ? 'Ночь — переключить [T]' : 'День — переключить [T]'}
+              aria-label="Переключить день или ночь"
+            >
+              {isNight ? <Moon className="w-3.5 h-3.5 text-indigo-400" /> : <Sun className="w-3.5 h-3.5 text-amber-400" />}
+            </button>
 
+            <button
+              id="btn-toggle-audio"
+              onClick={onToggleMute}
+              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8 min-w-8'} flex items-center justify-center rounded-md bg-slate-800/80 hover:bg-slate-700 transition-colors cursor-pointer`}
+              title={isMuted ? 'Звук выключен — включить' : 'Звук включён — выключить'}
+              aria-label="Переключить звук"
+            >
+              {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
+            </button>
+
+            <div className="flex items-center bg-slate-800/80 rounded-md">
+              <button
+                id="btn-zoom-out"
+                onClick={onZoomOut}
+                className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8 min-w-7'} flex items-center justify-center text-slate-300 hover:text-cyan-400 cursor-pointer`}
+                title="Уменьшить [-]"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <span className="hidden sm:inline text-[10px] font-mono text-slate-400 px-0.5">{Math.round(zoom * 100)}%</span>
+              <button
+                id="btn-zoom-in"
+                onClick={onZoomIn}
+                className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8 min-w-7'} flex items-center justify-center text-slate-300 hover:text-cyan-400 cursor-pointer`}
+                title="Увеличить [+]"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <button
+              id="btn-open-garage"
+              onClick={() => { setShowMenu(false); onOpenGarage(); }}
+              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow cursor-pointer transition-all`}
+              title="Гараж [G]"
+              aria-label="Открыть гараж"
+            >
+              <Car className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold font-mono">G</span>
+            </button>
+
+            <button
+              id="btn-open-missions"
+              onClick={() => { setShowMenu(false); onOpenMissions(); }}
+              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow cursor-pointer transition-all`}
+              title="Задания [J]"
+              aria-label="Открыть задания"
+            >
+              <Briefcase className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold font-mono">J</span>
+            </button>
           <button
             id="btn-toggle-headlights"
             onClick={onToggleHeadlights}
@@ -376,12 +450,32 @@ export const HUD: React.FC<HUDProps> = ({
           >
             <Wrench className="w-4 h-4" />
           </button>
+          </div>
+        )}
+      </div>
+
+      {/* Touch: speed/gear/condition as one small chip beside the minimap
+          (the rest of the old quickbar moved into the menu and next to the
+          pedals), so the driving view keeps its height in landscape. */}
+      {isTouchDevice && (
+        <div id="hud-touch-readout" className="pointer-events-none pr-[134px]">
+          <div className="inline-flex items-center gap-1.5 bg-slate-950/90 border border-slate-700/80 rounded-lg px-2.5 py-1 shadow-lg font-mono">
+            <span className="text-base font-extrabold text-cyan-400">{speedKmH}</span>
+            <span className="text-[10px] text-slate-500">км/ч</span>
+            <span className="h-3 w-px bg-slate-700 mx-0.5" />
+            <span className="text-xs font-bold text-amber-400">{gear}</span>
+            <span className="h-3 w-px bg-slate-700 mx-0.5" />
+            <span className={`text-xs font-bold ${condition > 60 ? 'text-emerald-400' : condition > 30 ? 'text-amber-400' : 'text-rose-500'}`}>
+              {condition}%
+            </span>
+          </div>
         </div>
       )}
 
+
       {/* 2. MIDDLE AREA (Active Mission HUD Overlay) */}
       {activeMission && (
-        <div className="flex w-full">
+        <div className={`flex w-full ${isTouchDevice ? 'pr-[134px]' : ''}`}>
           <div
             id="active-mission-hud-card"
             className="pointer-events-auto bg-slate-950/95 border-2 border-amber-500/80 rounded-xl p-2 shadow-2xl w-full sm:max-w-sm"
@@ -417,7 +511,7 @@ export const HUD: React.FC<HUDProps> = ({
 
       {/* Radio feed: chat lines + join/leave, directly above the controls
           legend so it never overlaps it or the minimap regardless of screen size */}
-      <div className="pointer-events-none mt-auto mb-1 w-full flex flex-col gap-1.5">
+      <div className={`pointer-events-none mt-auto mb-1 w-full flex flex-col gap-1.5 ${isTouchDevice ? 'pb-28' : ''}`}>
         <NetworkFeed events={feedEvents} />
         {/* Touch layouts keep the bottom strip free for the wheel/pedals;
             they use the top-bar chat button instead. */}

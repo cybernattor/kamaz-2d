@@ -1,19 +1,24 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { ArrowUp, ArrowDown, Volume2, ParkingSquare } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowUp, ArrowDown, Volume2, ParkingSquare, Car, Settings, Zap, Footprints } from 'lucide-react';
 
 interface VirtualControlsProps {
   /** Discrete pedal/button inputs. Steering is handled separately via onSteerChange. */
   onInput: (action: 'throttle' | 'brake' | 'handbrake' | 'horn', active: boolean) => void;
   /**
    * Continuous steering: -1 (full left) .. 1 (full right), 0 = centered
-   * while held. `null` means the wheel isn't being touched at all, which
+   * while held. `null` means the stick isn't being touched at all, which
    * hands steering back to the keyboard (A/D) instead of forcing it to 0 -
-   * otherwise letting go of the wheel would fight a keyboard press on
-   * hybrid touch+keyboard devices.
+   * otherwise letting go would fight a keyboard press on hybrid
+   * touch+keyboard devices.
    */
   onSteerChange: (value: number | null) => void;
+  /** On-foot movement: x/y in -1..1 (screen axes), null when released. */
+  onMoveChange: (value: { x: number; y: number } | null) => void;
   keyboardSteer: number;
+  /** Touch device: floating steering zone + pedals. Desktop gets just the wheel. */
   showPedals: boolean;
+  inVehicle: boolean;
+  onToggleEnterExit: () => void;
 }
 
 /** Short tap of the device vibrator, if available. Silently no-ops on
@@ -27,101 +32,242 @@ function hapticTick(ms = 10) {
 }
 
 const STEER_MAX_ROTATION = 120;
+/** Finger travel (px) from the touch-down point that equals full lock. */
+const STICK_RADIUS = 64;
+const STICK_DEAD_ZONE = 0.08;
+const STICK_CURVE = 1.4;
+const WHEEL_SIZE = 96;
+const MOVE_DEAD_ZONE = 0.15;
+
+/** Radial dead zone for the on-foot stick; magnitude rescaled to 0..1. */
+export function shapeMove(rawX: number, rawY: number): { x: number; y: number } {
+  const magnitude = Math.hypot(rawX, rawY);
+  if (magnitude < MOVE_DEAD_ZONE) return { x: 0, y: 0 };
+  const scaled = Math.min(1, (magnitude - MOVE_DEAD_ZONE) / (1 - MOVE_DEAD_ZONE));
+  return { x: (rawX / magnitude) * scaled, y: (rawY / magnitude) * scaled };
+}
+
+const LAYOUT_KEY = 'kamaz.touchLayout';
+const HINT_KEY = 'kamaz.touchHintSeen';
+
+interface TouchLayout {
+  lefty: boolean;
+  scale: number;
+}
+
+const DEFAULT_LAYOUT: TouchLayout = { lefty: false, scale: 1 };
+const SCALES = [0.85, 1, 1.15];
+
+function loadLayout(): TouchLayout {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    if (!raw) return DEFAULT_LAYOUT;
+    const parsed = JSON.parse(raw);
+    return {
+      lefty: parsed?.lefty === true,
+      scale: SCALES.includes(parsed?.scale) ? parsed.scale : 1,
+    };
+  } catch {
+    return DEFAULT_LAYOUT;
+  }
+}
+
+function saveLayout(layout: TouchLayout) {
+  try {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+  } catch {
+    // Storage can be blocked (private mode); the layout just won't persist.
+  }
+}
+
+/** Dead zone + soft curve: precise near center, full lock at the edge. */
+export function shapeSteer(raw: number): number {
+  const clamped = Math.max(-1, Math.min(1, raw));
+  const magnitude = Math.abs(clamped);
+  if (magnitude < STICK_DEAD_ZONE) return 0;
+  const rescaled = (magnitude - STICK_DEAD_ZONE) / (1 - STICK_DEAD_ZONE);
+  return Math.sign(clamped) * Math.pow(rescaled, STICK_CURVE);
+}
 
 /**
- * Analog steering wheel. A single pointer drags horizontally across the
- * wheel; the wheel itself rotates proportionally to -1..1. The external
- * keyboard value keeps the visual state in sync with A/D and arrow keys.
+ * Floating steering stick with a wheel as its visual. On touch the whole
+ * lower side of the screen is the hit area: the first touch sets the
+ * neutral point and the wheel appears under the thumb, so there is no
+ * "missing the wheel" and no jump to full lock on touch-down. Steering is the
+ * finger's horizontal travel from that point. On desktop it is a fixed wheel
+ * with the same relative maths.
  *
  * Pointer Events (not touch+mouse handlers) are used deliberately: a single
- * event model means no risk of a delayed synthetic mouse event reactivating
- * steering after the finger has already lifted (the "ghost click" problem
- * touchstart/mousedown pairs have on WebKit), and pointer capture keeps the
- * drag tracking correctly even if the finger slides outside the wheel.
+ * event model means no delayed synthetic mouse event reactivating steering
+ * after the finger lifted, and pointer capture keeps tracking when the
+ * finger leaves the zone.
  */
-const SteeringWheel: React.FC<{
+const SteeringStick: React.FC<{
   onChange: (value: number | null) => void;
+  /** On foot the same zone becomes a free 2D move stick (x/y in -1..1). */
+  mode: 'steer' | 'move';
+  onMove: (value: { x: number; y: number } | null) => void;
   keyboardSteer: number;
-}> = ({ onChange, keyboardSteer }) => {
-  const baseRef = useRef<HTMLDivElement | null>(null);
+  floating: boolean;
+  lefty: boolean;
+}> = ({ onChange, mode, onMove, keyboardSteer, floating, lefty }) => {
+  const zoneRef = useRef<HTMLDivElement | null>(null);
   const activePointerId = useRef<number | null>(null);
+  const originClientX = useRef(0);
+  const originClientY = useRef(0);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const onMoveRef = useRef(onMove);
+  onMoveRef.current = onMove;
+  const [moveVec, setMoveVec] = useState<{ x: number; y: number } | null>(null);
   const [pointerSteer, setPointerSteer] = useState<number | null>(null);
+  const [origin, setOrigin] = useState<{ x: number; y: number } | null>(null);
 
-  const updateFromClientX = useCallback(
-    (clientX: number) => {
-      const base = baseRef.current;
-      if (!base) return;
-      const rect = base.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-      const normalized = Math.max(-1, Math.min(1, (clientX - centerX) / (rect.width / 2)));
-      setPointerSteer(normalized);
-      onChange(normalized);
+  const updateFromClient = useCallback(
+    (clientX: number, clientY: number) => {
+      if (mode === 'move') {
+        const vec = shapeMove((clientX - originClientX.current) / STICK_RADIUS, (clientY - originClientY.current) / STICK_RADIUS);
+        setMoveVec(vec);
+        onMoveRef.current(vec);
+        return;
+      }
+      const value = shapeSteer((clientX - originClientX.current) / STICK_RADIUS);
+      setPointerSteer(value);
+      onChangeRef.current(value);
     },
-    [onChange]
+    [mode]
   );
 
+  const release = useCallback(() => {
+    if (activePointerId.current === null) return;
+    activePointerId.current = null;
+    setPointerSteer(null);
+    setMoveVec(null);
+    setOrigin(null);
+    if (mode === 'move') onMoveRef.current(null);
+    else onChangeRef.current(null);
+  }, [mode]);
+
+  // Never leave steering latched if the controls unmount mid-drag.
+  useEffect(() => release, [release]);
+
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (activePointerId.current !== null) return;
     e.preventDefault();
+    const zone = zoneRef.current;
+    if (!zone) return;
+    const rect = zone.getBoundingClientRect();
     activePointerId.current = e.pointerId;
     e.currentTarget.setPointerCapture(e.pointerId);
     hapticTick(8);
-    updateFromClientX(e.clientX);
+
+    if (floating) {
+      const half = WHEEL_SIZE / 2 + 4;
+      const x = Math.max(half, Math.min(rect.width - half, e.clientX - rect.left));
+      const y = Math.max(half, Math.min(rect.height - half, e.clientY - rect.top));
+      originClientX.current = rect.left + x;
+      originClientY.current = rect.top + y;
+      setOrigin({ x, y });
+    } else {
+      originClientX.current = rect.left + rect.width / 2;
+      originClientY.current = rect.top + rect.height / 2;
+    }
+    updateFromClient(e.clientX, e.clientY);
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (activePointerId.current !== e.pointerId) return;
     e.preventDefault();
-    updateFromClientX(e.clientX);
+    updateFromClient(e.clientX, e.clientY);
   };
 
-  const releasePointer = (e: React.PointerEvent<HTMLDivElement>) => {
+  const handleEnd = (e: React.PointerEvent<HTMLDivElement>) => {
     if (activePointerId.current !== e.pointerId) return;
-    activePointerId.current = null;
-    setPointerSteer(null);
-    onChange(null);
+    release();
   };
 
   const displayedSteer = pointerSteer ?? keyboardSteer;
+  const active = pointerSteer !== null || moveVec !== null;
+
+  const inset = lefty ? 'right' : 'left';
+  const restPosition: React.CSSProperties = {
+    bottom: 'max(env(safe-area-inset-bottom), 0.5rem)',
+    [inset]: `calc(max(env(safe-area-inset-${inset}), 0.75rem) + 0.25rem)`,
+  };
+  const wheelPosition: React.CSSProperties = origin
+    ? { left: origin.x, top: origin.y, transform: 'translate(-50%, -50%)' }
+    : restPosition;
+
+  const wheel = mode === 'move' ? (
+    <div
+      id="vmove-base"
+      className={`pointer-events-none absolute rounded-full border bg-slate-950/60 transition-colors ${
+        active ? 'border-cyan-400/80' : 'border-slate-600/70'
+      }`}
+      style={{ width: WHEEL_SIZE, height: WHEEL_SIZE, ...(floating ? wheelPosition : { left: 0, top: 0 }) }}
+    >
+      <div
+        className="absolute left-1/2 top-1/2 h-10 w-10 rounded-full border border-cyan-300/70 bg-cyan-900/60"
+        style={{
+          transform: `translate(calc(-50% + ${(moveVec?.x ?? 0) * (WHEEL_SIZE / 2 - 8)}px), calc(-50% + ${(moveVec?.y ?? 0) * (WHEEL_SIZE / 2 - 8)}px))`,
+        }}
+      />
+    </div>
+  ) : (
+    <div
+      id="vwheel-base"
+      className={`pointer-events-none absolute rounded-full border bg-slate-950/70 shadow-[0_8px_20px_rgba(2,6,23,0.45),inset_0_0_0_1px_rgba(255,255,255,0.05)] transition-colors ${
+        active ? 'border-cyan-400/80' : 'border-slate-600/70'
+      }`}
+      style={{ width: WHEEL_SIZE, height: WHEEL_SIZE, ...(floating ? wheelPosition : { left: 0, top: 0 }) }}
+    >
+      <div className="absolute inset-[5px] rounded-full border border-slate-700/70 bg-[radial-gradient(circle_at_50%_42%,rgba(51,65,85,0.45),rgba(2,6,23,0.8)_70%)]" />
+      <svg aria-hidden="true" viewBox="0 0 112 112" className="absolute inset-0 h-full w-full">
+        <circle cx="56" cy="56" r="52" fill="none" stroke="rgba(34,211,238,.18)" strokeWidth="1" />
+        <circle cx="56" cy="56" r="47" fill="none" stroke="rgba(148,163,184,.22)" strokeWidth="1" strokeDasharray="1 5" />
+        <path d="M56 5v5" stroke="#67e8f9" strokeWidth="2" strokeLinecap="round" />
+        <g
+          id="vwheel-wheel"
+          className={active ? 'transition-none' : 'transition-transform duration-200 ease-out'}
+          style={{ transform: `rotate(${displayedSteer * STEER_MAX_ROTATION}deg)`, transformOrigin: '56px 56px' }}
+        >
+          <circle cx="56" cy="56" r="39" fill="none" stroke="#0b1220" strokeWidth="13" />
+          <circle cx="56" cy="56" r="39" fill="none" stroke="#64748b" strokeWidth="8" />
+          <circle cx="56" cy="56" r="35" fill="none" stroke="#94a3b8" strokeOpacity=".48" strokeWidth="1" />
+          <path d="M56 53 35 31M56 53l21-22M56 53v31" fill="none" stroke="#94a3b8" strokeWidth="6" strokeLinecap="round" />
+          <path d="M56 53 35 31M56 53l21-22M56 53v31" fill="none" stroke="#cbd5e1" strokeOpacity=".35" strokeWidth="1.5" strokeLinecap="round" />
+          <circle cx="56" cy="53" r="12" fill="#0b1220" stroke="#94a3b8" strokeWidth="2" />
+          <circle cx="56" cy="53" r="5" fill="#164e63" stroke="#67e8f9" strokeWidth="1.5" />
+          <circle cx="56" cy="16" r="2" fill="#67e8f9" />
+        </g>
+      </svg>
+    </div>
+  );
 
   return (
-    <div className="flex flex-col items-center gap-1.5 pointer-events-auto">
-      <div
-        id="vwheel-base"
-        ref={baseRef}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={releasePointer}
-        onPointerCancel={releasePointer}
-        style={{ touchAction: 'none' }}
-        className="relative h-28 w-28 rounded-full border border-slate-600/80 bg-slate-950/90 shadow-[0_8px_20px_rgba(2,6,23,0.45),inset_0_0_0_1px_rgba(255,255,255,0.05)] select-none"
-        role="slider"
-        aria-label="Руль"
-        aria-valuemin={-1}
-        aria-valuemax={1}
-        aria-valuenow={Number(displayedSteer.toFixed(2))}
-        aria-valuetext={`${Math.round(Math.abs(displayedSteer) * 100)}% ${displayedSteer < 0 ? 'влево' : displayedSteer > 0 ? 'вправо' : 'по центру'}`}
-      >
-        <div className="absolute inset-[5px] rounded-full border border-slate-700/80 bg-[radial-gradient(circle_at_50%_42%,rgba(51,65,85,0.5),rgba(2,6,23,0.9)_70%)]" />
-        <svg aria-hidden="true" viewBox="0 0 112 112" className="absolute inset-0 h-full w-full">
-          <circle cx="56" cy="56" r="52" fill="none" stroke="rgba(34,211,238,.18)" strokeWidth="1" />
-          <circle cx="56" cy="56" r="47" fill="none" stroke="rgba(148,163,184,.22)" strokeWidth="1" strokeDasharray="1 5" />
-          <path d="M56 5v5" stroke="#67e8f9" strokeWidth="2" strokeLinecap="round" />
-          <g
-          id="vwheel-wheel"
-            className={pointerSteer === null ? 'transition-transform duration-200 ease-out' : 'transition-none'}
-            style={{ transform: `rotate(${displayedSteer * STEER_MAX_ROTATION}deg)`, transformOrigin: '56px 56px' }}
-          >
-            <circle cx="56" cy="56" r="39" fill="none" stroke="#0b1220" strokeWidth="13" />
-            <circle cx="56" cy="56" r="39" fill="none" stroke="#64748b" strokeWidth="8" />
-            <circle cx="56" cy="56" r="35" fill="none" stroke="#94a3b8" strokeOpacity=".48" strokeWidth="1" />
-            <path d="M56 53 35 31M56 53l21-22M56 53v31" fill="none" stroke="#94a3b8" strokeWidth="6" strokeLinecap="round" />
-            <path d="M56 53 35 31M56 53l21-22M56 53v31" fill="none" stroke="#cbd5e1" strokeOpacity=".35" strokeWidth="1.5" strokeLinecap="round" />
-            <circle cx="56" cy="53" r="12" fill="#0b1220" stroke="#94a3b8" strokeWidth="2" />
-            <circle cx="56" cy="53" r="5" fill="#164e63" stroke="#67e8f9" strokeWidth="1.5" />
-            <circle cx="56" cy="16" r="2" fill="#67e8f9" />
-          </g>
-        </svg>
-      </div>
+    <div
+      id="vwheel-zone"
+      ref={zoneRef}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handleEnd}
+      onPointerCancel={handleEnd}
+      onLostPointerCapture={handleEnd}
+      onContextMenu={(e) => e.preventDefault()}
+      style={floating ? { touchAction: 'none' } : { touchAction: 'none', width: WHEEL_SIZE, height: WHEEL_SIZE }}
+      className={
+        floating
+          ? `pointer-events-auto absolute bottom-0 h-1/2 w-[42%] ${lefty ? 'right-0' : 'left-0'}`
+          : 'pointer-events-auto relative select-none'
+      }
+      role="slider"
+      aria-label={mode === 'move' ? 'Движение' : 'Руль'}
+      aria-valuemin={-1}
+      aria-valuemax={1}
+      aria-valuenow={Number(displayedSteer.toFixed(2))}
+      aria-valuetext={`${Math.round(Math.abs(displayedSteer) * 100)}% ${displayedSteer < 0 ? 'влево' : displayedSteer > 0 ? 'вправо' : 'по центру'}`}
+    >
+      {wheel}
     </div>
   );
 };
@@ -138,11 +284,26 @@ interface PedalButtonProps {
 /** A single-pointer, single-event-model button. Using pointerdown/up/cancel
  * (instead of separate touch and mouse handlers) avoids double-firing and
  * the delayed "ghost" reactivation some mobile browsers produce when a
- * synthetic mouse event follows a touch event ~300ms after release. */
+ * synthetic mouse event follows a touch event ~300ms after release.
+ * Lost capture and unmount also release the input, so a pedal can't stay
+ * latched when the layout changes under a finger. */
 const PedalButton: React.FC<PedalButtonProps> = ({ id, label, className, icon, onActiveChange, haptic }) => {
   const pointerId = useRef<number | null>(null);
+  const onActiveChangeRef = useRef(onActiveChange);
+  onActiveChangeRef.current = onActiveChange;
+
+  useEffect(
+    () => () => {
+      if (pointerId.current !== null) {
+        pointerId.current = null;
+        onActiveChangeRef.current(false);
+      }
+    },
+    []
+  );
 
   const down = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (pointerId.current !== null) return;
     e.preventDefault();
     pointerId.current = e.pointerId;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -161,9 +322,10 @@ const PedalButton: React.FC<PedalButtonProps> = ({ id, label, className, icon, o
       onPointerDown={down}
       onPointerUp={up}
       onPointerCancel={up}
+      onLostPointerCapture={up}
       onContextMenu={(e) => e.preventDefault()}
       style={{ touchAction: 'none' }}
-      className={className}
+      className={`pointer-events-auto ${className}`}
       aria-label={label}
       title={label}
     >
@@ -172,71 +334,293 @@ const PedalButton: React.FC<PedalButtonProps> = ({ id, label, className, icon, o
   );
 };
 
-export const VirtualControls: React.FC<VirtualControlsProps> = ({ onInput, onSteerChange, keyboardSteer, showPedals }) => {
+const SMALL_BTN =
+  'h-12 w-12 rounded-full border text-white flex items-center justify-center shadow-xl select-none';
+
+export const VirtualControls: React.FC<VirtualControlsProps> = ({
+  onInput,
+  onSteerChange,
+  onMoveChange,
+  keyboardSteer,
+  showPedals,
+  inVehicle,
+  onToggleEnterExit,
+}) => {
+  const [layout, setLayout] = useState<TouchLayout>(loadLayout);
+  const [showSettings, setShowSettings] = useState(false);
+  const [cruise, setCruise] = useState(false);
+  const [showHint, setShowHint] = useState(() => {
+    if (!showPedals) return false;
+    try {
+      return localStorage.getItem(HINT_KEY) !== '1';
+    } catch {
+      return true;
+    }
+  });
+
+  // Gas can come from the pedal or from "AUTO" (cruise); brake interrupts
+  // only the cruise part, so a manual gas+brake combo still works.
+  const throttle = useRef({ gas: false, brake: false, cruise: false, sent: false });
+  const syncThrottle = () => {
+    const t = throttle.current;
+    const effective = t.gas || (t.cruise && !t.brake);
+    if (effective !== t.sent) {
+      t.sent = effective;
+      onInput('throttle', effective);
+    }
+  };
+
+  const dismissHint = () => {
+    if (!showHint) return;
+    setShowHint(false);
+    try {
+      localStorage.setItem(HINT_KEY, '1');
+    } catch {
+      // Hint will simply show again next session.
+    }
+  };
+
+  useEffect(() => {
+    if (!showHint) return;
+    const timer = window.setTimeout(dismissHint, 9000);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHint]);
+
+  // Leaving the vehicle (or unmounting) must not leave cruise driving a pedestrian.
+  useEffect(() => {
+    if (!inVehicle && throttle.current.cruise) {
+      throttle.current.cruise = false;
+      setCruise(false);
+      syncThrottle();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inVehicle]);
+
+  useEffect(
+    () => () => {
+      throttle.current.cruise = false;
+      throttle.current.gas = false;
+      throttle.current.brake = false;
+      syncThrottle();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  const updateLayout = (patch: Partial<TouchLayout>) => {
+    const next = { ...layout, ...patch };
+    setLayout(next);
+    saveLayout(next);
+  };
+
+  const toggleCruise = () => {
+    hapticTick(15);
+    dismissHint();
+    throttle.current.cruise = !throttle.current.cruise;
+    setCruise(throttle.current.cruise);
+    syncThrottle();
+  };
+
+  const side = layout.lefty ? 'flex-row-reverse' : 'flex-row';
+  const origin = layout.lefty ? 'bottom left' : 'bottom right';
+
   return (
     <div
       id="virtual-controls-container"
-      className="fixed inset-x-0 bottom-0 pointer-events-none flex items-end justify-between z-40 select-none"
-      style={{
-        paddingBottom: 'max(env(safe-area-inset-bottom), 0.5rem)',
-        paddingLeft: 'max(env(safe-area-inset-left), 0.75rem)',
-        paddingRight: 'max(env(safe-area-inset-right), 0.75rem)',
-      }}
+      className="pointer-events-none fixed inset-0 z-40 select-none"
+      onPointerDownCapture={dismissHint}
     >
-      {/* Left: analog steering wheel */}
-      <SteeringWheel onChange={onSteerChange} keyboardSteer={keyboardSteer} />
+      {/* Touch: the stick's hit area is the lower half of the screen side, so
+          it lives outside the bottom bar that only wraps the pedals. */}
+      {showPedals && (
+        <SteeringStick
+          key={inVehicle ? 'steer' : 'move'}
+          mode={inVehicle ? 'steer' : 'move'}
+          onMove={onMoveChange}
+          onChange={onSteerChange}
+          keyboardSteer={keyboardSteer}
+          floating
+          lefty={layout.lefty}
+        />
+      )}
+      <div
+        className={`absolute inset-x-0 bottom-0 flex items-end ${showPedals ? 'justify-end' : 'justify-start'} ${side}`}
+        style={{
+          paddingBottom: 'max(env(safe-area-inset-bottom), 0.5rem)',
+          paddingLeft: 'max(env(safe-area-inset-left), 0.75rem)',
+          paddingRight: 'max(env(safe-area-inset-right), 0.75rem)',
+        }}
+      >
+        {!showPedals && inVehicle && (
+          <SteeringStick
+            mode="steer"
+            onMove={onMoveChange}
+            onChange={onSteerChange}
+            keyboardSteer={keyboardSteer}
+            floating={false}
+            lefty={false}
+          />
+        )}
 
-      {/* Right: horn + handbrake stacked small, gas/brake pedals stacked large */}
-      {showPedals && <div className="flex items-end gap-2 pointer-events-auto">
-        <div className="flex flex-col gap-2">
-          <PedalButton
-            id="vbtn-horn"
-            label="Подать сигнал"
-            haptic={5}
-            onActiveChange={(active) => onInput('horn', active)}
-            className="w-11 h-11 rounded-full bg-amber-600/80 border border-amber-500 text-white flex items-center justify-center active:bg-amber-500 shadow-xl"
-            icon={<Volume2 className="w-5 h-5" />}
-          />
-          <PedalButton
-            id="vbtn-handbrake"
-            label="Ручник / Дрифт"
-            haptic={15}
-            onActiveChange={(active) => onInput('handbrake', active)}
-            className="w-11 h-11 rounded-full bg-slate-800/85 border border-slate-500 text-white flex items-center justify-center active:bg-rose-600 shadow-xl"
-            icon={<ParkingSquare className="w-5 h-5" />}
-          />
-        </div>
+        {showPedals && (
+          <div
+            className="pointer-events-none flex flex-col items-end gap-2"
+            style={{ transform: `scale(${layout.scale})`, transformOrigin: origin }}
+          >
+            {showSettings && (
+              <div
+                id="vctrl-settings"
+                className="pointer-events-auto w-56 space-y-2 rounded-xl border border-slate-600 bg-slate-950/95 p-2.5 text-xs text-slate-200 shadow-2xl"
+              >
+                <button
+                  id="vctrl-lefty"
+                  onClick={() => updateLayout({ lefty: !layout.lefty })}
+                  className="flex min-h-11 w-full items-center justify-between rounded-lg bg-slate-800 px-3"
+                >
+                  <span>Режим левши</span>
+                  <span className={layout.lefty ? 'font-bold text-emerald-400' : 'text-slate-400'}>
+                    {layout.lefty ? 'вкл' : 'выкл'}
+                  </span>
+                </button>
+                <div className="flex items-center gap-1.5">
+                  <span className="shrink-0 pr-1 text-slate-400">Размер</span>
+                  {SCALES.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => updateLayout({ scale: s })}
+                      className={`min-h-11 flex-1 rounded-lg font-mono ${
+                        layout.scale === s ? 'bg-cyan-600 font-bold text-white' : 'bg-slate-800 text-slate-300'
+                      }`}
+                    >
+                      {s === 0.85 ? 'S' : s === 1 ? 'M' : 'L'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
-        <div className="flex flex-col gap-2 items-center">
-          <PedalButton
-            id="vbtn-brake"
-            label="Тормоз / Назад"
-            haptic={12}
-            onActiveChange={(active) => onInput('brake', active)}
-            className="w-16 h-16 rounded-2xl bg-rose-700/85 border border-rose-600 text-white flex flex-col items-center justify-center gap-0.5 active:bg-rose-600 shadow-xl font-mono text-[9px] font-bold leading-tight"
-            icon={
-              <>
-                <ArrowDown className="w-5 h-5" />
-                <span>ТОРМОЗ</span>
-                <span className="text-[7px] text-rose-200 font-normal">ДЕРЖАТЬ = НАЗАД</span>
-              </>
-            }
-          />
-          <PedalButton
-            id="vbtn-gas"
-            label="Газ"
-            haptic={12}
-            onActiveChange={(active) => onInput('throttle', active)}
-            className="w-20 h-20 rounded-2xl bg-emerald-600/85 border border-emerald-500 text-white flex flex-col items-center justify-center active:bg-emerald-500 shadow-xl font-mono text-xs font-bold"
-            icon={
-              <>
-                <ArrowUp className="w-6 h-6" />
-                <span>ГАЗ</span>
-              </>
-            }
-          />
+            {/* Utility row */}
+            <div className={`flex items-center gap-2 ${side}`}>
+              <button
+                id="vbtn-settings"
+                onClick={() => setShowSettings((v) => !v)}
+                className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-slate-600 bg-slate-900/70 text-slate-300"
+                aria-label="Настройки управления"
+                aria-expanded={showSettings}
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+              <button
+                id="btn-enter-exit-vehicle"
+                onClick={onToggleEnterExit}
+                className="pointer-events-auto flex h-12 min-w-12 items-center justify-center gap-1 rounded-full bg-amber-500/90 px-3 text-black shadow-xl active:bg-amber-400"
+                aria-label={inVehicle ? 'Выйти из авто' : 'Сесть в авто'}
+              >
+                <Car className="h-5 w-5" />
+                <span className="font-mono text-[11px] font-bold">{inVehicle ? 'Выйти' : 'Сесть'}</span>
+              </button>
+              {inVehicle && <button
+                id="vbtn-cruise"
+                onClick={toggleCruise}
+                className={`pointer-events-auto ${SMALL_BTN} flex-col text-[10px] font-bold font-mono leading-none ${
+                  cruise ? 'border-emerald-300 bg-emerald-600' : 'border-slate-500 bg-slate-800/60'
+                }`}
+                aria-pressed={cruise}
+                aria-label="Автогаз"
+              >
+                <Zap className="h-4 w-4" />
+                AUTO
+              </button>}
+              {inVehicle && (
+                <>
+              <PedalButton
+                id="vbtn-horn"
+                label="Подать сигнал"
+                haptic={5}
+                onActiveChange={(active) => onInput('horn', active)}
+                className={`${SMALL_BTN} border-amber-500 bg-amber-600/60 active:bg-amber-500`}
+                icon={<Volume2 className="h-5 w-5" />}
+              />
+              <PedalButton
+                id="vbtn-handbrake"
+                label="Ручник / Дрифт"
+                haptic={15}
+                onActiveChange={(active) => onInput('handbrake', active)}
+                className={`${SMALL_BTN} border-slate-500 bg-slate-800/60 active:bg-rose-600`}
+                icon={<ParkingSquare className="h-5 w-5" />}
+              />
+                </>
+              )}
+            </div>
+
+            {/* On foot: one big sprint button replaces the pedals */}
+            {!inVehicle && (
+              <PedalButton
+                id="vbtn-sprint"
+                label="Бег"
+                haptic={10}
+                onActiveChange={(active) => onInput('handbrake', active)}
+                className="flex h-24 w-24 flex-col items-center justify-center rounded-2xl border border-cyan-500 bg-cyan-700/60 font-mono text-sm font-bold text-white shadow-xl active:bg-cyan-500"
+                icon={
+                  <>
+                    <Footprints className="h-7 w-7" />
+                    <span>БЕГ</span>
+                  </>
+                }
+              />
+            )}
+
+            {/* Pedals: brake next to gas so one thumb slides between them */}
+            {inVehicle && <div className={`flex items-end gap-2 ${side}`}>
+              <PedalButton
+                id="vbtn-brake"
+                label="Тормоз (удерживать — назад)"
+                haptic={12}
+                onActiveChange={(active) => {
+                  throttle.current.brake = active;
+                  onInput('brake', active);
+                  syncThrottle();
+                }}
+                className="flex h-[72px] w-[72px] flex-col items-center justify-center gap-0.5 rounded-2xl border border-rose-600 bg-rose-700/60 font-mono text-[11px] font-bold leading-tight text-white shadow-xl active:bg-rose-600"
+                icon={
+                  <>
+                    <ArrowDown className="h-5 w-5" />
+                    <span>СТОП</span>
+                  </>
+                }
+              />
+              <PedalButton
+                id="vbtn-gas"
+                label="Газ"
+                haptic={12}
+                onActiveChange={(active) => {
+                  throttle.current.gas = active;
+                  syncThrottle();
+                }}
+                className="flex h-24 w-24 flex-col items-center justify-center rounded-2xl border border-emerald-500 bg-emerald-600/60 font-mono text-sm font-bold text-white shadow-xl active:bg-emerald-500"
+                icon={
+                  <>
+                    <ArrowUp className="h-7 w-7" />
+                    <span>ГАЗ</span>
+                  </>
+                }
+              />
+            </div>}
+          </div>
+        )}
+      </div>
+
+      {showHint && (
+        <div
+          id="vctrl-hint"
+          className="pointer-events-none absolute left-1/2 top-1/3 w-[min(24rem,calc(100%-2rem))] -translate-x-1/2 rounded-xl border border-cyan-500/50 bg-slate-950/90 p-3 text-center text-xs leading-relaxed text-slate-200 shadow-2xl"
+        >
+          <b className="text-cyan-300">Слева</b> — коснитесь и ведите палец вбок: руль (пешком — джойстик в любую сторону). <b className="text-emerald-300">Справа</b> — газ.
+          <br />
+          <b className="text-rose-300">СТОП</b>: тап — тормоз, удержание — задний ход. <b className="text-emerald-300">AUTO</b> — газ включён сам.
         </div>
-      </div>}
+      )}
     </div>
   );
 };

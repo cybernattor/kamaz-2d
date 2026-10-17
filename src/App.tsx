@@ -58,6 +58,9 @@ function useLazyRef<T>(create: () => T) {
   return ref as React.MutableRefObject<T>;
 }
 
+/** How long the touch brake pedal must be held before it engages reverse. */
+const TOUCH_REVERSE_HOLD_MS = 350;
+
 /**
  * `md:hidden` on the virtual joystick gated on viewport width, not on
  * whether the device has touch input. Most tablets are wider than the 768px
@@ -154,6 +157,8 @@ export default function App() {
   // Analog steering from the touch wheel: -1..1 while held, null when the
   // wheel isn't being touched (steering then falls back to the A/D keys).
   const steerAxisRef = useRef<number | null>(null);
+  const moveAxisRef = useRef<{ x: number; y: number } | null>(null);
+  const reverseTimerRef = useRef<number | null>(null);
   const [keyboardSteer, setKeyboardSteer] = useState(0);
 
   // UI Reactive States (for HUD & Modals)
@@ -369,6 +374,11 @@ export default function App() {
     const clearActiveInputs = () => {
       keysRef.current = {};
       steerAxisRef.current = null;
+      moveAxisRef.current = null;
+      if (reverseTimerRef.current !== null) {
+        window.clearTimeout(reverseTimerRef.current);
+        reverseTimerRef.current = null;
+      }
       setKeyboardSteer(0);
       playerVehicleRef.current.isHonking = false;
       sound.stopHorn();
@@ -690,6 +700,7 @@ export default function App() {
             left: Boolean(keys['KeyA'] || keys['ArrowLeft']),
             right: Boolean(keys['KeyD'] || keys['ArrowRight']),
             sprint: Boolean(keys['ShiftLeft'] || keys['ShiftRight']),
+            moveAxis: moveAxisRef.current,
           },
           delta,
           cityMapRef.current.buildings
@@ -991,10 +1002,21 @@ export default function App() {
     if (code) {
       keysRef.current[code] = active;
       if (action === 'brake') {
-        // Touch has no separate reverse key like keyboard's S, so the single
-        // brake pedal doubles as reverse once the vehicle has stopped -
-        // mirrors S's brake-then-reverse behavior, just on one pedal.
-        keysRef.current['KeyS'] = active;
+        // Touch has no separate reverse key like keyboard's S. A tap only
+        // brakes; holding the pedal past the delay engages reverse, so a
+        // long stop at a light doesn't roll the truck backwards.
+        if (reverseTimerRef.current !== null) {
+          window.clearTimeout(reverseTimerRef.current);
+          reverseTimerRef.current = null;
+        }
+        if (active) {
+          reverseTimerRef.current = window.setTimeout(() => {
+            reverseTimerRef.current = null;
+            keysRef.current['KeyS'] = true;
+          }, TOUCH_REVERSE_HOLD_MS);
+        } else {
+          keysRef.current['KeyS'] = false;
+        }
       }
       if (action === 'horn') {
         playerVehicleRef.current.isHonking = active;
@@ -1005,6 +1027,10 @@ export default function App() {
   };
 
   // Handle Touch steering wheel (analog, -1..1, or null when let go)
+  const handleVirtualMove = (value: { x: number; y: number } | null) => {
+    moveAxisRef.current = value;
+  };
+
   const handleVirtualSteer = (value: number | null) => {
     steerAxisRef.current = value;
   };
@@ -1092,8 +1118,11 @@ export default function App() {
         <VirtualControls
           onInput={handleVirtualInput}
           onSteerChange={handleVirtualSteer}
+          onMoveChange={handleVirtualMove}
           keyboardSteer={keyboardSteer}
           showPedals={isTouchDevice}
+          inVehicle={inVehicle}
+          onToggleEnterExit={toggleEnterExitVehicle}
         />
       )}
 
