@@ -64,3 +64,15 @@
     background-color: rgb(127 29 29);
   }
 }
+
+/* Touch: no pull-to-refresh / edge-swipe navigation / double-tap zoom while
+   driving. Scrollable modals still scroll (they set their own overflow). */
+html,
+body {
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+
+canvas {
+  touch-action: none;
+}

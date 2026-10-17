@@ -1,0 +1,10 @@
+{
+  "name": "KAMAZ RP",
+  "short_name": "KAMAZ RP",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
