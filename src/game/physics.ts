@@ -311,6 +311,9 @@ export class PhysicsEngine {
       left: boolean;
       right: boolean;
       sprint: boolean;
+      // Analog move stick (touch), screen axes in -1..1. Overrides the
+      // digital keys while held; its length scales the walking speed.
+      moveAxis?: { x: number; y: number } | null;
     },
     delta: number,
     buildings: Building[]
@@ -321,6 +324,13 @@ export class PhysicsEngine {
     if (inputs.down) dy += 1;
     if (inputs.left) dx -= 1;
     if (inputs.right) dx += 1;
+    let analogScale = 1;
+    const axis = inputs.moveAxis;
+    if (axis && (axis.x !== 0 || axis.y !== 0)) {
+      dx = axis.x;
+      dy = axis.y;
+      analogScale = Math.max(0.35, Math.min(1, Math.hypot(axis.x, axis.y)));
+    }
 
     const isMoving = dx !== 0 || dy !== 0;
     if (isMoving) {
@@ -330,7 +340,7 @@ export class PhysicsEngine {
 
       player.angle = Math.atan2(dy, dx);
       const baseSpeed = inputs.sprint ? 5.5 : 3.2;
-      player.speed = baseSpeed;
+      player.speed = baseSpeed * analogScale;
       player.isRunning = inputs.sprint;
 
       const nextX = player.x + dx * player.speed * 60 * delta;

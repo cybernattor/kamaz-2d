@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, ArrowDown, Volume2, ParkingSquare, Car, Settings, Zap } from 'lucide-react';
+import { ArrowUp, ArrowDown, Volume2, ParkingSquare, Car, Settings, Zap, Footprints } from 'lucide-react';
 
 interface VirtualControlsProps {
   /** Discrete pedal/button inputs. Steering is handled separately via onSteerChange. */
@@ -12,6 +12,8 @@ interface VirtualControlsProps {
    * touch+keyboard devices.
    */
   onSteerChange: (value: number | null) => void;
+  /** On-foot movement: x/y in -1..1 (screen axes), null when released. */
+  onMoveChange: (value: { x: number; y: number } | null) => void;
   keyboardSteer: number;
   /** Touch device: floating steering zone + pedals. Desktop gets just the wheel. */
   showPedals: boolean;
@@ -35,6 +37,15 @@ const STICK_RADIUS = 64;
 const STICK_DEAD_ZONE = 0.08;
 const STICK_CURVE = 1.4;
 const WHEEL_SIZE = 96;
+const MOVE_DEAD_ZONE = 0.15;
+
+/** Radial dead zone for the on-foot stick; magnitude rescaled to 0..1. */
+export function shapeMove(rawX: number, rawY: number): { x: number; y: number } {
+  const magnitude = Math.hypot(rawX, rawY);
+  if (magnitude < MOVE_DEAD_ZONE) return { x: 0, y: 0 };
+  const scaled = Math.min(1, (magnitude - MOVE_DEAD_ZONE) / (1 - MOVE_DEAD_ZONE));
+  return { x: (rawX / magnitude) * scaled, y: (rawY / magnitude) * scaled };
+}
 
 const LAYOUT_KEY = 'kamaz.touchLayout';
 const HINT_KEY = 'kamaz.touchHintSeen';
@@ -93,31 +104,49 @@ export function shapeSteer(raw: number): number {
  */
 const SteeringStick: React.FC<{
   onChange: (value: number | null) => void;
+  /** On foot the same zone becomes a free 2D move stick (x/y in -1..1). */
+  mode: 'steer' | 'move';
+  onMove: (value: { x: number; y: number } | null) => void;
   keyboardSteer: number;
   floating: boolean;
   lefty: boolean;
-}> = ({ onChange, keyboardSteer, floating, lefty }) => {
+}> = ({ onChange, mode, onMove, keyboardSteer, floating, lefty }) => {
   const zoneRef = useRef<HTMLDivElement | null>(null);
   const activePointerId = useRef<number | null>(null);
   const originClientX = useRef(0);
+  const originClientY = useRef(0);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onMoveRef = useRef(onMove);
+  onMoveRef.current = onMove;
+  const [moveVec, setMoveVec] = useState<{ x: number; y: number } | null>(null);
   const [pointerSteer, setPointerSteer] = useState<number | null>(null);
   const [origin, setOrigin] = useState<{ x: number; y: number } | null>(null);
 
-  const updateFromClientX = useCallback((clientX: number) => {
-    const value = shapeSteer((clientX - originClientX.current) / STICK_RADIUS);
-    setPointerSteer(value);
-    onChangeRef.current(value);
-  }, []);
+  const updateFromClient = useCallback(
+    (clientX: number, clientY: number) => {
+      if (mode === 'move') {
+        const vec = shapeMove((clientX - originClientX.current) / STICK_RADIUS, (clientY - originClientY.current) / STICK_RADIUS);
+        setMoveVec(vec);
+        onMoveRef.current(vec);
+        return;
+      }
+      const value = shapeSteer((clientX - originClientX.current) / STICK_RADIUS);
+      setPointerSteer(value);
+      onChangeRef.current(value);
+    },
+    [mode]
+  );
 
   const release = useCallback(() => {
     if (activePointerId.current === null) return;
     activePointerId.current = null;
     setPointerSteer(null);
+    setMoveVec(null);
     setOrigin(null);
-    onChangeRef.current(null);
-  }, []);
+    if (mode === 'move') onMoveRef.current(null);
+    else onChangeRef.current(null);
+  }, [mode]);
 
   // Never leave steering latched if the controls unmount mid-drag.
   useEffect(() => release, [release]);
@@ -137,17 +166,19 @@ const SteeringStick: React.FC<{
       const x = Math.max(half, Math.min(rect.width - half, e.clientX - rect.left));
       const y = Math.max(half, Math.min(rect.height - half, e.clientY - rect.top));
       originClientX.current = rect.left + x;
+      originClientY.current = rect.top + y;
       setOrigin({ x, y });
     } else {
       originClientX.current = rect.left + rect.width / 2;
+      originClientY.current = rect.top + rect.height / 2;
     }
-    updateFromClientX(e.clientX);
+    updateFromClient(e.clientX, e.clientY);
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (activePointerId.current !== e.pointerId) return;
     e.preventDefault();
-    updateFromClientX(e.clientX);
+    updateFromClient(e.clientX, e.clientY);
   };
 
   const handleEnd = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -156,7 +187,7 @@ const SteeringStick: React.FC<{
   };
 
   const displayedSteer = pointerSteer ?? keyboardSteer;
-  const active = pointerSteer !== null;
+  const active = pointerSteer !== null || moveVec !== null;
 
   const inset = lefty ? 'right' : 'left';
   const restPosition: React.CSSProperties = {
@@ -167,7 +198,22 @@ const SteeringStick: React.FC<{
     ? { left: origin.x, top: origin.y, transform: 'translate(-50%, -50%)' }
     : restPosition;
 
-  const wheel = (
+  const wheel = mode === 'move' ? (
+    <div
+      id="vmove-base"
+      className={`pointer-events-none absolute rounded-full border bg-slate-950/60 transition-colors ${
+        active ? 'border-cyan-400/80' : 'border-slate-600/70'
+      }`}
+      style={{ width: WHEEL_SIZE, height: WHEEL_SIZE, ...(floating ? wheelPosition : { left: 0, top: 0 }) }}
+    >
+      <div
+        className="absolute left-1/2 top-1/2 h-10 w-10 rounded-full border border-cyan-300/70 bg-cyan-900/60"
+        style={{
+          transform: `translate(calc(-50% + ${(moveVec?.x ?? 0) * (WHEEL_SIZE / 2 - 8)}px), calc(-50% + ${(moveVec?.y ?? 0) * (WHEEL_SIZE / 2 - 8)}px))`,
+        }}
+      />
+    </div>
+  ) : (
     <div
       id="vwheel-base"
       className={`pointer-events-none absolute rounded-full border bg-slate-950/70 shadow-[0_8px_20px_rgba(2,6,23,0.45),inset_0_0_0_1px_rgba(255,255,255,0.05)] transition-colors ${
@@ -215,7 +261,7 @@ const SteeringStick: React.FC<{
           : 'pointer-events-auto relative select-none'
       }
       role="slider"
-      aria-label="Руль"
+      aria-label={mode === 'move' ? 'Движение' : 'Руль'}
       aria-valuemin={-1}
       aria-valuemax={1}
       aria-valuenow={Number(displayedSteer.toFixed(2))}
@@ -294,6 +340,7 @@ const SMALL_BTN =
 export const VirtualControls: React.FC<VirtualControlsProps> = ({
   onInput,
   onSteerChange,
+  onMoveChange,
   keyboardSteer,
   showPedals,
   inVehicle,
@@ -388,6 +435,9 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
           it lives outside the bottom bar that only wraps the pedals. */}
       {showPedals && (
         <SteeringStick
+          key={inVehicle ? 'steer' : 'move'}
+          mode={inVehicle ? 'steer' : 'move'}
+          onMove={onMoveChange}
           onChange={onSteerChange}
           keyboardSteer={keyboardSteer}
           floating
@@ -402,8 +452,15 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
           paddingRight: 'max(env(safe-area-inset-right), 0.75rem)',
         }}
       >
-        {!showPedals && (
-          <SteeringStick onChange={onSteerChange} keyboardSteer={keyboardSteer} floating={false} lefty={false} />
+        {!showPedals && inVehicle && (
+          <SteeringStick
+            mode="steer"
+            onMove={onMoveChange}
+            onChange={onSteerChange}
+            keyboardSteer={keyboardSteer}
+            floating={false}
+            lefty={false}
+          />
         )}
 
         {showPedals && (
@@ -463,7 +520,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
                 <Car className="h-5 w-5" />
                 <span className="font-mono text-[11px] font-bold">{inVehicle ? 'Выйти' : 'Сесть'}</span>
               </button>
-              <button
+              {inVehicle && <button
                 id="vbtn-cruise"
                 onClick={toggleCruise}
                 className={`pointer-events-auto ${SMALL_BTN} flex-col text-[10px] font-bold font-mono leading-none ${
@@ -474,7 +531,9 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
               >
                 <Zap className="h-4 w-4" />
                 AUTO
-              </button>
+              </button>}
+              {inVehicle && (
+                <>
               <PedalButton
                 id="vbtn-horn"
                 label="Подать сигнал"
@@ -491,10 +550,29 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
                 className={`${SMALL_BTN} border-slate-500 bg-slate-800/60 active:bg-rose-600`}
                 icon={<ParkingSquare className="h-5 w-5" />}
               />
+                </>
+              )}
             </div>
 
+            {/* On foot: one big sprint button replaces the pedals */}
+            {!inVehicle && (
+              <PedalButton
+                id="vbtn-sprint"
+                label="Бег"
+                haptic={10}
+                onActiveChange={(active) => onInput('handbrake', active)}
+                className="flex h-24 w-24 flex-col items-center justify-center rounded-2xl border border-cyan-500 bg-cyan-700/60 font-mono text-sm font-bold text-white shadow-xl active:bg-cyan-500"
+                icon={
+                  <>
+                    <Footprints className="h-7 w-7" />
+                    <span>БЕГ</span>
+                  </>
+                }
+              />
+            )}
+
             {/* Pedals: brake next to gas so one thumb slides between them */}
-            <div className={`flex items-end gap-2 ${side}`}>
+            {inVehicle && <div className={`flex items-end gap-2 ${side}`}>
               <PedalButton
                 id="vbtn-brake"
                 label="Тормоз (удерживать — назад)"
@@ -528,7 +606,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
                   </>
                 }
               />
-            </div>
+            </div>}
           </div>
         )}
       </div>
@@ -538,7 +616,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
           id="vctrl-hint"
           className="pointer-events-none absolute left-1/2 top-1/3 w-[min(24rem,calc(100%-2rem))] -translate-x-1/2 rounded-xl border border-cyan-500/50 bg-slate-950/90 p-3 text-center text-xs leading-relaxed text-slate-200 shadow-2xl"
         >
-          <b className="text-cyan-300">Слева</b> — коснитесь и ведите палец вбок: руль. <b className="text-emerald-300">Справа</b> — газ.
+          <b className="text-cyan-300">Слева</b> — коснитесь и ведите палец вбок: руль (пешком — джойстик в любую сторону). <b className="text-emerald-300">Справа</b> — газ.
           <br />
           <b className="text-rose-300">СТОП</b>: тап — тормоз, удержание — задний ход. <b className="text-emerald-300">AUTO</b> — газ включён сам.
         </div>

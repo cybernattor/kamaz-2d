@@ -157,6 +157,7 @@ export default function App() {
   // Analog steering from the touch wheel: -1..1 while held, null when the
   // wheel isn't being touched (steering then falls back to the A/D keys).
   const steerAxisRef = useRef<number | null>(null);
+  const moveAxisRef = useRef<{ x: number; y: number } | null>(null);
   const reverseTimerRef = useRef<number | null>(null);
   const [keyboardSteer, setKeyboardSteer] = useState(0);
 
@@ -373,6 +374,7 @@ export default function App() {
     const clearActiveInputs = () => {
       keysRef.current = {};
       steerAxisRef.current = null;
+      moveAxisRef.current = null;
       if (reverseTimerRef.current !== null) {
         window.clearTimeout(reverseTimerRef.current);
         reverseTimerRef.current = null;
@@ -698,6 +700,7 @@ export default function App() {
             left: Boolean(keys['KeyA'] || keys['ArrowLeft']),
             right: Boolean(keys['KeyD'] || keys['ArrowRight']),
             sprint: Boolean(keys['ShiftLeft'] || keys['ShiftRight']),
+            moveAxis: moveAxisRef.current,
           },
           delta,
           cityMapRef.current.buildings
@@ -1024,6 +1027,10 @@ export default function App() {
   };
 
   // Handle Touch steering wheel (analog, -1..1, or null when let go)
+  const handleVirtualMove = (value: { x: number; y: number } | null) => {
+    moveAxisRef.current = value;
+  };
+
   const handleVirtualSteer = (value: number | null) => {
     steerAxisRef.current = value;
   };
@@ -1111,6 +1118,7 @@ export default function App() {
         <VirtualControls
           onInput={handleVirtualInput}
           onSteerChange={handleVirtualSteer}
+          onMoveChange={handleVirtualMove}
           keyboardSteer={keyboardSteer}
           showPedals={isTouchDevice}
           inVehicle={inVehicle}
