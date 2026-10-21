@@ -3,7 +3,7 @@ import { ArrowUp, ArrowDown, Volume2, ParkingSquare, Car, Settings, Zap, Footpri
 
 interface VirtualControlsProps {
   /** Discrete pedal/button inputs. Steering is handled separately via onSteerChange. */
-  onInput: (action: 'throttle' | 'brake' | 'handbrake' | 'horn', active: boolean) => void;
+  onInput: (action: 'throttle' | 'brake' | 'handbrake' | 'horn' | 'reverse', active: boolean) => void;
   /**
    * Continuous steering: -1 (full left) .. 1 (full right), 0 = centered
    * while held. `null` means the stick isn't being touched at all, which
@@ -48,7 +48,7 @@ export function shapeMove(rawX: number, rawY: number): { x: number; y: number } 
 }
 
 const LAYOUT_KEY = 'kamaz.touchLayout';
-const HINT_KEY = 'kamaz.touchHintSeen';
+const HINT_KEY = 'kamaz.touchHintSeen.v2';
 
 interface TouchLayout {
   lefty: boolean;
@@ -349,6 +349,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
   const [layout, setLayout] = useState<TouchLayout>(loadLayout);
   const [showSettings, setShowSettings] = useState(false);
   const [cruise, setCruise] = useState(false);
+  const [reverse, setReverse] = useState(false);
   const [showHint, setShowHint] = useState(() => {
     if (!showPedals) return false;
     try {
@@ -358,15 +359,21 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
     }
   });
 
-  // Gas can come from the pedal or from "AUTO" (cruise); brake interrupts
-  // only the cruise part, so a manual gas+brake combo still works.
-  const throttle = useRef({ gas: false, brake: false, cruise: false, sent: false });
+  // The gas pedal drives forward, or backward while R is latched. AUTO
+  // (cruise) only holds forward throttle, and brake interrupts only the
+  // cruise part, so a manual gas+brake combo still works.
+  const throttle = useRef({ gas: false, brake: false, cruise: false, reverse: false, sentThrottle: false, sentReverse: false });
   const syncThrottle = () => {
     const t = throttle.current;
-    const effective = t.gas || (t.cruise && !t.brake);
-    if (effective !== t.sent) {
-      t.sent = effective;
-      onInput('throttle', effective);
+    const forward = !t.reverse && (t.gas || (t.cruise && !t.brake));
+    const backward = t.reverse && t.gas;
+    if (forward !== t.sentThrottle) {
+      t.sentThrottle = forward;
+      onInput('throttle', forward);
+    }
+    if (backward !== t.sentReverse) {
+      t.sentReverse = backward;
+      onInput('reverse', backward);
     }
   };
 
@@ -389,9 +396,11 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
 
   // Leaving the vehicle (or unmounting) must not leave cruise driving a pedestrian.
   useEffect(() => {
-    if (!inVehicle && throttle.current.cruise) {
+    if (!inVehicle && (throttle.current.cruise || throttle.current.reverse)) {
       throttle.current.cruise = false;
+      throttle.current.reverse = false;
       setCruise(false);
+      setReverse(false);
       syncThrottle();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -400,6 +409,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
   useEffect(
     () => () => {
       throttle.current.cruise = false;
+      throttle.current.reverse = false;
       throttle.current.gas = false;
       throttle.current.brake = false;
       syncThrottle();
@@ -418,7 +428,24 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
     hapticTick(15);
     dismissHint();
     throttle.current.cruise = !throttle.current.cruise;
+    if (throttle.current.cruise) {
+      // Cruise is forward-only.
+      throttle.current.reverse = false;
+      setReverse(false);
+    }
     setCruise(throttle.current.cruise);
+    syncThrottle();
+  };
+
+  const toggleReverse = () => {
+    hapticTick(15);
+    dismissHint();
+    throttle.current.reverse = !throttle.current.reverse;
+    if (throttle.current.reverse) {
+      throttle.current.cruise = false;
+      setCruise(false);
+    }
+    setReverse(throttle.current.reverse);
     syncThrottle();
   };
 
@@ -573,9 +600,20 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
 
             {/* Pedals: brake next to gas so one thumb slides between them */}
             {inVehicle && <div className={`flex items-end gap-2 ${side}`}>
+              <button
+                id="vbtn-reverse"
+                onClick={toggleReverse}
+                className={`pointer-events-auto flex h-14 w-14 items-center justify-center rounded-2xl border font-mono text-xl font-bold text-white shadow-xl select-none ${
+                  reverse ? 'border-amber-300 bg-amber-600 ring-2 ring-amber-300/60' : 'border-slate-500 bg-slate-800/60'
+                }`}
+                aria-pressed={reverse}
+                aria-label="Задний ход"
+              >
+                R
+              </button>
               <PedalButton
                 id="vbtn-brake"
-                label="Тормоз (удерживать — назад)"
+                label="Тормоз"
                 haptic={12}
                 onActiveChange={(active) => {
                   throttle.current.brake = active;
@@ -598,11 +636,15 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
                   throttle.current.gas = active;
                   syncThrottle();
                 }}
-                className="flex h-24 w-24 flex-col items-center justify-center rounded-2xl border border-emerald-500 bg-emerald-600/60 font-mono text-sm font-bold text-white shadow-xl active:bg-emerald-500"
+                className={`flex h-24 w-24 flex-col items-center justify-center rounded-2xl border font-mono text-sm font-bold text-white shadow-xl ${
+                  reverse
+                    ? 'border-amber-400 bg-amber-600/60 active:bg-amber-500'
+                    : 'border-emerald-500 bg-emerald-600/60 active:bg-emerald-500'
+                }`}
                 icon={
                   <>
-                    <ArrowUp className="h-7 w-7" />
-                    <span>ГАЗ</span>
+                    {reverse ? <ArrowDown className="h-7 w-7" /> : <ArrowUp className="h-7 w-7" />}
+                    <span>{reverse ? 'НАЗАД' : 'ГАЗ'}</span>
                   </>
                 }
               />
@@ -618,7 +660,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
         >
           <b className="text-cyan-300">Слева</b> — коснитесь и ведите палец вбок: руль (пешком — джойстик в любую сторону). <b className="text-emerald-300">Справа</b> — газ.
           <br />
-          <b className="text-rose-300">СТОП</b>: тап — тормоз, удержание — задний ход. <b className="text-emerald-300">AUTO</b> — газ включён сам.
+          <b className="text-amber-300">R</b> — задний ход (газ едет назад), нажмите ещё раз, чтобы вернуть вперёд. <b className="text-emerald-300">AUTO</b> — газ включён сам.
         </div>
       )}
     </div>

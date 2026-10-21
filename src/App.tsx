@@ -58,9 +58,6 @@ function useLazyRef<T>(create: () => T) {
   return ref as React.MutableRefObject<T>;
 }
 
-/** How long the touch brake pedal must be held before it engages reverse. */
-const TOUCH_REVERSE_HOLD_MS = 350;
-
 /**
  * `md:hidden` on the virtual joystick gated on viewport width, not on
  * whether the device has touch input. Most tablets are wider than the 768px
@@ -158,8 +155,6 @@ export default function App() {
   // wheel isn't being touched (steering then falls back to the A/D keys).
   const steerAxisRef = useRef<number | null>(null);
   const moveAxisRef = useRef<{ x: number; y: number } | null>(null);
-  const touchBrakeSinceRef = useRef<number | null>(null);
-  const touchReverseRef = useRef(false);
   const [keyboardSteer, setKeyboardSteer] = useState(0);
 
   // UI Reactive States (for HUD & Modals)
@@ -376,8 +371,6 @@ export default function App() {
       keysRef.current = {};
       steerAxisRef.current = null;
       moveAxisRef.current = null;
-      touchBrakeSinceRef.current = null;
-      touchReverseRef.current = false;
       setKeyboardSteer(0);
       playerVehicleRef.current.isHonking = false;
       sound.stopHorn();
@@ -669,24 +662,12 @@ export default function App() {
       const isCar = inVehicleStateRef.current;
 
       if (isCar) {
-        // Touch brake pedal: held at a standstill it switches to reverse
-        // and stays reverse until released (no brake while reversing).
-        const brakeSince = touchBrakeSinceRef.current;
-        if (
-          brakeSince !== null &&
-          !touchReverseRef.current &&
-          performance.now() - brakeSince > TOUCH_REVERSE_HOLD_MS &&
-          Math.abs(v.speed) < 0.3
-        ) {
-          touchReverseRef.current = true;
-        }
-        const touchReverse = touchReverseRef.current;
         physicsRef.current.updatePlayerVehicle(
           v,
           {
             throttle: Boolean(keys['KeyW'] || keys['ArrowUp']),
-            brake: !touchReverse && Boolean(keys['Space'] || keys['ArrowDown']),
-            reverse: touchReverse || Boolean(keys['KeyS']),
+            brake: Boolean(keys['Space'] || keys['ArrowDown']),
+            reverse: Boolean(keys['KeyS']),
             steerLeft: Boolean(keys['KeyA'] || keys['ArrowLeft']),
             steerRight: Boolean(keys['KeyD'] || keys['ArrowRight']),
             handbrake: Boolean(keys['ShiftLeft'] || keys['ShiftRight']),
@@ -698,7 +679,7 @@ export default function App() {
         // Synchronize engine sound pitch
         const isThrottle = Boolean(keys['KeyW'] || keys['ArrowUp']);
         const isKamaz = v.type.startsWith('kamaz');
-        const isBraking = !touchReverse && Boolean(keys['Space'] || keys['ArrowDown']);
+        const isBraking = Boolean(keys['Space'] || keys['ArrowDown']);
         if (isKamaz && isBraking && !airBrakeWasPressedRef.current) sound.playAirBrake();
         airBrakeWasPressedRef.current = isBraking;
         sound.updateEngine(Math.round(v.speed * 3.6), isThrottle, isKamaz);
@@ -999,7 +980,7 @@ export default function App() {
 
   // Handle Touch/Virtual inputs (pedals, handbrake, horn — discrete)
   const handleVirtualInput = (
-    action: 'throttle' | 'brake' | 'handbrake' | 'horn',
+    action: 'throttle' | 'brake' | 'handbrake' | 'horn' | 'reverse',
     active: boolean
   ) => {
     sound.init();
@@ -1008,20 +989,11 @@ export default function App() {
       brake: 'Space',
       handbrake: 'ShiftLeft',
       horn: 'KeyH',
+      reverse: 'KeyS',
     };
     const code = map[action];
     if (code) {
       keysRef.current[code] = active;
-      if (action === 'brake') {
-        // Touch has no separate reverse key like keyboard's S. A tap only
-        // brakes; holding the pedal past the delay engages reverse, so a
-        // long stop at a light doesn't roll the truck backwards.
-        // The loop turns a long hold at standstill into reverse (see
-        // touchReverse below); brake and reverse can't be applied together
-        // because the brake pins the car at zero speed.
-        touchBrakeSinceRef.current = active ? performance.now() : null;
-        touchReverseRef.current = false;
-      }
       if (action === 'horn') {
         playerVehicleRef.current.isHonking = active;
         if (active) sound.startHorn(playerVehicleRef.current.type.startsWith('kamaz'));

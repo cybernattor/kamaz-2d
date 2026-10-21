@@ -2,8 +2,8 @@ import { integrateVehicleSpeed } from '../src/game/vehicleDynamics';
 import { VEHICLE_CONFIGS } from '../src/game/vehicleConfigs';
 
 // Brake pins a standing car at zero speed, so reverse only works when the
-// brake input is released. The touch brake pedal relies on this: after a hold
-// at standstill App.tsx drops `brake` and raises `reverse`.
+// brake input is released. The touch R toggle relies on this: it routes the
+// gas pedal to `reverse`, never combining it with `brake`.
 function settle(input: { brake?: boolean; reverse?: boolean }) {
   const config = Object.values(VEHICLE_CONFIGS)[0];
   let speed = 0;
