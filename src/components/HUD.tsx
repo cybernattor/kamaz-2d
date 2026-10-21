@@ -22,11 +22,15 @@ import {
   TriangleAlert,
   Menu,
   X,
+  SlidersHorizontal,
+  ArrowLeft,
+  ArrowRight,
 } from 'lucide-react';
 import { Minimap } from './Minimap';
 import { NetworkFeed, FeedEvent } from './NetworkFeed';
 import { OnlinePanel } from './OnlinePanel';
 import { CityMap } from '../game/cityMap';
+import { formatRubles, repairCost } from '../game/repair';
 
 interface HUDProps {
   streetName: string;
@@ -54,6 +58,7 @@ interface HUDProps {
   onOpenMissions: () => void;
   onOpenMultiplayer: () => void;
   onRepairVehicle: () => void;
+  onOpenControlSettings: () => void;
   onToggleHeadlights: () => void;
   onToggleTurnSignal: (signal: 'left' | 'right' | 'hazard') => void;
   onToggleEnterExitVehicle: () => void;
@@ -64,6 +69,12 @@ interface HUDProps {
   roomId: string;
   unreadChat: number;
 }
+
+const TOP_BTN =
+  'flex h-12 w-12 shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg border text-[10px] font-bold leading-none cursor-pointer select-none';
+
+const QUICK_BTN =
+  'flex h-12 w-12 flex-col items-center justify-center gap-0.5 rounded-lg border text-[10px] font-bold leading-none shadow-lg cursor-pointer select-none';
 
 export const HUD: React.FC<HUDProps> = ({
   streetName,
@@ -91,6 +102,7 @@ export const HUD: React.FC<HUDProps> = ({
   onOpenMissions,
   onOpenMultiplayer,
   onRepairVehicle,
+  onOpenControlSettings,
   onToggleHeadlights,
   onToggleTurnSignal,
   onToggleEnterExitVehicle,
@@ -136,6 +148,13 @@ export const HUD: React.FC<HUDProps> = ({
   // don't visually kiss the pedals.
   const [showMenu, setShowMenu] = useState(false);
 
+  // Service station pricing: the repair button shows the bill for the
+  // current damage and greys out when the car is intact or you can't pay.
+  const repairPrice = playerVehicle ? repairCost(playerVehicle.health, playerVehicle.maxHealth) : 0;
+  const repairDisabled = repairPrice === 0 || playerChar.money < repairPrice;
+  const repairTitle =
+    repairPrice === 0 ? 'Машина цела' : playerChar.money < repairPrice ? `Не хватает денег: ${formatRubles(repairPrice)}` : `Ремонт: ${formatRubles(repairPrice)}`;
+
   return (
     <div
       id="game-hud-root"
@@ -151,42 +170,52 @@ export const HUD: React.FC<HUDProps> = ({
       <div id="hud-top-bar" className="relative w-full pointer-events-auto">
         {isTouchDevice ? (
           <div className="flex items-center gap-0 pr-[126px] bg-slate-950/90 border border-slate-700/80 rounded-xl shadow-lg overflow-hidden">
-            <div className="min-w-0 flex-1 flex items-center gap-1.5 px-2.5 py-1.5">
-              <Compass className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <span className="font-mono truncate text-xs font-bold text-cyan-400">{streetName}</span>
-              {showFps && <span className="text-xs text-emerald-400 font-mono shrink-0">{fps}</span>}
-            </div>
-            <div className="flex items-center gap-1 border-l border-slate-700/70 px-1 py-1 shrink-0">
-            <button
-              id="btn-open-multiplayer"
-              onClick={() => { setShowMenu(false); onOpenMultiplayer(); }}
-              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md border transition-colors cursor-pointer ${
-                multiplayerStatus === 'connected'
-                  ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 hover:bg-emerald-900/60'
-                  : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700'
-              }`}
-              title={multiplayerStatus === 'connected' ? `Чат — онлайн (${onlineCount + 1}) [Enter]` : 'Открыть чат [Enter]'}
-              aria-label="Открыть чат"
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              <span className="text-[10px] font-bold">Чат</span>
-              {unreadChat > 0 && (
-                <span className="min-w-4 rounded-full bg-rose-500 px-1 text-center text-[10px] font-bold leading-4 text-white animate-pulse">
-                  {unreadChat > 9 ? '9+' : unreadChat}
-                </span>
-              )}
-              <span className="text-[10px] font-bold font-mono">
-                {multiplayerStatus === 'connected' ? onlineCount + 1 : '—'}
-              </span>
-            </button>
+                        <div className="flex items-center gap-1 px-1 py-1 shrink-0">
+              <button
+                id="btn-open-garage"
+                onClick={() => { setShowMenu(false); onOpenGarage(); }}
+                className={`${TOP_BTN} bg-gradient-to-b from-orange-600 to-amber-700 border-amber-400/60 text-white`}
+                aria-label="Открыть гараж"
+              >
+                <Car className="h-4 w-4" aria-hidden="true" />
+                <span>Гараж</span>
+              </button>
+              <button
+                id="btn-open-missions"
+                onClick={() => { setShowMenu(false); onOpenMissions(); }}
+                className={`${TOP_BTN} bg-gradient-to-b from-blue-600 to-indigo-700 border-indigo-400/60 text-white`}
+                aria-label="Открыть задания"
+              >
+                <Briefcase className="h-4 w-4" aria-hidden="true" />
+                <span>Задания</span>
+              </button>
+              <button
+                id="btn-open-multiplayer"
+                onClick={() => { setShowMenu(false); onOpenMultiplayer(); }}
+                className={`${TOP_BTN} relative ${
+                  multiplayerStatus === 'connected'
+                    ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300'
+                    : 'bg-slate-800/80 border-slate-600 text-slate-200'
+                }`}
+                aria-label="Открыть чат"
+              >
+                <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                <span>Чат{multiplayerStatus === 'connected' ? ` ${onlineCount + 1}` : ''}</span>
+                {unreadChat > 0 && (
+                  <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-rose-500 px-1 text-center text-[10px] font-bold leading-4 text-white animate-pulse">
+                    {unreadChat > 9 ? '9+' : unreadChat}
+                  </span>
+                )}
+              </button>
               <button
                 id="btn-touch-menu"
                 onClick={() => setShowMenu((v) => !v)}
-                className="min-h-11 min-w-11 flex items-center justify-center rounded-md bg-slate-800/80 text-slate-200 cursor-pointer"
+                className={`${TOP_BTN} bg-slate-800/80 border-slate-600 text-slate-200`}
                 aria-label={showMenu ? 'Закрыть меню' : 'Открыть меню'}
                 aria-expanded={showMenu}
               >
-                {showMenu ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+                {showMenu ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+                <span>Меню</span>
               </button>
             </div>
           </div>
@@ -328,6 +357,15 @@ export const HUD: React.FC<HUDProps> = ({
             className="absolute left-0 top-full z-30 mt-1 flex max-w-[calc(100%-134px)] flex-wrap items-center gap-1.5 rounded-xl border border-slate-700/80 bg-slate-950/95 p-1.5 shadow-xl"
           >
             <button
+              id="btn-control-settings"
+              onClick={() => { setShowMenu(false); onOpenControlSettings(); }}
+              className="min-h-11 flex items-center justify-center gap-1.5 rounded-md bg-slate-800/80 px-2.5 text-slate-200 cursor-pointer"
+              aria-label="Настройки управления"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+              <span className="text-[10px] font-bold">Управление</span>
+            </button>
+            <button
               id="btn-toggle-day-night"
               onClick={onToggleDayNight}
               className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8 min-w-8'} flex items-center justify-center rounded-md bg-slate-800/80 hover:bg-slate-700 transition-colors cursor-pointer`}
@@ -367,99 +405,17 @@ export const HUD: React.FC<HUDProps> = ({
               </button>
             </div>
 
-            <button
-              id="btn-open-garage"
-              onClick={() => { setShowMenu(false); onOpenGarage(); }}
-              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow cursor-pointer transition-all`}
-              title="Гараж [G]"
-              aria-label="Открыть гараж"
-            >
-              <Car className="w-3.5 h-3.5" />
-              <span className="text-[10px] font-bold font-mono">G</span>
-            </button>
-
-            <button
-              id="btn-open-missions"
-              onClick={() => { setShowMenu(false); onOpenMissions(); }}
-              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow cursor-pointer transition-all`}
-              title="Задания [J]"
-              aria-label="Открыть задания"
-            >
-              <Briefcase className="w-3.5 h-3.5" />
-              <span className="text-[10px] font-bold font-mono">J</span>
-            </button>
-          <button
-            id="btn-toggle-headlights"
-            onClick={onToggleHeadlights}
-            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border cursor-pointer ${
-              playerVehicle && playerVehicle.headlights > 0
-                ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
-                : 'bg-slate-800/80 text-slate-300 border-slate-700'
-            }`}
-            aria-label="Фары"
-            title="Фары"
-          >
-            <Lightbulb className="w-4 h-4" />
-          </button>
-
-          <button
-            id="btn-turn-left"
-            onClick={() => onToggleTurnSignal('left')}
-            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border font-bold cursor-pointer ${
-              playerVehicle?.turnSignal === 'left'
-                ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
-                : 'bg-slate-800/80 text-slate-300 border-slate-700'
-            }`}
-            aria-label="Левый поворотник"
-          >
-            ←
-          </button>
-
-          <button
-            id="btn-turn-right"
-            onClick={() => onToggleTurnSignal('right')}
-            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border font-bold cursor-pointer ${
-              playerVehicle?.turnSignal === 'right'
-                ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
-                : 'bg-slate-800/80 text-slate-300 border-slate-700'
-            }`}
-            aria-label="Правый поворотник"
-          >
-            →
-          </button>
-
-          <button
-            id="btn-hazard-lights"
-            onClick={() => onToggleTurnSignal('hazard')}
-            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border cursor-pointer ${
-              playerVehicle?.turnSignal === 'hazard'
-                ? 'hazard-active bg-red-950 text-red-100 border-red-400'
-                : 'bg-slate-800/80 text-slate-300 border-slate-700'
-            }`}
-            aria-label="Аварийка"
-          >
-            <TriangleAlert className="h-4 w-4" aria-hidden="true" />
-          </button>
-
-          <button
-            id="btn-repair-car"
-            onClick={onRepairVehicle}
-            className="min-h-11 min-w-11 flex items-center justify-center rounded-lg bg-slate-800/80 text-cyan-300 border border-cyan-500/30 cursor-pointer"
-            aria-label="Ремонт авто"
-            title="Ремонт авто"
-          >
-            <Wrench className="w-4 h-4" />
-          </button>
           </div>
         )}
       </div>
 
-      {/* Touch: speed/gear/condition as one small chip beside the minimap
-          (the rest of the old quickbar moved into the menu and next to the
-          pedals), so the driving view keeps its height in landscape. */}
+      {/* Touch: speed/gear/condition chip plus the vehicle quick actions
+          (lights, turn signals, hazard, repair). They stay on screen with
+          a label under each icon: hiding them in the menu meant nobody
+          found them. The row wraps under the chip on narrow screens. */}
       {isTouchDevice && (
-        <div id="hud-touch-readout" className="pointer-events-none pr-[134px]">
-          <div className="inline-flex items-center gap-1.5 bg-slate-950/90 border border-slate-700/80 rounded-lg px-2.5 py-1 shadow-lg font-mono">
+        <div id="hud-touch-readout" className="pointer-events-none flex flex-wrap items-center gap-1.5 pr-[134px]">
+          <div className="inline-flex max-w-full items-center gap-1.5 whitespace-nowrap bg-slate-950/90 border border-slate-700/80 rounded-lg px-2.5 py-1 shadow-lg font-mono">
             <span className="text-base font-extrabold text-cyan-400">{speedKmH}</span>
             <span className="text-[10px] text-slate-500">км/ч</span>
             <span className="h-3 w-px bg-slate-700 mx-0.5" />
@@ -468,10 +424,79 @@ export const HUD: React.FC<HUDProps> = ({
             <span className={`text-xs font-bold ${condition > 60 ? 'text-emerald-400' : condition > 30 ? 'text-amber-400' : 'text-rose-500'}`}>
               {condition}%
             </span>
+            <span className="h-3 w-px bg-slate-700 mx-0.5" />
+            <span className="text-[11px] font-bold text-emerald-300">{formatRubles(playerChar.money)}</span>
+            {showFps && <span className="text-[10px] text-slate-500">{fps}</span>}
           </div>
+
+          {inVehicle && (
+            <div id="hud-touch-vehicle-actions" className="pointer-events-auto flex max-w-full flex-wrap items-center gap-1">
+              <button
+                id="btn-turn-left"
+                onClick={() => onToggleTurnSignal('left')}
+                className={`${QUICK_BTN} ${
+                  playerVehicle?.turnSignal === 'left'
+                    ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
+                    : 'bg-slate-900/85 text-slate-200 border-slate-600'
+                }`}
+                aria-label="Левый поворотник"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                <span>Лево</span>
+              </button>
+              <button
+                id="btn-turn-right"
+                onClick={() => onToggleTurnSignal('right')}
+                className={`${QUICK_BTN} ${
+                  playerVehicle?.turnSignal === 'right'
+                    ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
+                    : 'bg-slate-900/85 text-slate-200 border-slate-600'
+                }`}
+                aria-label="Правый поворотник"
+              >
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                <span>Право</span>
+              </button>
+              <button
+                id="btn-hazard-lights"
+                onClick={() => onToggleTurnSignal('hazard')}
+                className={`${QUICK_BTN} ${
+                  playerVehicle?.turnSignal === 'hazard'
+                    ? 'hazard-active bg-red-950 text-red-100 border-red-400'
+                    : 'bg-slate-900/85 text-slate-200 border-slate-600'
+                }`}
+                aria-label="Аварийка"
+              >
+                <TriangleAlert className="h-4 w-4" aria-hidden="true" />
+                <span>Авария</span>
+              </button>
+              <button
+                id="btn-toggle-headlights"
+                onClick={onToggleHeadlights}
+                className={`${QUICK_BTN} ${
+                  playerVehicle && playerVehicle.headlights > 0
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
+                    : 'bg-slate-900/85 text-slate-200 border-slate-600'
+                }`}
+                aria-label="Фары"
+              >
+                <Lightbulb className="h-4 w-4" aria-hidden="true" />
+                <span>Фары</span>
+              </button>
+              <button
+                id="btn-repair-car"
+                onClick={onRepairVehicle}
+                disabled={repairDisabled}
+                className={`${QUICK_BTN} bg-slate-900/85 text-cyan-300 border-cyan-500/40 disabled:opacity-40`}
+                aria-label={`Ремонт авто. ${repairTitle}`}
+              >
+                <Wrench className="h-4 w-4" aria-hidden="true" />
+                <span>{repairPrice > 0 ? formatRubles(repairPrice) : 'Ремонт'}</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
-
 
       {/* 2. MIDDLE AREA (Active Mission HUD Overlay) */}
       {activeMission && (
@@ -682,10 +707,13 @@ export const HUD: React.FC<HUDProps> = ({
           <button
             id="btn-repair-car"
             onClick={onRepairVehicle}
-            className="w-full flex items-center justify-center gap-1.5 text-xs font-mono font-bold py-1 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 transition-colors cursor-pointer"
+            disabled={repairDisabled}
+            title={`${repairTitle} · баланс ${formatRubles(playerChar.money)}`}
+            className="w-full flex items-center justify-center gap-1.5 text-xs font-mono font-bold py-1 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Wrench className="w-3.5 h-3.5" />
             <span className="sm:hidden">Ремонт [R]</span><span className="hidden sm:inline">Ремонт авто [R]</span>
+            <span className="text-emerald-300">{repairPrice > 0 ? formatRubles(repairPrice) : 'цела'}</span>
           </button>
 
           {/* Headlights & Turn Signal Controls Bar (Screenshot Match) */}

@@ -27,6 +27,7 @@ import { ChatOverlay } from './components/ChatOverlay';
 import { FullMapModal } from './components/FullMapModal';
 import type { FeedEvent } from './components/NetworkFeed';
 import { VirtualControls } from './components/VirtualControls';
+import { repairCost } from './game/repair';
 import { VEHICLE_CONFIGS } from './game/vehicleConfigs';
 import { FixedStepAccumulator } from './game/fixedStep';
 import { randomDriverName } from './game/nameGenerator';
@@ -57,9 +58,6 @@ function useLazyRef<T>(create: () => T) {
   if (ref.current === null) ref.current = create();
   return ref as React.MutableRefObject<T>;
 }
-
-/** How long the touch brake pedal must be held before it engages reverse. */
-const TOUCH_REVERSE_HOLD_MS = 350;
 
 /**
  * `md:hidden` on the virtual joystick gated on viewport width, not on
@@ -158,7 +156,6 @@ export default function App() {
   // wheel isn't being touched (steering then falls back to the A/D keys).
   const steerAxisRef = useRef<number | null>(null);
   const moveAxisRef = useRef<{ x: number; y: number } | null>(null);
-  const reverseTimerRef = useRef<number | null>(null);
   const [keyboardSteer, setKeyboardSteer] = useState(0);
 
   // UI Reactive States (for HUD & Modals)
@@ -182,6 +179,7 @@ export default function App() {
   const [targetPoi, setTargetPoi] = useState<PointOfInterest | null>(null);
 
   // Modals
+  const [showControlSettings, setShowControlSettings] = useState(false);
   const [showGarage, setShowGarage] = useState<boolean>(false);
   const [showMissions, setShowMissions] = useState<boolean>(false);
   const [showMultiplayer, setShowMultiplayer] = useState<boolean>(false);
@@ -375,10 +373,6 @@ export default function App() {
       keysRef.current = {};
       steerAxisRef.current = null;
       moveAxisRef.current = null;
-      if (reverseTimerRef.current !== null) {
-        window.clearTimeout(reverseTimerRef.current);
-        reverseTimerRef.current = null;
-      }
       setKeyboardSteer(0);
       playerVehicleRef.current.isHonking = false;
       sound.stopHorn();
@@ -572,10 +566,16 @@ export default function App() {
   }, []);
 
   // Repair vehicle
+  // Service: charged by damage, refused when the car is intact or the
+  // wallet is too light (the HUD button shows the price and greys out).
   const repairVehicle = useCallback(() => {
+    const vehicle = playerVehicleRef.current;
+    const char = playerCharRef.current;
+    const cost = repairCost(vehicle.health, vehicle.maxHealth);
+    if (cost === 0 || char.money < cost) return;
+    char.money -= cost;
+    vehicle.health = vehicle.maxHealth;
     sound.playReward();
-    playerVehicleRef.current.health = 100;
-    playerCharRef.current.health = 100;
   }, []);
 
   // Day/Night toggle
@@ -988,7 +988,7 @@ export default function App() {
 
   // Handle Touch/Virtual inputs (pedals, handbrake, horn — discrete)
   const handleVirtualInput = (
-    action: 'throttle' | 'brake' | 'handbrake' | 'horn',
+    action: 'throttle' | 'brake' | 'handbrake' | 'horn' | 'reverse',
     active: boolean
   ) => {
     sound.init();
@@ -997,27 +997,11 @@ export default function App() {
       brake: 'Space',
       handbrake: 'ShiftLeft',
       horn: 'KeyH',
+      reverse: 'KeyS',
     };
     const code = map[action];
     if (code) {
       keysRef.current[code] = active;
-      if (action === 'brake') {
-        // Touch has no separate reverse key like keyboard's S. A tap only
-        // brakes; holding the pedal past the delay engages reverse, so a
-        // long stop at a light doesn't roll the truck backwards.
-        if (reverseTimerRef.current !== null) {
-          window.clearTimeout(reverseTimerRef.current);
-          reverseTimerRef.current = null;
-        }
-        if (active) {
-          reverseTimerRef.current = window.setTimeout(() => {
-            reverseTimerRef.current = null;
-            keysRef.current['KeyS'] = true;
-          }, TOUCH_REVERSE_HOLD_MS);
-        } else {
-          keysRef.current['KeyS'] = false;
-        }
-      }
       if (action === 'horn') {
         playerVehicleRef.current.isHonking = active;
         if (active) sound.startHorn(playerVehicleRef.current.type.startsWith('kamaz'));
@@ -1102,6 +1086,7 @@ export default function App() {
         onOpenMissions={() => setShowMissions(true)}
         onOpenMultiplayer={() => setShowChat(true)}
         onRepairVehicle={repairVehicle}
+        onOpenControlSettings={() => setShowControlSettings(true)}
         onToggleHeadlights={cycleHeadlights}
         onToggleTurnSignal={toggleTurnSignal}
         onToggleEnterExitVehicle={toggleEnterExitVehicle}
@@ -1123,6 +1108,8 @@ export default function App() {
           showPedals={isTouchDevice}
           inVehicle={inVehicle}
           onToggleEnterExit={toggleEnterExitVehicle}
+          settingsOpen={showControlSettings}
+          onSettingsOpenChange={setShowControlSettings}
         />
       )}
 

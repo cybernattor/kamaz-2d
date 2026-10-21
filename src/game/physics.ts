@@ -8,7 +8,7 @@ import {
   VehicleInstance,
 } from '../types';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
-import { integrateVehicleSpeed } from './vehicleDynamics';
+import { effectiveWheelbase, integrateVehicleSpeed, steeringLockAngle } from './vehicleDynamics';
 import { Building, CityMap, WORLD_SIZE } from './cityMap';
 import { sound } from '../audio/soundEngine';
 import { SpatialHash } from './spatialHash';
@@ -114,8 +114,8 @@ export class PhysicsEngine {
     // 1. Dynamic Steering Kinematics (Responsive & Speed-sensitive)
     const speedKmh = Math.abs(vehicle.speed) * 3.6;
     const speedFactor = Math.max(0.7, 1.0 - (speedKmh / (config.maxSpeed * 1.4)) * 0.3);
-    const maxSteerAngle = 0.5 * speedFactor * dazeFactor; // Reduced steering authority
-    const steerSpeed = 3.8;
+    const maxSteerAngle = steeringLockAngle(speedKmh) * speedFactor * dazeFactor;
+    const steerSpeed = 7;
     let targetSteer = 0;
 
     if (!isDestroyed) {
@@ -160,7 +160,7 @@ export class PhysicsEngine {
     const isMoving = Math.abs(vehicle.speed) > 0.01;
     if (isMoving) {
       const speedSign = vehicle.speed >= 0 ? 1 : -1;
-      const wheelbase = config.length * 2.4;
+      const wheelbase = effectiveWheelbase(config.length, Math.abs(vehicle.speed) * 3.6);
       const driftMultiplier = isDrifting ? (config.id === 'sports' ? 1.5 : 1.2) : 1.0;
       // Position integration advances speed by 60 world units per second;
       // the same scale is used here so the turning radius stays consistent.
