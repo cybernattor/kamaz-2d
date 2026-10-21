@@ -47,6 +47,23 @@ export function shapeMove(rawX: number, rawY: number): { x: number; y: number } 
   return { x: (rawX / magnitude) * scaled, y: (rawY / magnitude) * scaled };
 }
 
+/** Phone ≈ 1; tablets (Redmi Pad Pro ≈ 800 CSS px short side) scale up so the
+ * stick, wheel and pedals keep a comfortable physical size under a thumb. */
+function computeUiScale() {
+  if (typeof window === 'undefined') return 1;
+  return Math.max(1, Math.min(1.7, Math.min(window.innerWidth, window.innerHeight) / 400));
+}
+
+function useUiScale() {
+  const [scale, setScale] = useState(computeUiScale);
+  useEffect(() => {
+    const update = () => setScale(computeUiScale());
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+  return scale;
+}
+
 const LAYOUT_KEY = 'kamaz.touchLayout';
 const HINT_KEY = 'kamaz.touchHintSeen.v2';
 
@@ -110,7 +127,10 @@ const SteeringStick: React.FC<{
   keyboardSteer: number;
   floating: boolean;
   lefty: boolean;
-}> = ({ onChange, mode, onMove, keyboardSteer, floating, lefty }) => {
+  uiScale: number;
+}> = ({ onChange, mode, onMove, keyboardSteer, floating, lefty, uiScale }) => {
+  const size = WHEEL_SIZE * uiScale;
+  const radius = STICK_RADIUS * uiScale;
   const zoneRef = useRef<HTMLDivElement | null>(null);
   const activePointerId = useRef<number | null>(null);
   const originClientX = useRef(0);
@@ -125,17 +145,35 @@ const SteeringStick: React.FC<{
 
   const updateFromClient = useCallback(
     (clientX: number, clientY: number) => {
+      // The neutral point trails the finger once it passes full lock: the
+      // thumb never has to travel further than `radius`, and coming back
+      // toward center steers back immediately instead of after retracing.
+      let dx = clientX - originClientX.current;
+      let dy = clientY - originClientY.current;
       if (mode === 'move') {
-        const vec = shapeMove((clientX - originClientX.current) / STICK_RADIUS, (clientY - originClientY.current) / STICK_RADIUS);
+        const dist = Math.hypot(dx, dy);
+        if (dist > radius) {
+          const k = (dist - radius) / dist;
+          originClientX.current += dx * k;
+          originClientY.current += dy * k;
+          dx -= dx * k;
+          dy -= dy * k;
+        }
+        const vec = shapeMove(dx / radius, dy / radius);
         setMoveVec(vec);
         onMoveRef.current(vec);
         return;
       }
-      const value = shapeSteer((clientX - originClientX.current) / STICK_RADIUS);
+      if (Math.abs(dx) > radius) {
+        const overshoot = dx - Math.sign(dx) * radius;
+        originClientX.current += overshoot;
+        dx -= overshoot;
+      }
+      const value = shapeSteer(dx / radius);
       setPointerSteer(value);
       onChangeRef.current(value);
     },
-    [mode]
+    [mode, radius]
   );
 
   const release = useCallback(() => {
@@ -162,7 +200,7 @@ const SteeringStick: React.FC<{
     hapticTick(8);
 
     if (floating) {
-      const half = WHEEL_SIZE / 2 + 4;
+      const half = size / 2 + 4;
       const x = Math.max(half, Math.min(rect.width - half, e.clientX - rect.left));
       const y = Math.max(half, Math.min(rect.height - half, e.clientY - rect.top));
       originClientX.current = rect.left + x;
@@ -191,8 +229,8 @@ const SteeringStick: React.FC<{
 
   const inset = lefty ? 'right' : 'left';
   const restPosition: React.CSSProperties = {
-    bottom: 'max(env(safe-area-inset-bottom), 0.5rem)',
-    [inset]: `calc(max(env(safe-area-inset-${inset}), 0.75rem) + 0.25rem)`,
+    bottom: 'calc(max(env(safe-area-inset-bottom), 1.25rem) + 1rem)',
+    [inset]: 'max(env(safe-area-inset-' + inset + '), 1.75rem)',
   };
   const wheelPosition: React.CSSProperties = origin
     ? { left: origin.x, top: origin.y, transform: 'translate(-50%, -50%)' }
@@ -204,12 +242,14 @@ const SteeringStick: React.FC<{
       className={`pointer-events-none absolute rounded-full border bg-slate-950/60 transition-colors ${
         active ? 'border-cyan-400/80' : 'border-slate-600/70'
       }`}
-      style={{ width: WHEEL_SIZE, height: WHEEL_SIZE, ...(floating ? wheelPosition : { left: 0, top: 0 }) }}
+      style={{ width: size, height: size, ...(floating ? wheelPosition : { left: 0, top: 0 }) }}
     >
       <div
-        className="absolute left-1/2 top-1/2 h-10 w-10 rounded-full border border-cyan-300/70 bg-cyan-900/60"
+        className="absolute left-1/2 top-1/2 rounded-full border border-cyan-300/70 bg-cyan-900/60"
         style={{
-          transform: `translate(calc(-50% + ${(moveVec?.x ?? 0) * (WHEEL_SIZE / 2 - 8)}px), calc(-50% + ${(moveVec?.y ?? 0) * (WHEEL_SIZE / 2 - 8)}px))`,
+          width: size * 0.42,
+          height: size * 0.42,
+          transform: `translate(calc(-50% + ${(moveVec?.x ?? 0) * (size / 2 - 8)}px), calc(-50% + ${(moveVec?.y ?? 0) * (size / 2 - 8)}px))`,
         }}
       />
     </div>
@@ -219,8 +259,21 @@ const SteeringStick: React.FC<{
       className={`pointer-events-none absolute rounded-full border bg-slate-950/70 shadow-[0_8px_20px_rgba(2,6,23,0.45),inset_0_0_0_1px_rgba(255,255,255,0.05)] transition-colors ${
         active ? 'border-cyan-400/80' : 'border-slate-600/70'
       }`}
-      style={{ width: WHEEL_SIZE, height: WHEEL_SIZE, ...(floating ? wheelPosition : { left: 0, top: 0 }) }}
+      style={{ width: size, height: size, ...(floating ? wheelPosition : { left: 0, top: 0 }) }}
     >
+      {/* Linear gauge: shows exactly how far the thumb is from neutral */}
+      <div
+        className="absolute left-1/2 -translate-x-1/2 rounded-full bg-slate-700/80"
+        style={{ top: -18, width: radius * 2, height: 6 }}
+      >
+        <div className="absolute left-1/2 top-0 h-full w-0.5 -translate-x-1/2 bg-slate-400/70" />
+        <div
+          className={`absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border ${
+            active ? 'border-cyan-200 bg-cyan-400' : 'border-slate-400 bg-slate-500'
+          }`}
+          style={{ left: `calc(50% + ${displayedSteer * radius}px)`, transform: 'translate(-50%, -50%)' }}
+        />
+      </div>
       <div className="absolute inset-[5px] rounded-full border border-slate-700/70 bg-[radial-gradient(circle_at_50%_42%,rgba(51,65,85,0.45),rgba(2,6,23,0.8)_70%)]" />
       <svg aria-hidden="true" viewBox="0 0 112 112" className="absolute inset-0 h-full w-full">
         <circle cx="56" cy="56" r="52" fill="none" stroke="rgba(34,211,238,.18)" strokeWidth="1" />
@@ -254,7 +307,7 @@ const SteeringStick: React.FC<{
       onPointerCancel={handleEnd}
       onLostPointerCapture={handleEnd}
       onContextMenu={(e) => e.preventDefault()}
-      style={floating ? { touchAction: 'none' } : { touchAction: 'none', width: WHEEL_SIZE, height: WHEEL_SIZE }}
+      style={floating ? { touchAction: 'none' } : { touchAction: 'none', width: size, height: size }}
       className={
         floating
           ? `pointer-events-auto absolute bottom-0 h-1/2 w-[42%] ${lefty ? 'right-0' : 'left-0'}`
@@ -289,6 +342,7 @@ interface PedalButtonProps {
  * latched when the layout changes under a finger. */
 const PedalButton: React.FC<PedalButtonProps> = ({ id, label, className, icon, onActiveChange, haptic }) => {
   const pointerId = useRef<number | null>(null);
+  const [pressed, setPressed] = useState(false);
   const onActiveChangeRef = useRef(onActiveChange);
   onActiveChangeRef.current = onActiveChange;
 
@@ -308,11 +362,13 @@ const PedalButton: React.FC<PedalButtonProps> = ({ id, label, className, icon, o
     pointerId.current = e.pointerId;
     e.currentTarget.setPointerCapture(e.pointerId);
     hapticTick(haptic);
+    setPressed(true);
     onActiveChange(true);
   };
   const up = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (pointerId.current !== e.pointerId) return;
     pointerId.current = null;
+    setPressed(false);
     onActiveChange(false);
   };
 
@@ -325,7 +381,10 @@ const PedalButton: React.FC<PedalButtonProps> = ({ id, label, className, icon, o
       onLostPointerCapture={up}
       onContextMenu={(e) => e.preventDefault()}
       style={{ touchAction: 'none' }}
-      className={`pointer-events-auto ${className}`}
+      className={`pointer-events-auto touch-none select-none [-webkit-touch-callout:none] ${className} ${
+        pressed ? 'brightness-150 ring-2 ring-white/70' : ''
+      }`}
+      draggable={false}
       aria-label={label}
       title={label}
     >
@@ -346,6 +405,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
   inVehicle,
   onToggleEnterExit,
 }) => {
+  const uiScale = useUiScale();
   const [layout, setLayout] = useState<TouchLayout>(loadLayout);
   const [showSettings, setShowSettings] = useState(false);
   const [cruise, setCruise] = useState(false);
@@ -469,14 +529,15 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
           keyboardSteer={keyboardSteer}
           floating
           lefty={layout.lefty}
+          uiScale={uiScale}
         />
       )}
       <div
         className={`absolute inset-x-0 bottom-0 flex items-end ${showPedals ? 'justify-end' : 'justify-start'} ${side}`}
         style={{
-          paddingBottom: 'max(env(safe-area-inset-bottom), 0.5rem)',
-          paddingLeft: 'max(env(safe-area-inset-left), 0.75rem)',
-          paddingRight: 'max(env(safe-area-inset-right), 0.75rem)',
+          paddingBottom: 'max(env(safe-area-inset-bottom), 1.25rem)',
+          paddingLeft: 'max(env(safe-area-inset-left), 1.75rem)',
+          paddingRight: 'max(env(safe-area-inset-right), 1.75rem)',
         }}
       >
         {!showPedals && inVehicle && (
@@ -487,13 +548,14 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
             keyboardSteer={keyboardSteer}
             floating={false}
             lefty={false}
+            uiScale={1}
           />
         )}
 
         {showPedals && (
           <div
             className="pointer-events-none flex flex-col items-end gap-2"
-            style={{ transform: `scale(${layout.scale})`, transformOrigin: origin }}
+            style={{ transform: `scale(${layout.scale * uiScale})`, transformOrigin: origin }}
           >
             {showSettings && (
               <div
