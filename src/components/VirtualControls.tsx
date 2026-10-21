@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, ArrowDown, Volume2, ParkingSquare, Car, Settings, Zap, Footprints } from 'lucide-react';
+import { ArrowUp, ArrowDown, Volume2, ParkingSquare, Car, Zap, Footprints } from 'lucide-react';
 
 interface VirtualControlsProps {
   /** Discrete pedal/button inputs. Steering is handled separately via onSteerChange. */
@@ -19,6 +19,9 @@ interface VirtualControlsProps {
   showPedals: boolean;
   inVehicle: boolean;
   onToggleEnterExit: () => void;
+  /** Layout settings panel; opened from the HUD menu. */
+  settingsOpen: boolean;
+  onSettingsOpenChange: (open: boolean) => void;
 }
 
 /** Short tap of the device vibrator, if available. Silently no-ops on
@@ -71,7 +74,7 @@ function useUiScale() {
 }
 
 const LAYOUT_KEY = 'kamaz.touchLayout';
-const HINT_KEY = 'kamaz.touchHintSeen.v3';
+const HINT_KEY = 'kamaz.touchHintSeen.v4';
 
 interface TouchLayout {
   lefty: boolean;
@@ -410,10 +413,11 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
   showPedals,
   inVehicle,
   onToggleEnterExit,
+  settingsOpen,
+  onSettingsOpenChange,
 }) => {
   const { ui: uiScale, fit: narrowFit } = useUiScale();
   const [layout, setLayout] = useState<TouchLayout>(loadLayout);
-  const [showSettings, setShowSettings] = useState(false);
   const [cruise, setCruise] = useState(false);
   const [reverse, setReverse] = useState(false);
   const [showHint, setShowHint] = useState(() => {
@@ -563,7 +567,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
             className="pointer-events-none flex flex-col items-end gap-2"
             style={{ transform: `scale(${layout.scale * uiScale * narrowFit})`, transformOrigin: origin }}
           >
-            {showSettings && (
+            {settingsOpen && (
               <div
                 id="vctrl-settings"
                 className="pointer-events-auto w-56 space-y-2 rounded-xl border border-slate-600 bg-slate-950/95 p-2.5 text-xs text-slate-200 shadow-2xl"
@@ -592,20 +596,18 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
                     </button>
                   ))}
                 </div>
+                <button
+                  id="vctrl-settings-done"
+                  onClick={() => onSettingsOpenChange(false)}
+                  className="min-h-11 w-full rounded-lg bg-cyan-700 font-bold text-white"
+                >
+                  Готово
+                </button>
               </div>
             )}
 
             {/* Utility row */}
             <div className={`flex items-center gap-2 ${side}`}>
-              <button
-                id="vbtn-settings"
-                onClick={() => setShowSettings((v) => !v)}
-                className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-slate-600 bg-slate-900/70 text-slate-300"
-                aria-label="Настройки управления"
-                aria-expanded={showSettings}
-              >
-                <Settings className="h-4 w-4" />
-              </button>
               <button
                 id="btn-enter-exit-vehicle"
                 onClick={onToggleEnterExit}
@@ -730,7 +732,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
           <br />
           <b className="text-amber-300">R</b> — задний ход (газ едет назад), нажмите ещё раз, чтобы вернуть вперёд. <b className="text-emerald-300">AUTO</b> — газ включён сам.
           <br />
-          Сверху слева: поворотники, аварийка, фары, ремонт. Звук, день/ночь и зум — в меню <b className="text-cyan-300">≡</b>.
+          Сверху: поворотники, аварийка, фары и платный ремонт (цена по повреждениям). Звук, зум и настройки управления — в меню <b className="text-cyan-300">≡</b>.
         </div>
       )}
     </div>

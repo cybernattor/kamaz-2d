@@ -27,6 +27,7 @@ import { ChatOverlay } from './components/ChatOverlay';
 import { FullMapModal } from './components/FullMapModal';
 import type { FeedEvent } from './components/NetworkFeed';
 import { VirtualControls } from './components/VirtualControls';
+import { repairCost } from './game/repair';
 import { VEHICLE_CONFIGS } from './game/vehicleConfigs';
 import { FixedStepAccumulator } from './game/fixedStep';
 import { randomDriverName } from './game/nameGenerator';
@@ -178,6 +179,7 @@ export default function App() {
   const [targetPoi, setTargetPoi] = useState<PointOfInterest | null>(null);
 
   // Modals
+  const [showControlSettings, setShowControlSettings] = useState(false);
   const [showGarage, setShowGarage] = useState<boolean>(false);
   const [showMissions, setShowMissions] = useState<boolean>(false);
   const [showMultiplayer, setShowMultiplayer] = useState<boolean>(false);
@@ -564,10 +566,16 @@ export default function App() {
   }, []);
 
   // Repair vehicle
+  // Service: charged by damage, refused when the car is intact or the
+  // wallet is too light (the HUD button shows the price and greys out).
   const repairVehicle = useCallback(() => {
+    const vehicle = playerVehicleRef.current;
+    const char = playerCharRef.current;
+    const cost = repairCost(vehicle.health, vehicle.maxHealth);
+    if (cost === 0 || char.money < cost) return;
+    char.money -= cost;
+    vehicle.health = vehicle.maxHealth;
     sound.playReward();
-    playerVehicleRef.current.health = 100;
-    playerCharRef.current.health = 100;
   }, []);
 
   // Day/Night toggle
@@ -1078,6 +1086,7 @@ export default function App() {
         onOpenMissions={() => setShowMissions(true)}
         onOpenMultiplayer={() => setShowChat(true)}
         onRepairVehicle={repairVehicle}
+        onOpenControlSettings={() => setShowControlSettings(true)}
         onToggleHeadlights={cycleHeadlights}
         onToggleTurnSignal={toggleTurnSignal}
         onToggleEnterExitVehicle={toggleEnterExitVehicle}
@@ -1099,6 +1108,8 @@ export default function App() {
           showPedals={isTouchDevice}
           inVehicle={inVehicle}
           onToggleEnterExit={toggleEnterExitVehicle}
+          settingsOpen={showControlSettings}
+          onSettingsOpenChange={setShowControlSettings}
         />
       )}
 

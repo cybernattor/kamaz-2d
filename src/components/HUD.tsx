@@ -22,6 +22,7 @@ import {
   TriangleAlert,
   Menu,
   X,
+  SlidersHorizontal,
   ArrowLeft,
   ArrowRight,
 } from 'lucide-react';
@@ -29,6 +30,7 @@ import { Minimap } from './Minimap';
 import { NetworkFeed, FeedEvent } from './NetworkFeed';
 import { OnlinePanel } from './OnlinePanel';
 import { CityMap } from '../game/cityMap';
+import { formatRubles, repairCost } from '../game/repair';
 
 interface HUDProps {
   streetName: string;
@@ -56,6 +58,7 @@ interface HUDProps {
   onOpenMissions: () => void;
   onOpenMultiplayer: () => void;
   onRepairVehicle: () => void;
+  onOpenControlSettings: () => void;
   onToggleHeadlights: () => void;
   onToggleTurnSignal: (signal: 'left' | 'right' | 'hazard') => void;
   onToggleEnterExitVehicle: () => void;
@@ -99,6 +102,7 @@ export const HUD: React.FC<HUDProps> = ({
   onOpenMissions,
   onOpenMultiplayer,
   onRepairVehicle,
+  onOpenControlSettings,
   onToggleHeadlights,
   onToggleTurnSignal,
   onToggleEnterExitVehicle,
@@ -144,6 +148,13 @@ export const HUD: React.FC<HUDProps> = ({
   // don't visually kiss the pedals.
   const [showMenu, setShowMenu] = useState(false);
 
+  // Service station pricing: the repair button shows the bill for the
+  // current damage and greys out when the car is intact or you can't pay.
+  const repairPrice = playerVehicle ? repairCost(playerVehicle.health, playerVehicle.maxHealth) : 0;
+  const repairDisabled = repairPrice === 0 || playerChar.money < repairPrice;
+  const repairTitle =
+    repairPrice === 0 ? 'Машина цела' : playerChar.money < repairPrice ? `Не хватает денег: ${formatRubles(repairPrice)}` : `Ремонт: ${formatRubles(repairPrice)}`;
+
   return (
     <div
       id="game-hud-root"
@@ -159,12 +170,7 @@ export const HUD: React.FC<HUDProps> = ({
       <div id="hud-top-bar" className="relative w-full pointer-events-auto">
         {isTouchDevice ? (
           <div className="flex items-center gap-0 pr-[126px] bg-slate-950/90 border border-slate-700/80 rounded-xl shadow-lg overflow-hidden">
-            <div className="hidden min-[520px]:flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-1.5">
-              <Compass className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <span className="font-mono truncate text-xs font-bold text-cyan-400">{streetName}</span>
-              {showFps && <span className="text-xs text-emerald-400 font-mono shrink-0">{fps}</span>}
-            </div>
-            <div className="flex items-center gap-1 px-1 py-1 min-[520px]:border-l border-slate-700/70 shrink-0">
+                        <div className="flex items-center gap-1 px-1 py-1 shrink-0">
               <button
                 id="btn-open-garage"
                 onClick={() => { setShowMenu(false); onOpenGarage(); }}
@@ -351,6 +357,15 @@ export const HUD: React.FC<HUDProps> = ({
             className="absolute left-0 top-full z-30 mt-1 flex max-w-[calc(100%-134px)] flex-wrap items-center gap-1.5 rounded-xl border border-slate-700/80 bg-slate-950/95 p-1.5 shadow-xl"
           >
             <button
+              id="btn-control-settings"
+              onClick={() => { setShowMenu(false); onOpenControlSettings(); }}
+              className="min-h-11 flex items-center justify-center gap-1.5 rounded-md bg-slate-800/80 px-2.5 text-slate-200 cursor-pointer"
+              aria-label="Настройки управления"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+              <span className="text-[10px] font-bold">Управление</span>
+            </button>
+            <button
               id="btn-toggle-day-night"
               onClick={onToggleDayNight}
               className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8 min-w-8'} flex items-center justify-center rounded-md bg-slate-800/80 hover:bg-slate-700 transition-colors cursor-pointer`}
@@ -409,8 +424,9 @@ export const HUD: React.FC<HUDProps> = ({
             <span className={`text-xs font-bold ${condition > 60 ? 'text-emerald-400' : condition > 30 ? 'text-amber-400' : 'text-rose-500'}`}>
               {condition}%
             </span>
-            <span className="min-[520px]:hidden h-3 w-px bg-slate-700 mx-0.5" />
-            <span className="min-[520px]:hidden min-w-0 truncate text-[10px] text-cyan-300">{streetName}</span>
+            <span className="h-3 w-px bg-slate-700 mx-0.5" />
+            <span className="text-[11px] font-bold text-emerald-300">{formatRubles(playerChar.money)}</span>
+            {showFps && <span className="text-[10px] text-slate-500">{fps}</span>}
           </div>
 
           {inVehicle && (
@@ -470,11 +486,12 @@ export const HUD: React.FC<HUDProps> = ({
               <button
                 id="btn-repair-car"
                 onClick={onRepairVehicle}
-                className={`${QUICK_BTN} bg-slate-900/85 text-cyan-300 border-cyan-500/40`}
-                aria-label="Ремонт авто"
+                disabled={repairDisabled}
+                className={`${QUICK_BTN} bg-slate-900/85 text-cyan-300 border-cyan-500/40 disabled:opacity-40`}
+                aria-label={`Ремонт авто. ${repairTitle}`}
               >
                 <Wrench className="h-4 w-4" aria-hidden="true" />
-                <span>Ремонт</span>
+                <span>{repairPrice > 0 ? formatRubles(repairPrice) : 'Ремонт'}</span>
               </button>
             </div>
           )}
@@ -690,10 +707,13 @@ export const HUD: React.FC<HUDProps> = ({
           <button
             id="btn-repair-car"
             onClick={onRepairVehicle}
-            className="w-full flex items-center justify-center gap-1.5 text-xs font-mono font-bold py-1 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 transition-colors cursor-pointer"
+            disabled={repairDisabled}
+            title={`${repairTitle} · баланс ${formatRubles(playerChar.money)}`}
+            className="w-full flex items-center justify-center gap-1.5 text-xs font-mono font-bold py-1 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Wrench className="w-3.5 h-3.5" />
             <span className="sm:hidden">Ремонт [R]</span><span className="hidden sm:inline">Ремонт авто [R]</span>
+            <span className="text-emerald-300">{repairPrice > 0 ? formatRubles(repairPrice) : 'цела'}</span>
           </button>
 
           {/* Headlights & Turn Signal Controls Bar (Screenshot Match) */}
