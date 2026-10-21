@@ -94,3 +94,22 @@ export function integrateVehicleSpeed(
   const coastDeceleration = resistance + (speed > 0 ? config.engineBraking : 0);
   return moveToward(speed, 0, coastDeceleration * delta);
 }
+
+/**
+ * Wheelbase used for the player's turning model, as a multiple of body length.
+ * The old constant 2.4 gave a turning circle of ~4.5 body lengths at parking
+ * speed (a KAMAZ needed ~340 units to turn on a 92-unit road, so corners and
+ * U-turns took several tries). Low speed now uses a short base for a tight
+ * ~2-length circle, and the base blends back to the old value as speed rises
+ * so highway handling stays as stable as before.
+ */
+export const LOW_SPEED_WHEELBASE_RATIO = 1.1;
+export const HIGH_SPEED_WHEELBASE_RATIO = 2.4;
+const TIGHT_TURN_FULL_BELOW_KMH = 15;
+const TIGHT_TURN_GONE_ABOVE_KMH = 90;
+
+export function effectiveWheelbase(bodyLength: number, speedKmh: number): number {
+  const t = Math.max(0, Math.min(1, (speedKmh - TIGHT_TURN_FULL_BELOW_KMH) / (TIGHT_TURN_GONE_ABOVE_KMH - TIGHT_TURN_FULL_BELOW_KMH)));
+  const eased = t * t * (3 - 2 * t);
+  return bodyLength * (LOW_SPEED_WHEELBASE_RATIO + (HIGH_SPEED_WHEELBASE_RATIO - LOW_SPEED_WHEELBASE_RATIO) * eased);
+}

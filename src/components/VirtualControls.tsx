@@ -36,9 +36,9 @@ function hapticTick(ms = 10) {
 
 const STEER_MAX_ROTATION = 120;
 /** Finger travel (px) from the touch-down point that equals full lock. */
-const STICK_RADIUS = 64;
-const STICK_DEAD_ZONE = 0.08;
-const STICK_CURVE = 1.4;
+const STICK_RADIUS = 48;
+const STICK_DEAD_ZONE = 0.06;
+const STICK_CURVE = 1.2;
 const WHEEL_SIZE = 96;
 const MOVE_DEAD_ZONE = 0.15;
 
