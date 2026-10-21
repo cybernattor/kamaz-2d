@@ -1,6 +1,9 @@
 import { PhysicsEngine } from '../src/game/physics';
 import { VEHICLE_CONFIGS } from '../src/game/vehicleConfigs';
-import { HIGH_SPEED_WHEELBASE_RATIO, LOW_SPEED_WHEELBASE_RATIO, effectiveWheelbase } from '../src/game/vehicleDynamics';
+import {
+  HIGH_SPEED_STEER_LOCK, HIGH_SPEED_WHEELBASE_RATIO, LOW_SPEED_STEER_LOCK, LOW_SPEED_WHEELBASE_RATIO,
+  effectiveWheelbase, steeringLockAngle,
+} from '../src/game/vehicleDynamics';
 
 // Full-lock turning radius at a held speed, in body lengths.
 function turnRadiusInLengths(type: keyof typeof VEHICLE_CONFIGS, kmh: number) {
@@ -29,11 +32,11 @@ function turnRadiusInLengths(type: keyof typeof VEHICLE_CONFIGS, kmh: number) {
 }
 
 function main() {
-  // Parking-speed turns used to need ~4.5 body lengths of radius, forcing
+  // Parking-speed turns used to need ~4.5 body lengths of radius (real cars ~1.2), forcing
   // multi-point turns on junctions and U-turns.
   for (const type of ['sedan', 'kamaz_dump', 'bus'] as const) {
     const radius = turnRadiusInLengths(type, 10);
-    if (!(radius < 2.6)) throw new Error(`${type} low-speed turning circle is ${radius.toFixed(2)} lengths (want < 2.6)`);
+    if (!(radius < 1.6)) throw new Error(`${type} low-speed turning circle is ${radius.toFixed(2)} lengths (want < 1.6)`);
   }
   // Highway handling must stay as stable as before.
   const highway = turnRadiusInLengths('sedan', 100);
@@ -47,7 +50,14 @@ function main() {
     if (value < previous) throw new Error('Wheelbase must not shrink as speed rises');
     previous = value;
   }
-  console.log('FIXED: tight low-speed turning circle, unchanged highway stability.');
+  // Real front wheels lock at ~35 degrees when parking; the lock fades to the
+  // old angle at speed so highway steering is not twitchier.
+  if (steeringLockAngle(0) !== LOW_SPEED_STEER_LOCK || steeringLockAngle(200) !== HIGH_SPEED_STEER_LOCK) {
+    throw new Error('Steering lock must run from the parking angle to the highway angle');
+  }
+  if (!(LOW_SPEED_STEER_LOCK > 0.58)) throw new Error('Parking lock should be near real-world 35 degrees');
+
+  console.log('FIXED: real-world low-speed turning circle, unchanged highway stability.');
 }
 
 main();

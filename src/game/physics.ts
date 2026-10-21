@@ -8,7 +8,7 @@ import {
   VehicleInstance,
 } from '../types';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
-import { effectiveWheelbase, integrateVehicleSpeed } from './vehicleDynamics';
+import { effectiveWheelbase, integrateVehicleSpeed, steeringLockAngle } from './vehicleDynamics';
 import { Building, CityMap, WORLD_SIZE } from './cityMap';
 import { sound } from '../audio/soundEngine';
 import { SpatialHash } from './spatialHash';
@@ -114,8 +114,8 @@ export class PhysicsEngine {
     // 1. Dynamic Steering Kinematics (Responsive & Speed-sensitive)
     const speedKmh = Math.abs(vehicle.speed) * 3.6;
     const speedFactor = Math.max(0.7, 1.0 - (speedKmh / (config.maxSpeed * 1.4)) * 0.3);
-    const maxSteerAngle = 0.5 * speedFactor * dazeFactor; // Reduced steering authority
-    const steerSpeed = 5;
+    const maxSteerAngle = steeringLockAngle(speedKmh) * speedFactor * dazeFactor;
+    const steerSpeed = 7;
     let targetSteer = 0;
 
     if (!isDestroyed) {

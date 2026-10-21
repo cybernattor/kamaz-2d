@@ -103,7 +103,7 @@ export function integrateVehicleSpeed(
  * ~2-length circle, and the base blends back to the old value as speed rises
  * so highway handling stays as stable as before.
  */
-export const LOW_SPEED_WHEELBASE_RATIO = 1.1;
+export const LOW_SPEED_WHEELBASE_RATIO = 0.9;
 export const HIGH_SPEED_WHEELBASE_RATIO = 2.4;
 const TIGHT_TURN_FULL_BELOW_KMH = 15;
 const TIGHT_TURN_GONE_ABOVE_KMH = 90;
@@ -112,4 +112,20 @@ export function effectiveWheelbase(bodyLength: number, speedKmh: number): number
   const t = Math.max(0, Math.min(1, (speedKmh - TIGHT_TURN_FULL_BELOW_KMH) / (TIGHT_TURN_GONE_ABOVE_KMH - TIGHT_TURN_FULL_BELOW_KMH)));
   const eased = t * t * (3 - 2 * t);
   return bodyLength * (LOW_SPEED_WHEELBASE_RATIO + (HIGH_SPEED_WHEELBASE_RATIO - LOW_SPEED_WHEELBASE_RATIO) * eased);
+}
+
+/**
+ * Front-wheel lock angle (rad). A real car turns its wheels ~35-40 degrees at
+ * parking speed; the game used a flat 0.5 rad (28.6 degrees) at every speed,
+ * which with a long base felt sluggish. Full real-world lock is used at low
+ * speed and fades back to the old angle with the same blend as the wheelbase,
+ * so highway steering does not get twitchier.
+ */
+export const LOW_SPEED_STEER_LOCK = 0.62;
+export const HIGH_SPEED_STEER_LOCK = 0.5;
+
+export function steeringLockAngle(speedKmh: number): number {
+  const t = Math.max(0, Math.min(1, (speedKmh - TIGHT_TURN_FULL_BELOW_KMH) / (TIGHT_TURN_GONE_ABOVE_KMH - TIGHT_TURN_FULL_BELOW_KMH)));
+  const eased = t * t * (3 - 2 * t);
+  return LOW_SPEED_STEER_LOCK + (HIGH_SPEED_STEER_LOCK - LOW_SPEED_STEER_LOCK) * eased;
 }
