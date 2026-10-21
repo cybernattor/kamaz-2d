@@ -730,7 +730,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
           <br />
           <b className="text-amber-300">R</b> — задний ход (газ едет назад), нажмите ещё раз, чтобы вернуть вперёд. <b className="text-emerald-300">AUTO</b> — газ включён сам.
           <br />
-          Сверху слева: поворотники, аварийка, фары, ремонт. Гараж, задания и звук — в меню <b className="text-cyan-300">≡</b>.
+          Сверху слева: поворотники, аварийка, фары, ремонт. Звук, день/ночь и зум — в меню <b className="text-cyan-300">≡</b>.
         </div>
       )}
     </div>

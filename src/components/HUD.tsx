@@ -67,6 +67,9 @@ interface HUDProps {
   unreadChat: number;
 }
 
+const TOP_BTN =
+  'flex h-12 w-12 shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg border text-[10px] font-bold leading-none cursor-pointer select-none';
+
 const QUICK_BTN =
   'flex h-12 w-12 flex-col items-center justify-center gap-0.5 rounded-lg border text-[10px] font-bold leading-none shadow-lg cursor-pointer select-none';
 
@@ -156,43 +159,57 @@ export const HUD: React.FC<HUDProps> = ({
       <div id="hud-top-bar" className="relative w-full pointer-events-auto">
         {isTouchDevice ? (
           <div className="flex items-center gap-0 pr-[126px] bg-slate-950/90 border border-slate-700/80 rounded-xl shadow-lg overflow-hidden">
-            <div className="min-w-0 flex-1 flex items-center gap-1.5 px-2.5 py-1.5">
+            <div className="hidden min-[520px]:flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-1.5">
               <Compass className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
               <span className="font-mono truncate text-xs font-bold text-cyan-400">{streetName}</span>
               {showFps && <span className="text-xs text-emerald-400 font-mono shrink-0">{fps}</span>}
             </div>
-            <div className="flex items-center gap-1 border-l border-slate-700/70 px-1 py-1 shrink-0">
-            <button
-              id="btn-open-multiplayer"
-              onClick={() => { setShowMenu(false); onOpenMultiplayer(); }}
-              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md border transition-colors cursor-pointer ${
-                multiplayerStatus === 'connected'
-                  ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 hover:bg-emerald-900/60'
-                  : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700'
-              }`}
-              title={multiplayerStatus === 'connected' ? `Чат — онлайн (${onlineCount + 1}) [Enter]` : 'Открыть чат [Enter]'}
-              aria-label="Открыть чат"
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              <span className="text-[10px] font-bold">Чат</span>
-              {unreadChat > 0 && (
-                <span className="min-w-4 rounded-full bg-rose-500 px-1 text-center text-[10px] font-bold leading-4 text-white animate-pulse">
-                  {unreadChat > 9 ? '9+' : unreadChat}
-                </span>
-              )}
-              <span className="text-[10px] font-bold font-mono">
-                {multiplayerStatus === 'connected' ? onlineCount + 1 : '—'}
-              </span>
-            </button>
+            <div className="flex items-center gap-1 px-1 py-1 min-[520px]:border-l border-slate-700/70 shrink-0">
+              <button
+                id="btn-open-garage"
+                onClick={() => { setShowMenu(false); onOpenGarage(); }}
+                className={`${TOP_BTN} bg-gradient-to-b from-orange-600 to-amber-700 border-amber-400/60 text-white`}
+                aria-label="Открыть гараж"
+              >
+                <Car className="h-4 w-4" aria-hidden="true" />
+                <span>Гараж</span>
+              </button>
+              <button
+                id="btn-open-missions"
+                onClick={() => { setShowMenu(false); onOpenMissions(); }}
+                className={`${TOP_BTN} bg-gradient-to-b from-blue-600 to-indigo-700 border-indigo-400/60 text-white`}
+                aria-label="Открыть задания"
+              >
+                <Briefcase className="h-4 w-4" aria-hidden="true" />
+                <span>Задания</span>
+              </button>
+              <button
+                id="btn-open-multiplayer"
+                onClick={() => { setShowMenu(false); onOpenMultiplayer(); }}
+                className={`${TOP_BTN} relative ${
+                  multiplayerStatus === 'connected'
+                    ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300'
+                    : 'bg-slate-800/80 border-slate-600 text-slate-200'
+                }`}
+                aria-label="Открыть чат"
+              >
+                <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                <span>Чат{multiplayerStatus === 'connected' ? ` ${onlineCount + 1}` : ''}</span>
+                {unreadChat > 0 && (
+                  <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-rose-500 px-1 text-center text-[10px] font-bold leading-4 text-white animate-pulse">
+                    {unreadChat > 9 ? '9+' : unreadChat}
+                  </span>
+                )}
+              </button>
               <button
                 id="btn-touch-menu"
                 onClick={() => setShowMenu((v) => !v)}
-                className="min-h-11 min-w-11 flex items-center justify-center rounded-md bg-slate-800/80 text-slate-200 cursor-pointer"
+                className={`${TOP_BTN} bg-slate-800/80 border-slate-600 text-slate-200`}
                 aria-label={showMenu ? 'Закрыть меню' : 'Открыть меню'}
                 aria-expanded={showMenu}
               >
-                {showMenu ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
-                <span className="sr-only">Меню</span>
+                {showMenu ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+                <span>Меню</span>
               </button>
             </div>
           </div>
@@ -373,27 +390,6 @@ export const HUD: React.FC<HUDProps> = ({
               </button>
             </div>
 
-            <button
-              id="btn-open-garage"
-              onClick={() => { setShowMenu(false); onOpenGarage(); }}
-              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow cursor-pointer transition-all`}
-              title="Гараж [G]"
-              aria-label="Открыть гараж"
-            >
-              <Car className="w-3.5 h-3.5" />
-              <span className="text-[10px] font-bold font-mono">G</span>
-            </button>
-
-            <button
-              id="btn-open-missions"
-              onClick={() => { setShowMenu(false); onOpenMissions(); }}
-              className={`${isTouchDevice ? 'min-h-11 min-w-11' : 'min-h-8'} flex items-center justify-center gap-1 px-2 rounded-md bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow cursor-pointer transition-all`}
-              title="Задания [J]"
-              aria-label="Открыть задания"
-            >
-              <Briefcase className="w-3.5 h-3.5" />
-              <span className="text-[10px] font-bold font-mono">J</span>
-            </button>
           </div>
         )}
       </div>
@@ -404,7 +400,7 @@ export const HUD: React.FC<HUDProps> = ({
           found them. The row wraps under the chip on narrow screens. */}
       {isTouchDevice && (
         <div id="hud-touch-readout" className="pointer-events-none flex flex-wrap items-center gap-1.5 pr-[134px]">
-          <div className="inline-flex items-center gap-1.5 bg-slate-950/90 border border-slate-700/80 rounded-lg px-2.5 py-1 shadow-lg font-mono">
+          <div className="inline-flex max-w-full items-center gap-1.5 whitespace-nowrap bg-slate-950/90 border border-slate-700/80 rounded-lg px-2.5 py-1 shadow-lg font-mono">
             <span className="text-base font-extrabold text-cyan-400">{speedKmH}</span>
             <span className="text-[10px] text-slate-500">км/ч</span>
             <span className="h-3 w-px bg-slate-700 mx-0.5" />
@@ -413,6 +409,8 @@ export const HUD: React.FC<HUDProps> = ({
             <span className={`text-xs font-bold ${condition > 60 ? 'text-emerald-400' : condition > 30 ? 'text-amber-400' : 'text-rose-500'}`}>
               {condition}%
             </span>
+            <span className="min-[520px]:hidden h-3 w-px bg-slate-700 mx-0.5" />
+            <span className="min-[520px]:hidden min-w-0 truncate text-[10px] text-cyan-300">{streetName}</span>
           </div>
 
           {inVehicle && (
