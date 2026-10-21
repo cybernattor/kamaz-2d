@@ -113,22 +113,3 @@ export function effectiveWheelbase(bodyLength: number, speedKmh: number): number
   const eased = t * t * (3 - 2 * t);
   return bodyLength * (LOW_SPEED_WHEELBASE_RATIO + (HIGH_SPEED_WHEELBASE_RATIO - LOW_SPEED_WHEELBASE_RATIO) * eased);
 }
-
-/**
- * Turning on the spot. Real cars can't yaw without moving, but a top-down
- * game where the player must creep forward and back to turn around feels
- * broken, so steering at a standstill pivots the vehicle slowly. The pivot
- * fades out by PIVOT_FADE_KMH where the normal kinematic turning takes over.
- * Longer vehicles pivot slower.
- */
-export const PIVOT_RATE_RAD_PER_S = 2;
-export const PIVOT_FADE_KMH = 6;
-const PIVOT_REFERENCE_LENGTH = 46;
-
-/** `steerRatio` is the steering input in -1..1; returns yaw rate in rad/s. */
-export function pivotYawRate(steerRatio: number, bodyLength: number, speedKmh: number): number {
-  const ratio = Math.max(-1, Math.min(1, steerRatio));
-  const fade = Math.max(0, 1 - speedKmh / PIVOT_FADE_KMH);
-  const eased = fade * fade * (3 - 2 * fade);
-  return ratio * PIVOT_RATE_RAD_PER_S * Math.sqrt(PIVOT_REFERENCE_LENGTH / bodyLength) * eased;
-}

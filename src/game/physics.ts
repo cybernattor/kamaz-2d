@@ -8,7 +8,7 @@ import {
   VehicleInstance,
 } from '../types';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
-import { effectiveWheelbase, integrateVehicleSpeed, pivotYawRate } from './vehicleDynamics';
+import { effectiveWheelbase, integrateVehicleSpeed } from './vehicleDynamics';
 import { Building, CityMap, WORLD_SIZE } from './cityMap';
 import { sound } from '../audio/soundEngine';
 import { SpatialHash } from './spatialHash';
@@ -155,26 +155,21 @@ export class PhysicsEngine {
     vehicle.isBraking = Boolean((inputs.brake || inputs.handbrake) && Math.abs(speedBeforeDynamics) > 0.05);
     vehicle.isReversing = vehicle.speed < -0.3;
 
-    // 4. Bicycle-model turning: yaw comes from forward travel through the
-    // front axle. On top of that, steering at (nearly) zero speed pivots the
-    // vehicle slowly so the player can turn around without shuffling back
-    // and forth; the pivot fades out as the kinematic turning takes over.
-    const speedKmhAbs = Math.abs(vehicle.speed) * 3.6;
-    let yawRate = 0;
-    if (Math.abs(vehicle.speed) > 0.01) {
+    // 4. Bicycle-model turning. A car cannot rotate around its centre while
+    // stationary: yaw comes from forward travel through the front axle.
+    const isMoving = Math.abs(vehicle.speed) > 0.01;
+    if (isMoving) {
       const speedSign = vehicle.speed >= 0 ? 1 : -1;
-      const wheelbase = effectiveWheelbase(config.length, speedKmhAbs);
+      const wheelbase = effectiveWheelbase(config.length, Math.abs(vehicle.speed) * 3.6);
       const driftMultiplier = isDrifting ? (config.id === 'sports' ? 1.5 : 1.2) : 1.0;
       // Position integration advances speed by 60 world units per second;
       // the same scale is used here so the turning radius stays consistent.
-      yawRate = (Math.abs(vehicle.speed) * 60 / wheelbase)
+      vehicle.angularVelocity = (Math.abs(vehicle.speed) * 60 / wheelbase)
         * Math.tan(vehicle.steeringAngle) * speedSign * driftMultiplier;
+      vehicle.angle += vehicle.angularVelocity * delta;
+    } else {
+      vehicle.angularVelocity = 0;
     }
-    if (!isDestroyed) {
-      yawRate += pivotYawRate(vehicle.steeringAngle / 0.5, config.length, speedKmhAbs);
-    }
-    vehicle.angularVelocity = yawRate;
-    vehicle.angle += yawRate * delta;
 
     // 5. Position Integration (with lateral slip drift)
     let forwardVx = Math.cos(vehicle.angle) * vehicle.speed;

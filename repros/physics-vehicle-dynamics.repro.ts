@@ -133,24 +133,8 @@ function testSteeringNeedsForwardMotion() {
     steerRight: false,
     handbrake: false,
   }, DELTA);
-  // Deliberate design change: steering at a standstill pivots the vehicle
-  // slowly (see pivotYawRate), while with no steering it must stay put.
-  if (!(vehicle.angularVelocity !== 0)) {
-    throw new Error('stationary vehicle did not pivot when steering');
-  }
-  vehicle.angle = 0;
-  vehicle.angularVelocity = 0;
-  vehicle.steeringAngle = 0;
-  physics.updatePlayerVehicle(vehicle, {
-    throttle: false,
-    brake: false,
-    reverse: false,
-    steerLeft: false,
-    steerRight: false,
-    handbrake: false,
-  }, DELTA);
   if (vehicle.angle !== 0 || vehicle.angularVelocity !== 0) {
-    throw new Error('stationary vehicle rotated without steering input');
+    throw new Error('stationary vehicle rotated without forward motion');
   }
 
   vehicle.speed = 1;
