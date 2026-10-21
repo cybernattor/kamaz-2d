@@ -22,6 +22,8 @@ import {
   TriangleAlert,
   Menu,
   X,
+  ArrowLeft,
+  ArrowRight,
 } from 'lucide-react';
 import { Minimap } from './Minimap';
 import { NetworkFeed, FeedEvent } from './NetworkFeed';
@@ -64,6 +66,9 @@ interface HUDProps {
   roomId: string;
   unreadChat: number;
 }
+
+const QUICK_BTN =
+  'flex h-12 w-12 flex-col items-center justify-center gap-0.5 rounded-lg border text-[10px] font-bold leading-none shadow-lg cursor-pointer select-none';
 
 export const HUD: React.FC<HUDProps> = ({
   streetName,
@@ -187,6 +192,7 @@ export const HUD: React.FC<HUDProps> = ({
                 aria-expanded={showMenu}
               >
                 {showMenu ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+                <span className="sr-only">Меню</span>
               </button>
             </div>
           </div>
@@ -388,77 +394,16 @@ export const HUD: React.FC<HUDProps> = ({
               <Briefcase className="w-3.5 h-3.5" />
               <span className="text-[10px] font-bold font-mono">J</span>
             </button>
-          <button
-            id="btn-toggle-headlights"
-            onClick={onToggleHeadlights}
-            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border cursor-pointer ${
-              playerVehicle && playerVehicle.headlights > 0
-                ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
-                : 'bg-slate-800/80 text-slate-300 border-slate-700'
-            }`}
-            aria-label="Фары"
-            title="Фары"
-          >
-            <Lightbulb className="w-4 h-4" />
-          </button>
-
-          <button
-            id="btn-turn-left"
-            onClick={() => onToggleTurnSignal('left')}
-            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border font-bold cursor-pointer ${
-              playerVehicle?.turnSignal === 'left'
-                ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
-                : 'bg-slate-800/80 text-slate-300 border-slate-700'
-            }`}
-            aria-label="Левый поворотник"
-          >
-            ←
-          </button>
-
-          <button
-            id="btn-turn-right"
-            onClick={() => onToggleTurnSignal('right')}
-            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border font-bold cursor-pointer ${
-              playerVehicle?.turnSignal === 'right'
-                ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
-                : 'bg-slate-800/80 text-slate-300 border-slate-700'
-            }`}
-            aria-label="Правый поворотник"
-          >
-            →
-          </button>
-
-          <button
-            id="btn-hazard-lights"
-            onClick={() => onToggleTurnSignal('hazard')}
-            className={`min-h-11 min-w-11 flex items-center justify-center rounded-lg border cursor-pointer ${
-              playerVehicle?.turnSignal === 'hazard'
-                ? 'hazard-active bg-red-950 text-red-100 border-red-400'
-                : 'bg-slate-800/80 text-slate-300 border-slate-700'
-            }`}
-            aria-label="Аварийка"
-          >
-            <TriangleAlert className="h-4 w-4" aria-hidden="true" />
-          </button>
-
-          <button
-            id="btn-repair-car"
-            onClick={onRepairVehicle}
-            className="min-h-11 min-w-11 flex items-center justify-center rounded-lg bg-slate-800/80 text-cyan-300 border border-cyan-500/30 cursor-pointer"
-            aria-label="Ремонт авто"
-            title="Ремонт авто"
-          >
-            <Wrench className="w-4 h-4" />
-          </button>
           </div>
         )}
       </div>
 
-      {/* Touch: speed/gear/condition as one small chip beside the minimap
-          (the rest of the old quickbar moved into the menu and next to the
-          pedals), so the driving view keeps its height in landscape. */}
+      {/* Touch: speed/gear/condition chip plus the vehicle quick actions
+          (lights, turn signals, hazard, repair). They stay on screen with
+          a label under each icon: hiding them in the menu meant nobody
+          found them. The row wraps under the chip on narrow screens. */}
       {isTouchDevice && (
-        <div id="hud-touch-readout" className="pointer-events-none pr-[134px]">
+        <div id="hud-touch-readout" className="pointer-events-none flex flex-wrap items-center gap-1.5 pr-[134px]">
           <div className="inline-flex items-center gap-1.5 bg-slate-950/90 border border-slate-700/80 rounded-lg px-2.5 py-1 shadow-lg font-mono">
             <span className="text-base font-extrabold text-cyan-400">{speedKmH}</span>
             <span className="text-[10px] text-slate-500">км/ч</span>
@@ -469,9 +414,74 @@ export const HUD: React.FC<HUDProps> = ({
               {condition}%
             </span>
           </div>
+
+          {inVehicle && (
+            <div id="hud-touch-vehicle-actions" className="pointer-events-auto flex max-w-full flex-wrap items-center gap-1">
+              <button
+                id="btn-turn-left"
+                onClick={() => onToggleTurnSignal('left')}
+                className={`${QUICK_BTN} ${
+                  playerVehicle?.turnSignal === 'left'
+                    ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
+                    : 'bg-slate-900/85 text-slate-200 border-slate-600'
+                }`}
+                aria-label="Левый поворотник"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                <span>Лево</span>
+              </button>
+              <button
+                id="btn-turn-right"
+                onClick={() => onToggleTurnSignal('right')}
+                className={`${QUICK_BTN} ${
+                  playerVehicle?.turnSignal === 'right'
+                    ? 'bg-amber-500 text-black border-amber-400 animate-pulse'
+                    : 'bg-slate-900/85 text-slate-200 border-slate-600'
+                }`}
+                aria-label="Правый поворотник"
+              >
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                <span>Право</span>
+              </button>
+              <button
+                id="btn-hazard-lights"
+                onClick={() => onToggleTurnSignal('hazard')}
+                className={`${QUICK_BTN} ${
+                  playerVehicle?.turnSignal === 'hazard'
+                    ? 'hazard-active bg-red-950 text-red-100 border-red-400'
+                    : 'bg-slate-900/85 text-slate-200 border-slate-600'
+                }`}
+                aria-label="Аварийка"
+              >
+                <TriangleAlert className="h-4 w-4" aria-hidden="true" />
+                <span>Авария</span>
+              </button>
+              <button
+                id="btn-toggle-headlights"
+                onClick={onToggleHeadlights}
+                className={`${QUICK_BTN} ${
+                  playerVehicle && playerVehicle.headlights > 0
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
+                    : 'bg-slate-900/85 text-slate-200 border-slate-600'
+                }`}
+                aria-label="Фары"
+              >
+                <Lightbulb className="h-4 w-4" aria-hidden="true" />
+                <span>Фары</span>
+              </button>
+              <button
+                id="btn-repair-car"
+                onClick={onRepairVehicle}
+                className={`${QUICK_BTN} bg-slate-900/85 text-cyan-300 border-cyan-500/40`}
+                aria-label="Ремонт авто"
+              >
+                <Wrench className="h-4 w-4" aria-hidden="true" />
+                <span>Ремонт</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
-
 
       {/* 2. MIDDLE AREA (Active Mission HUD Overlay) */}
       {activeMission && (

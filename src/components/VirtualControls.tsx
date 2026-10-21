@@ -54,10 +54,16 @@ function computeUiScale() {
   return Math.max(1, Math.min(1.7, Math.min(window.innerWidth, window.innerHeight) / 400));
 }
 
+/** Portrait phones: the pedal cluster would otherwise overlap the wheel. */
+function computeNarrowFit() {
+  if (typeof window === 'undefined' || window.innerWidth >= 520) return 1;
+  return Math.max(0.8, Math.min(1, (window.innerWidth - 150) / 250));
+}
+
 function useUiScale() {
-  const [scale, setScale] = useState(computeUiScale);
+  const [scale, setScale] = useState(() => ({ ui: computeUiScale(), fit: computeNarrowFit() }));
   useEffect(() => {
-    const update = () => setScale(computeUiScale());
+    const update = () => setScale({ ui: computeUiScale(), fit: computeNarrowFit() });
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
   }, []);
@@ -65,7 +71,7 @@ function useUiScale() {
 }
 
 const LAYOUT_KEY = 'kamaz.touchLayout';
-const HINT_KEY = 'kamaz.touchHintSeen.v2';
+const HINT_KEY = 'kamaz.touchHintSeen.v3';
 
 interface TouchLayout {
   lefty: boolean;
@@ -263,7 +269,7 @@ const SteeringStick: React.FC<{
     >
       {/* Linear gauge: shows exactly how far the thumb is from neutral */}
       <div
-        className="absolute left-1/2 -translate-x-1/2 rounded-full bg-slate-700/80"
+        className={`absolute left-1/2 -translate-x-1/2 rounded-full bg-slate-700/80 transition-opacity ${active ? 'opacity-100' : 'opacity-0'}`}
         style={{ top: -18, width: radius * 2, height: 6 }}
       >
         <div className="absolute left-1/2 top-0 h-full w-0.5 -translate-x-1/2 bg-slate-400/70" />
@@ -405,7 +411,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
   inVehicle,
   onToggleEnterExit,
 }) => {
-  const uiScale = useUiScale();
+  const { ui: uiScale, fit: narrowFit } = useUiScale();
   const [layout, setLayout] = useState<TouchLayout>(loadLayout);
   const [showSettings, setShowSettings] = useState(false);
   const [cruise, setCruise] = useState(false);
@@ -555,7 +561,7 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
         {showPedals && (
           <div
             className="pointer-events-none flex flex-col items-end gap-2"
-            style={{ transform: `scale(${layout.scale * uiScale})`, transformOrigin: origin }}
+            style={{ transform: `scale(${layout.scale * uiScale * narrowFit})`, transformOrigin: origin }}
           >
             {showSettings && (
               <div
@@ -723,6 +729,8 @@ export const VirtualControls: React.FC<VirtualControlsProps> = ({
           <b className="text-cyan-300">Слева</b> — коснитесь и ведите палец вбок: руль (пешком — джойстик в любую сторону). <b className="text-emerald-300">Справа</b> — газ.
           <br />
           <b className="text-amber-300">R</b> — задний ход (газ едет назад), нажмите ещё раз, чтобы вернуть вперёд. <b className="text-emerald-300">AUTO</b> — газ включён сам.
+          <br />
+          Сверху слева: поворотники, аварийка, фары, ремонт. Гараж, задания и звук — в меню <b className="text-cyan-300">≡</b>.
         </div>
       )}
     </div>
