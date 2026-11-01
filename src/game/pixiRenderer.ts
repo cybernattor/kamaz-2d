@@ -17,7 +17,7 @@ import {
   TrafficLight,
   VehicleInstance,
 } from '../types';
-import { GameRenderer } from './renderer';
+import { StaticSceneBaker } from './staticScene';
 import { CityMap, WORLD_SIZE } from './cityMap';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
 import { nameColorForId } from './nameGenerator';
@@ -124,7 +124,7 @@ export class PixiGameRenderer {
   private playerCharacterView: EntityView | null = null;
   private static readonly PLAYER_CHARACTER_LABEL_ID = 'player-character';
 
-  private staticCanvasRenderer: GameRenderer | null = null;
+  private staticBaker: StaticSceneBaker | null = null;
   private staticTexture: Texture | null = null;
   private staticSprite: Sprite | null = null;
   private currentMap: CityMap | null = null;
@@ -388,12 +388,7 @@ export class PixiGameRenderer {
 
   private rebuildStaticScene(cityMap: CityMap) {
     this.currentMap = cityMap;
-    if (!this.staticCanvasRenderer) {
-      const snapshotCanvas = document.createElement('canvas');
-      const snapshotContext = snapshotCanvas.getContext('2d');
-      if (!snapshotContext) return;
-      this.staticCanvasRenderer = new GameRenderer(snapshotContext);
-    }
+    if (!this.staticBaker) this.staticBaker = new StaticSceneBaker();
 
     // Render the city snapshot at screen density instead of one texel per world
     // unit. Anything less is upscaled by the camera and reads as a blurred map.
@@ -401,9 +396,9 @@ export class PixiGameRenderer {
     const budget = window.innerWidth < 768 ? 2560 : 4096;
     const maxScale = Math.min(this.maxTextureSize(), budget) / WORLD_SIZE;
     const scale = Math.max(0.5, Math.min(this.pixelRatio, maxScale));
-    this.staticCanvasRenderer.setStaticSceneScale(scale);
+    this.staticBaker.setScale(scale);
 
-    const snapshot = this.staticCanvasRenderer.getStaticScene(cityMap);
+    const snapshot = this.staticBaker.getStaticScene(cityMap);
     if (!snapshot) return;
 
     try {
