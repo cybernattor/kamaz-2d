@@ -13,6 +13,10 @@ import { Building, CityDistrict, CityMap, CROSSWALK_DEPTH, RoadSegment, WORLD_SI
 import { MapDecoration, MapTrail } from '../types';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
 import { nameColorForId } from './nameGenerator';
+import {
+  CHAT_BUBBLE_FONT_SIZE, CHAT_BUBBLE_GAP, CHAT_BUBBLE_MAX_WIDTH, CHAT_BUBBLE_PAD_X, CHAT_BUBBLE_PAD_Y,
+  CHAT_BUBBLE_TAIL, getChatBubbles, getLocalChatPlayerId, wrapChatText,
+} from './chatBubbles';
 
 export class GameRenderer {
   private ctx: CanvasRenderingContext2D;
@@ -143,6 +147,9 @@ export class GameRenderer {
     if (!inVehicle) {
       this.renderPlayerCharacter(ctx, playerChar);
     }
+
+    // 10b. Overhead chat bubbles (drawn above vehicles/pedestrians, below lighting)
+    this.renderChatBubbles(ctx, playerVehicle, playerChar, inVehicle, remotePlayers);
 
     // 11. Render Dynamic Lighting & Headlight Cones
     this.renderLightingPass(
@@ -1357,6 +1364,70 @@ export class GameRenderer {
     ctx.font = '10px "JetBrains Mono", sans-serif';
     ctx.fillText('[E] Сесть в авто', 0, -10);
 
+    ctx.restore();
+  }
+
+  private renderChatBubbles(
+    ctx: CanvasRenderingContext2D,
+    playerVehicle: VehicleInstance | null,
+    playerChar: PlayerCharacter,
+    inVehicle: boolean,
+    remotePlayers: RemotePlayer[]
+  ) {
+    const localId = getLocalChatPlayerId();
+    if (localId) {
+      if (inVehicle && playerVehicle) {
+        const half = VEHICLE_CONFIGS[playerVehicle.type].width / 2;
+        this.drawChatBubbleStack(ctx, localId, playerVehicle.x, playerVehicle.y - half - 10);
+      } else {
+        this.drawChatBubbleStack(ctx, localId, playerChar.x, playerChar.y - 28);
+      }
+    }
+    for (const rp of remotePlayers) {
+      if (!this.isVisible(rp.x, rp.y, 100, 100)) continue;
+      const offset = rp.inVehicle ? (VEHICLE_CONFIGS[rp.vehicleType] || VEHICLE_CONFIGS.sedan).width / 2 + 22 : 28;
+      this.drawChatBubbleStack(ctx, rp.id, rp.x, rp.y - offset);
+    }
+  }
+
+  /** Roblox-style white rounded bubbles stacked upward from (x, baseY). */
+  private drawChatBubbleStack(ctx: CanvasRenderingContext2D, id: string, x: number, baseY: number) {
+    const list = getChatBubbles(id);
+    if (!list.length) return;
+    ctx.save();
+    ctx.font = `bold ${CHAT_BUBBLE_FONT_SIZE}px "Plus Jakarta Sans", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const lineH = CHAT_BUBBLE_FONT_SIZE + 3;
+    let bottom = baseY - CHAT_BUBBLE_TAIL;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const b = list[i];
+      const lines = wrapChatText(b.text, CHAT_BUBBLE_MAX_WIDTH, (t) => ctx.measureText(t).width);
+      const textW = Math.max(...lines.map((l) => ctx.measureText(l).width));
+      const w = textW + CHAT_BUBBLE_PAD_X * 2;
+      const h = lines.length * lineH + CHAT_BUBBLE_PAD_Y * 2 - 3;
+      const top = bottom - h;
+      ctx.globalAlpha = b.alpha;
+      ctx.fillStyle = 'rgba(255,255,255,0.96)';
+      ctx.strokeStyle = 'rgba(15,23,42,0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(x - w / 2, top, w, h, 9);
+      ctx.fill();
+      ctx.stroke();
+      if (i === list.length - 1) {
+        // Tail points at the speaker only on the newest (lowest) bubble.
+        ctx.beginPath();
+        ctx.moveTo(x - 5, bottom - 0.5);
+        ctx.lineTo(x + 5, bottom - 0.5);
+        ctx.lineTo(x, bottom + CHAT_BUBBLE_TAIL);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillStyle = '#0f172a';
+      lines.forEach((line, li) => ctx.fillText(line, x, top + CHAT_BUBBLE_PAD_Y - 1 + li * lineH + lineH / 2));
+      bottom = top - CHAT_BUBBLE_GAP;
+    }
     ctx.restore();
   }
 

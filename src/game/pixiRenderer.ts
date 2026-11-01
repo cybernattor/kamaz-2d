@@ -21,6 +21,10 @@ import { GameRenderer } from './renderer';
 import { CityMap, WORLD_SIZE } from './cityMap';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
 import { nameColorForId } from './nameGenerator';
+import {
+  CHAT_BUBBLE_FONT_SIZE, CHAT_BUBBLE_GAP, CHAT_BUBBLE_MAX_WIDTH, CHAT_BUBBLE_PAD_X, CHAT_BUBBLE_PAD_Y,
+  CHAT_BUBBLE_TAIL, getChatBubbles, getLocalChatPlayerId,
+} from './chatBubbles';
 
 type EntityView = {
   container: Container;
@@ -110,6 +114,7 @@ export class PixiGameRenderer {
   private readonly nameLabels = new Map<string, Text>();
   private readonly nameHealthBars = new Map<string, Graphics>();
   private readonly speechBubbles = new Map<string, { bg: Graphics; text: Text }>();
+  private readonly chatBubbleViews = new Map<string, { bg: Graphics; text: Text }>();
   private readonly particleSprites = new Map<string, Sprite>();
   private readonly lightSprites = new Map<string, Sprite>();
   private readonly effectPool: Sprite[] = [];
@@ -312,6 +317,7 @@ export class PixiGameRenderer {
     } else {
       this.hidePlayerCharacter();
     }
+    this.renderChatBubbles(playerVehicle, playerChar, inVehicle, remotePlayers, bounds);
     this.renderNightOverlay(bounds);
     this.renderLighting(trafficCars, ownVehicle, remotePlayers, destructibles, bounds);
     this.renderParticles(particles, bounds);
@@ -774,6 +780,82 @@ export class PixiGameRenderer {
       .roundRect(x - boxW / 2, y - 18 - boxH, boxW, boxH, 6)
       .fill({ color: 0x0f172a, alpha: 0.92 })
       .stroke({ color: 0x64748b, width: 1.5 });
+  }
+
+  private renderChatBubbles(
+    playerVehicle: VehicleInstance | null,
+    playerChar: PlayerCharacter,
+    inVehicle: boolean,
+    remotePlayers: RemotePlayer[],
+    bounds: Bounds
+  ) {
+    const used = new Set<string>();
+    const localId = getLocalChatPlayerId();
+    if (localId) {
+      if (inVehicle && playerVehicle) {
+        const half = VEHICLE_CONFIGS[playerVehicle.type].width / 2;
+        this.drawChatBubbleStack(localId, playerVehicle.x, playerVehicle.y - half - 10, used);
+      } else {
+        this.drawChatBubbleStack(localId, playerChar.x, playerChar.y - 28, used);
+      }
+    }
+    for (const rp of remotePlayers) {
+      if (!this.isVisible(rp.x, rp.y, 100, 100, bounds)) continue;
+      const offset = rp.inVehicle ? (VEHICLE_CONFIGS[rp.vehicleType] || VEHICLE_CONFIGS.sedan).width / 2 + 22 : 28;
+      this.drawChatBubbleStack(rp.id, rp.x, rp.y - offset, used);
+    }
+    for (const [key, view] of this.chatBubbleViews) {
+      if (used.has(key)) continue;
+      this.speechLayer.removeChild(view.bg, view.text);
+      view.bg.destroy();
+      view.text.destroy();
+      this.chatBubbleViews.delete(key);
+    }
+  }
+
+  /** Roblox-style white rounded bubbles stacked upward from (x, baseY). */
+  private drawChatBubbleStack(id: string, x: number, baseY: number, used: Set<string>) {
+    const list = getChatBubbles(id);
+    let bottom = baseY - CHAT_BUBBLE_TAIL;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const b = list[i];
+      const key = `${id}|${b.key}`;
+      used.add(key);
+      let view = this.chatBubbleViews.get(key);
+      if (!view) {
+        const text = new Text({
+          text: b.text,
+          style: {
+            fontFamily: '"Plus Jakarta Sans", sans-serif',
+            fontSize: CHAT_BUBBLE_FONT_SIZE,
+            fontWeight: 'bold',
+            fill: 0x0f172a,
+            align: 'center',
+            wordWrap: true,
+            wordWrapWidth: CHAT_BUBBLE_MAX_WIDTH,
+            breakWords: true,
+          },
+          resolution: this.spriteResolution,
+        });
+        text.anchor.set(0.5, 0);
+        const bg = new Graphics();
+        this.speechLayer.addChild(bg, text);
+        view = { bg, text };
+        this.chatBubbleViews.set(key, view);
+      }
+      const w = view.text.width + CHAT_BUBBLE_PAD_X * 2;
+      const h = view.text.height + CHAT_BUBBLE_PAD_Y * 2;
+      const top = bottom - h;
+      view.bg.clear();
+      view.bg.roundRect(x - w / 2, top, w, h, 9).fill({ color: 0xffffff, alpha: 0.96 }).stroke({ color: 0x0f172a, alpha: 0.35, width: 1 });
+      if (i === list.length - 1) {
+        view.bg.poly([x - 5, bottom - 0.5, x + 5, bottom - 0.5, x, bottom + CHAT_BUBBLE_TAIL]).fill({ color: 0xffffff, alpha: 0.96 });
+      }
+      view.text.position.set(x, top + CHAT_BUBBLE_PAD_Y);
+      view.bg.alpha = b.alpha;
+      view.text.alpha = b.alpha;
+      bottom = top - CHAT_BUBBLE_GAP;
+    }
   }
 
   private releaseSpeechBubbles(active: Set<string>) {
