@@ -30,6 +30,7 @@ import type { FeedEvent } from './components/NetworkFeed';
 import { VirtualControls } from './components/VirtualControls';
 import { repairCost } from './game/repair';
 import { VEHICLE_CONFIGS } from './game/vehicleConfigs';
+import { resolveKeyboardPedals } from './game/vehicleDynamics';
 import { FixedStepAccumulator } from './game/fixedStep';
 import { randomDriverName } from './game/nameGenerator';
 import { loadUserPreferences, saveUserPreferences, UserPreferences } from './game/userPreferences';
@@ -678,12 +679,16 @@ export default function App() {
       const isCar = inVehicleStateRef.current;
 
       if (isCar) {
+        const pedals = resolveKeyboardPedals(
+          v.speed,
+          Boolean(keys['KeyW'] || keys['ArrowUp']),
+          Boolean(keys['KeyS'] || keys['ArrowDown']),
+          Boolean(keys['Space']),
+        );
         physicsRef.current.updatePlayerVehicle(
           v,
           {
-            throttle: Boolean(keys['KeyW'] || keys['ArrowUp']),
-            brake: Boolean(keys['Space'] || keys['ArrowDown']),
-            reverse: Boolean(keys['KeyS']),
+            ...pedals,
             steerLeft: Boolean(keys['KeyA'] || keys['ArrowLeft']),
             steerRight: Boolean(keys['KeyD'] || keys['ArrowRight']),
             handbrake: Boolean(keys['ShiftLeft'] || keys['ShiftRight']),
@@ -693,9 +698,9 @@ export default function App() {
         );
 
         // Synchronize engine sound pitch
-        const isThrottle = Boolean(keys['KeyW'] || keys['ArrowUp']);
+        const isThrottle = pedals.throttle;
         const isKamaz = v.type.startsWith('kamaz');
-        const isBraking = Boolean(keys['Space'] || keys['ArrowDown']);
+        const isBraking = pedals.brake;
         if (isKamaz && isBraking && !airBrakeWasPressedRef.current) sound.playAirBrake();
         airBrakeWasPressedRef.current = isBraking;
         sound.updateEngine(Math.round(v.speed * 3.6), isThrottle, isKamaz);

@@ -129,3 +129,59 @@ export function steeringLockAngle(speedKmh: number): number {
   const eased = t * t * (3 - 2 * t);
   return LOW_SPEED_STEER_LOCK + (HIGH_SPEED_STEER_LOCK - LOW_SPEED_STEER_LOCK) * eased;
 }
+
+/**
+ * Tyre-grip ceiling on lateral acceleration, in world units/s^2 per point of
+ * the vehicle's `turnSpeed`. Yaw from the bicycle model scales with
+ * speed / body length, so short, fast cars turned 2-3x harder than a KAMAZ
+ * (a hatchback at 100 km/h spun at ~8 rad/s, more than a full turn per
+ * second) and a tap of A/D threw them across the road. A real car cannot
+ * corner harder than its tyres allow, so yaw is capped at a_max / v:
+ * parking-speed turns keep their full geometric lock, while highway turns
+ * become smooth arcs. `turnSpeed` (previously unused) ranks vehicles, so a
+ * sports coupe still out-corners a bus.
+ */
+export const LATERAL_GRIP_PER_TURN_SPEED = 1100;
+
+export function maxGripYawRate(turnSpeed: number, worldSpeedPerSecond: number): number {
+  const lateralLimit = LATERAL_GRIP_PER_TURN_SPEED * turnSpeed;
+  return lateralLimit / Math.max(1, Math.abs(worldSpeedPerSecond));
+}
+
+/**
+ * How fast the front wheels move toward the requested angle (1/s). Keys are
+ * all-or-nothing, so at speed the wheel is turned in more gently, giving the
+ * player time to make small corrections; releasing a key or counter-steering
+ * always recentres quickly so the car straightens without wobbling.
+ */
+export const STEER_RETURN_RATE = 12;
+
+export function steerRate(speedKmh: number, maxSpeedKmh: number, increasing: boolean, analog: boolean): number {
+  if (!increasing) return STEER_RETURN_RATE;
+  if (analog) return 9;
+  const ratio = Math.max(0, Math.min(1, speedKmh / Math.max(1, maxSpeedKmh)));
+  return 8 - 4.5 * ratio;
+}
+
+/**
+ * Arcade pedal mapping for the keyboard: the "down" key (S / ArrowDown)
+ * brakes with full force while the car still rolls forward, then engages
+ * reverse once it has stopped; "up" (W / ArrowUp) does the same while rolling
+ * backwards. Previously S only applied weak reverse torque as a brake, and
+ * ArrowDown braked but could never reverse.
+ */
+export function resolveKeyboardPedals(speed: number, up: boolean, down: boolean, brakeKey: boolean) {
+  const ROLLING = 0.6;
+  let throttle = up;
+  let reverse = down;
+  let brake = brakeKey;
+  if (down && !up && speed > ROLLING) {
+    reverse = false;
+    brake = true;
+  }
+  if (up && !down && speed < -ROLLING) {
+    throttle = false;
+    brake = true;
+  }
+  return { throttle, reverse, brake };
+}
