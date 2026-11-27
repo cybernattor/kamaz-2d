@@ -173,6 +173,10 @@ export default function App() {
   // dependency list would tear down the WebGL renderer - and re-upload the
   // whole city texture - every time the player zooms or picks a mission.
   const zoomRef = useRef(preferencesRef.current.zoom);
+  // The GPU renderer is created asynchronously, after the first isNight
+  // effect has already run; the loop re-applies this every frame so a saved
+  // night preference is not lost on load.
+  const isNightRef = useRef(preferencesRef.current.isNight);
   const targetPoiRef = useRef<PointOfInterest | null>(null);
 
   const [activeMission, setActiveMission] = useState<Mission | null>(null);
@@ -582,9 +586,7 @@ export default function App() {
   const toggleDayNight = useCallback(() => {
     setIsNight((prev) => {
       const next = !prev;
-      if (rendererRef.current) {
-        rendererRef.current.isNightMode = next;
-      }
+      isNightRef.current = next;
       return next;
     });
   }, []);
@@ -860,6 +862,7 @@ export default function App() {
 
       if (rendererRef.current) {
         rendererRef.current.zoom = zoomRef.current;
+        rendererRef.current.isNightMode = isNightRef.current;
         rendererRef.current.frameDelta = delta;
         rendererRef.current.render(
           canvas.clientWidth || window.innerWidth,
@@ -908,7 +911,7 @@ export default function App() {
   }, [zoom]);
 
   useEffect(() => {
-    if (rendererRef.current) rendererRef.current.isNightMode = isNight;
+    isNightRef.current = isNight;
   }, [isNight]);
 
   useEffect(() => {
