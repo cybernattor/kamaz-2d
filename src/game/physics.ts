@@ -8,7 +8,7 @@ import {
   VehicleInstance,
 } from '../types';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
-import { effectiveWheelbase, integrateVehicleSpeed, steeringLockAngle } from './vehicleDynamics';
+import { effectiveWheelbase, integrateVehicleSpeed, maxGripYawRate, steerRate, steeringLockAngle } from './vehicleDynamics';
 import { Building, CityMap, WORLD_SIZE } from './cityMap';
 import { sound } from '../audio/soundEngine';
 import { SpatialHash } from './spatialHash';
@@ -115,7 +115,7 @@ export class PhysicsEngine {
     const speedKmh = Math.abs(vehicle.speed) * 3.6;
     const speedFactor = Math.max(0.7, 1.0 - (speedKmh / (config.maxSpeed * 1.4)) * 0.3);
     const maxSteerAngle = steeringLockAngle(speedKmh) * speedFactor * dazeFactor;
-    const steerSpeed = 7;
+    const analogSteer = typeof inputs.steerAxis === 'number';
     let targetSteer = 0;
 
     if (!isDestroyed) {
@@ -127,8 +127,12 @@ export class PhysicsEngine {
       }
     }
 
-    // Smooth steering centering with fast response
-    vehicle.steeringAngle += (targetSteer - vehicle.steeringAngle) * steerSpeed * delta;
+    // Turn in gradually (slower at speed for keys), recentre quickly. Moving
+    // toward zero or across it counts as returning, so counter-steer is snappy.
+    const increasing = Math.abs(targetSteer) > Math.abs(vehicle.steeringAngle)
+      && Math.sign(targetSteer) !== -Math.sign(vehicle.steeringAngle);
+    const rate = steerRate(speedKmh, config.maxSpeed, increasing, analogSteer);
+    vehicle.steeringAngle += (targetSteer - vehicle.steeringAngle) * Math.min(1, rate * delta);
 
     // Damaged engine power loss
     const healthPowerFactor = vehicle.health < 30 ? 0.6 : vehicle.health < 60 ? 0.85 : 1.0;
@@ -164,8 +168,13 @@ export class PhysicsEngine {
       const driftMultiplier = isDrifting ? (config.id === 'sports' ? 1.5 : 1.2) : 1.0;
       // Position integration advances speed by 60 world units per second;
       // the same scale is used here so the turning radius stays consistent.
-      vehicle.angularVelocity = (Math.abs(vehicle.speed) * 60 / wheelbase)
-        * Math.tan(vehicle.steeringAngle) * speedSign * driftMultiplier;
+      const worldSpeed = Math.abs(vehicle.speed) * 60;
+      const geometricYaw = (worldSpeed / wheelbase) * Math.tan(vehicle.steeringAngle);
+      // Tyres cap cornering force, so fast light cars no longer spin around
+      // their own length; the handbrake still rotates past the cap to drift.
+      const gripYaw = maxGripYawRate(config.turnSpeed, worldSpeed);
+      const yaw = Math.max(-gripYaw, Math.min(gripYaw, geometricYaw));
+      vehicle.angularVelocity = yaw * speedSign * driftMultiplier;
       vehicle.angle += vehicle.angularVelocity * delta;
     } else {
       vehicle.angularVelocity = 0;

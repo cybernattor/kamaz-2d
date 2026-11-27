@@ -89,6 +89,8 @@ const createSteeringWheelLayer = (layer: Container) => {
 export class PixiGameRenderer {
   public cameraX = 1200;
   public cameraY = 1200;
+  private lookAheadX = 0;
+  private lookAheadY = 0;
   public zoom = 1;
   public frameDelta = 1 / 60;
   public isNightMode = false;
@@ -321,9 +323,24 @@ export class PixiGameRenderer {
 
     const renderStarted = performance.now();
 
-    const focusX = inVehicle && playerVehicle ? playerVehicle.x : playerChar.x;
-    const focusY = inVehicle && playerVehicle ? playerVehicle.y : playerChar.y;
     const frameDelta = Math.min(Math.max(this.frameDelta, 1 / 120), 0.05);
+    // Look ahead along the direction of travel. A trailing camera showed more
+    // road behind a fast car than in front of it, so corners and traffic
+    // appeared too late to react to. The offset grows with speed, is capped
+    // to a fraction of the screen and eases in so it never jerks.
+    let targetLookX = 0;
+    let targetLookY = 0;
+    if (inVehicle && playerVehicle) {
+      const viewSpan = Math.min(canvasWidth || this.viewportWidth, canvasHeight || this.viewportHeight) / this.zoom;
+      const lead = Math.max(-0.12, Math.min(0.28, playerVehicle.speed * 60 * 0.00022)) * viewSpan;
+      targetLookX = Math.cos(playerVehicle.angle) * lead;
+      targetLookY = Math.sin(playerVehicle.angle) * lead;
+    }
+    const lookEase = 1 - Math.exp(-2.5 * frameDelta);
+    this.lookAheadX += (targetLookX - this.lookAheadX) * lookEase;
+    this.lookAheadY += (targetLookY - this.lookAheadY) * lookEase;
+    const focusX = (inVehicle && playerVehicle ? playerVehicle.x : playerChar.x) + this.lookAheadX;
+    const focusY = (inVehicle && playerVehicle ? playerVehicle.y : playerChar.y) + this.lookAheadY;
     const follow = 1 - Math.exp(-9 * frameDelta);
     this.cameraX += (focusX - this.cameraX) * follow;
     this.cameraY += (focusY - this.cameraY) * follow;
