@@ -14,7 +14,6 @@ import {
   Compass,
   Car,
   Briefcase,
-  Lightbulb,
   ChevronDown,
   ChevronUp,
   CarFront,
@@ -75,6 +74,32 @@ const TOP_BTN =
 
 const QUICK_BTN =
   'flex h-12 w-12 flex-col items-center justify-center gap-0.5 rounded-lg border text-[10px] font-bold leading-none shadow-lg cursor-pointer select-none';
+
+/**
+ * Dashboard tell-tale for the headlamps, as on a real instrument cluster:
+ * low beam is a green lamp with rays angled down, high beam a blue lamp with
+ * straight rays. Reads at a glance without the text label on small screens.
+ */
+const BeamIcon: React.FC<{ mode: number; className?: string }> = ({ mode, className }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M13 5c4.2 0 7 3.1 7 7s-2.8 7-7 7z" fill={mode > 0 ? 'currentColor' : 'none'} fillOpacity={0.25} />
+    {mode === 2 ? (
+      <path d="M9.5 7.5H3.5M9.5 12H3.5M9.5 16.5H3.5" />
+    ) : (
+      <path d="M9.5 7.5L3.5 9.5M9.5 12L3.5 14M9.5 16.5L3.5 18.5" />
+    )}
+  </svg>
+);
+
+const headlightLabel = (mode: number | undefined) =>
+  mode === 2 ? 'Дальний свет' : mode === 1 ? 'Ближний свет' : 'Фары выключены';
+
+const headlightTone = (mode: number | undefined) =>
+  mode === 2
+    ? 'bg-blue-950 text-blue-300 border-blue-500 shadow-[0_0_12px_-2px_rgba(59,130,246,0.6)]'
+    : mode === 1
+    ? 'bg-emerald-950 text-emerald-300 border-emerald-500 shadow-[0_0_12px_-2px_rgba(16,185,129,0.5)]'
+    : null;
 
 export const HUD: React.FC<HUDProps> = ({
   streetName,
@@ -474,14 +499,12 @@ export const HUD: React.FC<HUDProps> = ({
                 id="btn-toggle-headlights"
                 onClick={onToggleHeadlights}
                 className={`${QUICK_BTN} ${
-                  playerVehicle && playerVehicle.headlights > 0
-                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
-                    : 'bg-slate-900/85 text-slate-200 border-slate-600'
+                  headlightTone(playerVehicle?.headlights) ?? 'bg-slate-900/85 text-slate-200 border-slate-600'
                 }`}
-                aria-label="Фары"
+                aria-label={`Фары: ${headlightLabel(playerVehicle?.headlights)}`}
               >
-                <Lightbulb className="h-4 w-4" aria-hidden="true" />
-                <span>Фары</span>
+                <BeamIcon mode={playerVehicle?.headlights ?? 0} className="h-4 w-4" />
+                <span>{playerVehicle?.headlights === 2 ? 'Дальний' : playerVehicle?.headlights === 1 ? 'Ближний' : 'Фары'}</span>
               </button>
               <button
                 id="btn-repair-car"
@@ -735,19 +758,19 @@ export const HUD: React.FC<HUDProps> = ({
             <button
               id="btn-toggle-headlights"
               onClick={onToggleHeadlights}
-              className={`flex-[2] min-h-10 py-1 px-1 sm:px-2 rounded text-xs font-mono font-bold border transition-colors cursor-pointer flex items-center justify-center gap-1 ${
-                playerVehicle && playerVehicle.headlights > 0
-                  ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
-                  : 'bg-slate-900 text-slate-400 border-slate-700 hover:bg-slate-800'
+              className={`flex-[2] min-h-10 py-1 px-1 sm:px-2 rounded text-xs font-mono font-bold border transition-[color,background-color,border-color,box-shadow,transform] duration-200 active:scale-[0.97] cursor-pointer flex items-center justify-center gap-1 ${
+                headlightTone(playerVehicle?.headlights) ?? 'bg-slate-900 text-slate-400 border-slate-700 hover:bg-slate-800'
               }`}
+              title={`${headlightLabel(playerVehicle?.headlights)} — переключить [L]`}
+              aria-label={`Фары: ${headlightLabel(playerVehicle?.headlights)}`}
             >
-              <Lightbulb className="w-3.5 h-3.5" />
+              <BeamIcon mode={playerVehicle?.headlights ?? 0} className="w-4 h-4" />
               <span className="hidden sm:inline">
                 {playerVehicle?.headlights === 2
                   ? 'Дальний (L)'
                   : playerVehicle?.headlights === 1
                   ? 'Ближний (L)'
-                  : 'Фары Выкл (L)'}
+                  : 'Фары выкл (L)'}
               </span>
               <span className="sm:hidden">L</span>
             </button>

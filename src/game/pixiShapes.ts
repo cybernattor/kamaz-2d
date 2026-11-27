@@ -166,20 +166,3 @@ export function drawVehicleIndicators(graphics: Graphics, vehicle: VehicleInstan
     graphics.circle(0, -halfWidth - 6, 1.6).fill(0x111827);
   }
 }
-
-export function drawHeadlight(graphics: Graphics, x: number, y: number, angle: number, mode: number) {
-  const distance = mode === 2 ? 270 : 190;
-  const spread = mode === 2 ? 0.38 : 0.28;
-  const left = angle - spread;
-  const right = angle + spread;
-  graphics
-    .poly([
-      x,
-      y,
-      x + Math.cos(left) * distance,
-      y + Math.sin(left) * distance,
-      x + Math.cos(right) * distance,
-      y + Math.sin(right) * distance,
-    ])
-    .fill({ color: 0xfef08a, alpha: 0.08 });
-}

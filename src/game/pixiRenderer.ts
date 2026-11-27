@@ -2,6 +2,7 @@ import {
   Application,
   Container,
   Graphics,
+  RenderTexture,
   Sprite,
   Texture,
 } from 'pixi.js';
@@ -19,6 +20,25 @@ import {
 import { StaticSceneBaker } from './staticScene';
 import { CityMap, WORLD_SIZE } from './cityMap';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
+import type { Building } from './cityMap';
+import {
+  BAR_TEXTURE_HEIGHT,
+  BAR_TEXTURE_WIDTH,
+  BEAM_TEXTURE_SIZE,
+  HIGH_BEAM_LENGTH,
+  LOW_BEAM_LENGTH,
+  LightShape,
+  RADIAL_TEXTURE_SIZE,
+  SIGNAL_AMBER,
+  SODIUM,
+  TAIL_RED,
+  ambientColor,
+  colorFromCss,
+  createLightCanvas,
+  headlampColor,
+  lightStrength,
+  signalColor,
+} from './nightLighting';
 import { LabelOverlay } from './pixiLabels';
 import { Bounds, colorNumber, isVisible, lineVisible } from './pixiUtils';
 import { drawProp, drawTrafficLight, drawVehicle, drawVehicleIndicators } from './pixiShapes';
@@ -84,10 +104,14 @@ export class PixiGameRenderer {
   private readonly propLayer = new Container();
   private readonly vehicleLayer = new Container();
   private readonly pedestrianLayer = new Container();
-  private readonly nightOverlay = new Graphics();
-  private readonly lightLayer = new Container();
   private readonly particleLayer = new Container();
   private readonly beaconLayer = new Container();
+  /** Same camera transform as `world`, drawn above the light map. */
+  private readonly overlayWorld = new Container();
+  /** Additive glow on light sources themselves (lenses, lamp heads, neon). */
+  private readonly glowLayer = new Container();
+  /** Off-stage container rendered into the light map texture each frame. */
+  private readonly lightRoot = new Container();
 
   private readonly vehicleViews = new Map<string, EntityView>();
   private readonly pedestrianViews = new Map<string, EntityView>();
@@ -102,12 +126,23 @@ export class PixiGameRenderer {
   private readonly effectTextures = new Map<string, Texture>();
   private readonly skidSprites = new Map<string, Sprite>();
   private readonly particleSprites = new Map<string, Sprite>();
-  private readonly lightSprites = new Map<string, Sprite>();
+  private readonly lightShapeTextures = new Map<LightShape, Texture>();
+  private readonly lightPool: Sprite[] = [];
+  private readonly glowPool: Sprite[] = [];
+  private lightCursor = 0;
+  private glowCursor = 0;
+  private lightMap: RenderTexture | null = null;
+  private lightMapSprite: Sprite | null = null;
+  /** The light map is soft by nature, so it renders below screen resolution. */
+  private readonly lightMapScale = 0.5;
+  /** 0 = day, 1 = full night; eases toward `isNightMode` for a dusk fade. */
+  private nightAmount = -1;
   private readonly effectPool: Sprite[] = [];
   private beaconRing: Sprite | null = null;
   private beaconDot: Sprite | null = null;
   private playerCharacterTexture: Texture | null = null;
   private playerCharacterView: EntityView | null = null;
+  private static readonly SURFACE_BOOST = 0.2;
 
   private staticBaker: StaticSceneBaker | null = null;
   private staticTexture: Texture | null = null;
@@ -170,27 +205,35 @@ export class PixiGameRenderer {
       return;
     }
 
-    // Order matches the Canvas renderer's own draw sequence: vehicles and
-    // pedestrians sit under the night overlay so they actually dim after
-    // dark, and the headlight/lamp glow layer draws last, in 'screen' blend
-    // mode, so lights still visibly punch through that darkness on top.
+    // Everything that should be lit sits in `world`. At night a light map
+    // (ambient sky colour + additive lights) is multiplied over it, then the
+    // overlay draws source glows and labels that must stay readable.
     this.world.addChild(
       this.staticLayer,
       this.skidLayer,
       this.propLayer,
       this.vehicleLayer,
       this.pedestrianLayer,
-      this.nightOverlay,
-      this.lightLayer,
-      this.particleLayer,
+      this.particleLayer
+    );
+    this.overlayWorld.addChild(
+      this.glowLayer,
       this.labels.nameLabelLayer,
       this.labels.speechLayer,
       this.beaconLayer
     );
-    this.lightLayer.blendMode = 'screen';
     this.staticBackground.rect(0, 0, WORLD_SIZE, WORLD_SIZE).fill(0x0f3822);
     this.staticLayer.addChildAt(this.staticBackground, 0);
-    this.app.stage.addChild(this.world);
+    this.lightMap = RenderTexture.create({
+      width: Math.max(1, Math.round(this.viewportWidth * this.lightMapScale)),
+      height: Math.max(1, Math.round(this.viewportHeight * this.lightMapScale)),
+      resolution: 1,
+      dynamic: true,
+    });
+    this.lightMapSprite = new Sprite(this.lightMap);
+    this.lightMapSprite.blendMode = 'multiply';
+    this.lightMapSprite.visible = false;
+    this.app.stage.addChild(this.world, this.lightMapSprite, this.overlayWorld);
     this.initialized = true;
     this.canvas.dataset.pixiStatus = 'ready';
     this.resize(this.viewportWidth, this.viewportHeight);
@@ -205,7 +248,20 @@ export class PixiGameRenderer {
         this.viewportHeight,
         this.pixelRatio * this.renderScale
       );
+      this.resizeLightMap();
     }
+  }
+
+  private resizeLightMap() {
+    if (!this.lightMap || !this.lightMapSprite) return;
+    const width = Math.max(1, Math.round(this.viewportWidth * this.lightMapScale));
+    const height = Math.max(1, Math.round(this.viewportHeight * this.lightMapScale));
+    if (this.lightMap.width !== width || this.lightMap.height !== height) {
+      this.lightMap.resize(width, height);
+    }
+    this.lightMapSprite.texture = this.lightMap;
+    this.lightMapSprite.width = this.viewportWidth;
+    this.lightMapSprite.height = this.viewportHeight;
   }
 
   public setZoom(value: number) {
@@ -281,6 +337,8 @@ export class PixiGameRenderer {
       width / 2 - this.cameraX * this.zoom,
       height / 2 - this.cameraY * this.zoom
     );
+    this.overlayWorld.scale.copyFrom(this.world.scale);
+    this.overlayWorld.position.copyFrom(this.world.position);
 
     const bounds = {
       left: this.cameraX - width / (2 * this.zoom) - 160,
@@ -304,10 +362,18 @@ export class PixiGameRenderer {
       this.hidePlayerCharacter();
     }
     this.labels.renderChatBubbles(playerVehicle, playerChar, inVehicle, remotePlayers, bounds);
-    this.renderNightOverlay(bounds);
-    this.renderLighting(trafficCars, ownVehicle, remotePlayers, destructibles, bounds);
     this.renderParticles(particles, bounds);
     this.renderBeacon(targetPoi, bounds);
+    this.renderLighting(
+      cityMap,
+      trafficCars,
+      ownVehicle,
+      remotePlayers,
+      destructibles,
+      targetPoi,
+      bounds,
+      frameDelta
+    );
     // Drive Pixi directly from the existing game loop. This avoids relying on
     // the TickerPlugin and is the documented manual-render path for v8.
     this.app.renderer.render(this.app.stage);
@@ -443,7 +509,7 @@ export class PixiGameRenderer {
   private renderTrafficLights(lights: TrafficLight[], bounds: Bounds) {
     const active = new Set<string>();
     for (const light of lights) {
-      const view = this.getView(this.trafficLightViews, light.id, this.lightLayer, this.getTrafficLightTexture(light));
+      const view = this.getView(this.trafficLightViews, light.id, this.propLayer, this.getTrafficLightTexture(light));
       view.container.visible = isVisible(light.x, light.y, 30, 30, bounds);
       if (!view.container.visible) continue;
       active.add(light.id);
@@ -561,25 +627,6 @@ export class PixiGameRenderer {
   }
 
   /**
-   * The Canvas renderer darkens the whole scene at night (a full-screen
-   * rgba(5,10,20,0.78) overlay) before drawing headlights/lamp glows in
-   * 'screen' blend mode on top, so lights visibly punch through the dark.
-   * This GPU path never drew that overlay at all — headlights and street
-   * lamps just floated over a scene that stayed fully daylight-bright.
-   */
-  private renderNightOverlay(bounds: Bounds) {
-    this.nightOverlay.clear();
-    if (!this.isNightMode) {
-      this.nightOverlay.visible = false;
-      return;
-    }
-    this.nightOverlay.visible = true;
-    this.nightOverlay
-      .rect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top)
-      .fill({ color: 0x050a14, alpha: 0.78 });
-  }
-
-  /**
    * The Canvas renderer has always drawn the on-foot player (a trucker
    * figure + name tag), but this GPU path never did — stepping out of the
    * vehicle just left nothing on screen. Mirrors the vehicle/pedestrian
@@ -647,48 +694,293 @@ export class PixiGameRenderer {
 
 
 
+  /**
+   * Night lighting via a light map. The map is cleared to the ambient sky
+   * colour, every light adds onto it, and the result multiplies over the
+   * world — so a headlight reveals the asphalt's real colour instead of
+   * painting a yellow triangle over it. Source glows (lenses, lamp heads,
+   * signals, neon) then go on top additively so the emitters read brighter
+   * than the surfaces they light.
+   */
   private renderLighting(
+    cityMap: CityMap,
     npcVehicles: VehicleInstance[],
     playerVehicles: VehicleInstance[],
     remotePlayers: RemotePlayer[],
     props: DestructibleObject[],
-    bounds: Bounds
+    poi: PointOfInterest | null,
+    bounds: Bounds,
+    frameDelta: number
   ) {
-    const active = new Set<string>();
-    if (!this.isNightMode) {
-      this.releaseEffects(this.lightSprites, active);
+    const target = this.isNightMode ? 1 : 0;
+    if (this.nightAmount < 0) {
+      // First frame: start in the saved mode instead of fading into it.
+      this.nightAmount = target;
+    } else if (this.nightAmount !== target) {
+      const step = frameDelta / 1.6;
+      this.nightAmount = this.nightAmount < target
+        ? Math.min(target, this.nightAmount + step)
+        : Math.max(target, this.nightAmount - step);
+    }
+
+    this.lightCursor = 0;
+    this.glowCursor = 0;
+    const lightMap = this.lightMap;
+    const lightMapSprite = this.lightMapSprite;
+    const night = this.nightAmount;
+    if (night <= 0.001 || !lightMap || !lightMapSprite) {
+      if (lightMapSprite) lightMapSprite.visible = false;
+      this.glowLayer.visible = false;
+      this.finishLightPools();
       return;
     }
 
-    for (const vehicle of [...npcVehicles, ...playerVehicles]) {
-      if (!vehicle.headlights || !isVisible(vehicle.x, vehicle.y, 360, 360, bounds)) continue;
-      const sprite = this.acquireEffectSprite(this.lightSprites, `headlight:${vehicle.id}`, this.lightLayer, this.getEffectTexture(vehicle.headlights === 2 ? 'headlight-high' : 'headlight-low'));
-      active.add(`headlight:${vehicle.id}`);
-      sprite.visible = true;
-      sprite.position.set(vehicle.x, vehicle.y);
-      sprite.rotation = vehicle.angle;
-      sprite.alpha = 0.55;
+    const strength = lightStrength(night);
+    if (strength > 0) {
+      const now = Date.now();
+      this.addStreetLamps(props, strength, bounds);
+      this.addTrafficSignals(cityMap.trafficLights, strength, bounds);
+      this.addNeon(cityMap.buildings, strength, bounds);
+      for (const vehicle of [...npcVehicles, ...playerVehicles]) {
+        this.addVehicleLights(
+          vehicle.id,
+          vehicle.type,
+          vehicle.x,
+          vehicle.y,
+          vehicle.angle,
+          vehicle.headlights,
+          vehicle.isBraking,
+          vehicle.isReversing,
+          vehicle.turnSignal,
+          vehicle.isPlayer,
+          strength,
+          now,
+          bounds
+        );
+      }
+      for (const remote of remotePlayers) {
+        if (!remote.inVehicle) continue;
+        this.addVehicleLights(
+          `remote:${remote.id}`,
+          remote.vehicleType,
+          remote.x,
+          remote.y,
+          remote.angle,
+          remote.headlights,
+          false,
+          false,
+          remote.turnSignal,
+          false,
+          strength,
+          now,
+          bounds
+        );
+      }
+      if (poi && isVisible(poi.x, poi.y, 260, 260, bounds)) {
+        this.pushRadial(false, poi.x, poi.y, 120, 0xfde047, 0.5 * strength);
+      }
     }
-    for (const remote of remotePlayers) {
-      if (!remote.inVehicle || !remote.headlights || !isVisible(remote.x, remote.y, 360, 360, bounds)) continue;
-      const id = `headlight:remote:${remote.id}`;
-      const sprite = this.acquireEffectSprite(this.lightSprites, id, this.lightLayer, this.getEffectTexture(remote.headlights === 2 ? 'headlight-high' : 'headlight-low'));
-      active.add(id);
-      sprite.visible = true;
-      sprite.position.set(remote.x, remote.y);
-      sprite.rotation = remote.angle;
-      sprite.alpha = 0.55;
-    }
+    this.finishLightPools();
+
+    const scale = this.lightMapScale;
+    this.lightRoot.scale.set(this.zoom * scale);
+    this.lightRoot.position.set(this.world.position.x * scale, this.world.position.y * scale);
+    this.app.renderer.render({
+      container: this.lightRoot,
+      target: lightMap,
+      clear: true,
+      clearColor: ambientColor(night),
+    });
+    lightMapSprite.visible = true;
+    this.glowLayer.visible = strength > 0;
+  }
+
+  private addStreetLamps(props: DestructibleObject[], strength: number, bounds: Bounds) {
     for (const prop of props) {
-      if (prop.type !== 'lamp_pole' || prop.isDestroyed || !isVisible(prop.x, prop.y, 180, 180, bounds)) continue;
-      const id = `lamp:${prop.id}`;
-      const sprite = this.acquireEffectSprite(this.lightSprites, id, this.lightLayer, this.getEffectTexture('lamp'));
-      active.add(id);
-      sprite.visible = true;
-      sprite.position.set(prop.x, prop.y);
-      sprite.alpha = 0.12;
+      if (prop.type !== 'lamp_pole' || prop.isDestroyed || !isVisible(prop.x, prop.y, 360, 360, bounds)) continue;
+      // Wide sodium pool plus a tighter hot spot right under the head.
+      this.pushRadial(false, prop.x, prop.y, 165, SODIUM, 0.8 * strength);
+      this.pushRadial(false, prop.x, prop.y, 55, 0xffe2b8, 0.3 * strength);
+      this.pushRadial(true, prop.x, prop.y, 46, SODIUM, 0.14 * strength);
+      this.pushRadial(true, prop.x, prop.y, 11, 0xffe9c4, 0.85 * strength);
     }
-    this.releaseEffects(this.lightSprites, active);
+  }
+
+  private addTrafficSignals(lights: TrafficLight[], strength: number, bounds: Bounds) {
+    for (const light of lights) {
+      if (!isVisible(light.x, light.y, 90, 90, bounds)) continue;
+      const lampY = light.state === 'red' ? -9 : light.state === 'yellow' ? 0 : 9;
+      const color = signalColor(light.state);
+      this.pushRadial(false, light.x, light.y + lampY, 40, color, 0.45 * strength);
+      this.pushRadial(true, light.x, light.y + lampY, 9, color, 0.9 * strength);
+      const walk = light.pedestrianState === 'walk';
+      this.pushRadial(true, light.x + 8.5, light.y, 6, walk ? 0x2bff88 : 0xff3b2f, 0.55 * strength);
+    }
+  }
+
+  private addNeon(buildings: Building[], strength: number, bounds: Bounds) {
+    for (const building of buildings) {
+      if (!building.neonBorderColor) continue;
+      if (!isVisible(building.x, building.y, building.width + 120, building.height + 120, bounds)) continue;
+      const color = colorFromCss(building.neonBorderColor, 0x38bdf8);
+      const halfW = building.width / 2;
+      const halfH = building.height / 2;
+      const edges: Array<[number, number, number, number]> = [
+        [building.x, building.y - halfH, 0, building.width],
+        [building.x, building.y + halfH, 0, building.width],
+        [building.x - halfW, building.y, Math.PI / 2, building.height],
+        [building.x + halfW, building.y, Math.PI / 2, building.height],
+      ];
+      for (const [x, y, rotation, length] of edges) {
+        this.pushBar(false, x, y, rotation, length + 40, 80, color, 0.32 * strength);
+        this.pushBar(true, x, y, rotation, length + 8, 12, color, 0.4 * strength);
+      }
+    }
+  }
+
+  private addVehicleLights(
+    id: string,
+    type: VehicleInstance['type'],
+    x: number,
+    y: number,
+    angle: number,
+    headlights: number,
+    isBraking: boolean,
+    isReversing: boolean,
+    turnSignal: string,
+    isPlayer: boolean,
+    strength: number,
+    now: number,
+    bounds: Bounds
+  ) {
+    if (!isVisible(x, y, HIGH_BEAM_LENGTH * 2, HIGH_BEAM_LENGTH * 2, bounds)) return;
+    const config = VEHICLE_CONFIGS[type] || VEHICLE_CONFIGS.sedan;
+    const halfLength = config.length / 2;
+    const lampY = config.width / 2 - 4.5;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const worldX = (lx: number, ly: number) => x + cos * lx - sin * ly;
+    const worldY = (lx: number, ly: number) => y + sin * lx + cos * ly;
+
+    if (headlights > 0) {
+      const high = headlights === 2;
+      const length = high ? HIGH_BEAM_LENGTH : LOW_BEAM_LENGTH;
+      const scale = length / BEAM_TEXTURE_SIZE;
+      const color = headlampColor(id, isPlayer);
+      const shape: LightShape = high ? 'beam-high' : 'beam-low';
+      for (const side of [-1, 1]) {
+        const lx = halfLength - 1;
+        const ly = side * lampY;
+        this.pushLight(false, shape, worldX(lx, ly), worldY(lx, ly), angle, scale, scale, color, (high ? 0.85 : 0.8) * strength);
+        this.pushRadial(true, worldX(lx, ly), worldY(lx, ly), 10, color, 0.9 * strength);
+      }
+      // Spill on the road right in front of the bumper.
+      this.pushRadial(false, worldX(halfLength + 16, 0), worldY(halfLength + 16, 0), 46, color, 0.28 * strength);
+    }
+
+    const rearX = -halfLength + 1;
+    const tailOn = headlights > 0;
+    if (tailOn || isBraking) {
+      const glowAlpha = isBraking ? 0.95 : 0.5;
+      const poolRadius = isBraking ? 44 : 26;
+      const poolAlpha = isBraking ? 0.5 : 0.2;
+      for (const side of [-1, 1]) {
+        const ly = side * lampY;
+        this.pushRadial(false, worldX(rearX - 6, ly), worldY(rearX - 6, ly), poolRadius, TAIL_RED, poolAlpha * strength);
+        this.pushRadial(true, worldX(rearX, ly), worldY(rearX, ly), isBraking ? 9 : 6, TAIL_RED, glowAlpha * strength);
+      }
+    }
+
+    if (isReversing) {
+      this.pushRadial(false, worldX(rearX - 24, 0), worldY(rearX - 24, 0), 52, 0xf4f7ff, 0.45 * strength);
+      this.pushRadial(true, worldX(rearX, 0), worldY(rearX, 0), 7, 0xf4f7ff, 0.7 * strength);
+    }
+
+    if (turnSignal !== 'none' && Math.floor(now / 350) % 2 === 0) {
+      const sides: number[] = [];
+      if (turnSignal === 'left' || turnSignal === 'hazard') sides.push(-1);
+      if (turnSignal === 'right' || turnSignal === 'hazard') sides.push(1);
+      for (const side of sides) {
+        for (const lx of [halfLength - 2, -halfLength + 2]) {
+          const ly = side * (config.width / 2 - 2);
+          this.pushRadial(false, worldX(lx, ly), worldY(lx, ly), 34, SIGNAL_AMBER, 0.42 * strength);
+          this.pushRadial(true, worldX(lx, ly), worldY(lx, ly), 8, SIGNAL_AMBER, 0.85 * strength);
+        }
+      }
+    }
+
+    if (type === 'ambulance' || type === 'police') {
+      const flash = Math.floor(now / 150) % 2 === 0;
+      const color = flash ? 0xff2d2d : 0x2d6bff;
+      this.pushRadial(false, x, y, 150, color, 0.42 * strength);
+      this.pushRadial(true, x, y, 18, color, 0.7 * strength);
+    }
+  }
+
+  private pushRadial(glow: boolean, x: number, y: number, radius: number, tint: number, alpha: number) {
+    const scale = (radius * 2) / RADIAL_TEXTURE_SIZE;
+    this.pushLight(glow, 'radial', x, y, 0, scale, scale, tint, alpha);
+  }
+
+  private pushBar(glow: boolean, x: number, y: number, rotation: number, length: number, thickness: number, tint: number, alpha: number) {
+    this.pushLight(glow, 'bar', x, y, rotation, length / BAR_TEXTURE_WIDTH, thickness / BAR_TEXTURE_HEIGHT, tint, alpha);
+  }
+
+  /**
+   * Immediate-mode light sprite from a per-layer pool. Lights are cheap,
+   * short-lived and numerous, so they are re-issued every frame instead of
+   * being tracked by id; every transform field is set on each use so no
+   * state leaks between the lights a pooled sprite stands in for.
+   */
+  private pushLight(
+    glow: boolean,
+    shape: LightShape,
+    x: number,
+    y: number,
+    rotation: number,
+    scaleX: number,
+    scaleY: number,
+    tint: number,
+    alpha: number
+  ) {
+    if (alpha <= 0.002) return;
+    // The city palette is already dark in daylight, so a multiply-only light
+    // map can never make a lit patch brighter than day. Each surface light
+    // therefore also lays a faint additive copy on top — a cheap stand-in
+    // for overexposure that lets lamp pools and beams read on dark asphalt.
+    if (!glow) this.pushLight(true, shape, x, y, rotation, scaleX, scaleY, tint, alpha * PixiGameRenderer.SURFACE_BOOST);
+    const pool = glow ? this.glowPool : this.lightPool;
+    const index = glow ? this.glowCursor++ : this.lightCursor++;
+    let sprite = pool[index];
+    if (!sprite) {
+      sprite = new Sprite();
+      sprite.blendMode = 'add';
+      (glow ? this.glowLayer : this.lightRoot).addChild(sprite);
+      pool.push(sprite);
+    }
+    const texture = this.getLightShapeTexture(shape);
+    if (sprite.texture !== texture) sprite.texture = texture;
+    if (shape === 'beam-low' || shape === 'beam-high') sprite.anchor.set(0, 0.5);
+    else sprite.anchor.set(0.5);
+    sprite.visible = true;
+    sprite.position.set(x, y);
+    sprite.rotation = rotation;
+    sprite.scale.set(scaleX, scaleY);
+    sprite.tint = tint;
+    sprite.alpha = Math.min(1, alpha);
+  }
+
+  private finishLightPools() {
+    for (let i = this.lightCursor; i < this.lightPool.length; i += 1) this.lightPool[i].visible = false;
+    for (let i = this.glowCursor; i < this.glowPool.length; i += 1) this.glowPool[i].visible = false;
+  }
+
+  private getLightShapeTexture(shape: LightShape) {
+    const existing = this.lightShapeTextures.get(shape);
+    if (existing) return existing;
+    const texture = Texture.from(createLightCanvas(shape));
+    this.lightShapeTextures.set(shape, texture);
+    return texture;
   }
 
   private renderParticles(particles: Particle[], bounds: Bounds) {
@@ -765,7 +1057,7 @@ export class PixiGameRenderer {
     return texture;
   }
 
-  private getEffectTexture(kind: 'skid' | 'particle' | 'splinter' | 'headlight-low' | 'headlight-high' | 'lamp' | 'beacon-ring' | 'beacon-dot') {
+  private getEffectTexture(kind: 'skid' | 'particle' | 'splinter' | 'beacon-ring' | 'beacon-dot') {
     const existing = this.effectTextures.get(kind);
     if (existing) return existing;
     const template = new Graphics();
@@ -778,15 +1070,6 @@ export class PixiGameRenderer {
         break;
       case 'splinter':
         template.rect(0, 0, 12, 2).fill(0xffffff);
-        break;
-      case 'headlight-low':
-        template.poly([0, 70, 190, 18, 190, 122]).fill(0xfef08a);
-        break;
-      case 'headlight-high':
-        template.poly([0, 90, 270, 8, 270, 172]).fill(0xfef08a);
-        break;
-      case 'lamp':
-        template.circle(90, 90, 90).fill(0xfef08a);
         break;
       case 'beacon-ring':
         template.circle(40, 40, 36).stroke({ color: 0xfde047, width: 4, alpha: 0.9 });
@@ -880,7 +1163,6 @@ export class PixiGameRenderer {
     return texture;
   }
 
-
   private getView(map: Map<string, EntityView>, id: string, layer: Container, texture?: Texture) {
     let view = map.get(id);
     if (!view) {
@@ -920,7 +1202,12 @@ export class PixiGameRenderer {
     this.skidSprites.clear();
     this.labels.destroy();
     this.particleSprites.clear();
-    this.lightSprites.clear();
+    this.lightPool.length = 0;
+    this.glowPool.length = 0;
+    for (const texture of this.lightShapeTextures.values()) texture.destroy(true);
+    this.lightShapeTextures.clear();
+    this.lightMap?.destroy(true);
+    this.lightMap = null;
     this.effectPool.length = 0;
     for (const texture of this.pedestrianTextures.values()) texture.destroy(true);
     this.pedestrianTextures.clear();
