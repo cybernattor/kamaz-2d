@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { PointOfInterest, RemotePlayer, VehicleInstance } from '../types';
 import { CityMap, WORLD_SIZE } from '../game/cityMap';
-import { GameRenderer } from '../game/renderer';
+import { StaticSceneBaker } from '../game/staticScene';
 import { X, Compass } from 'lucide-react';
 
 const FULL_MAP_SIZE = 580;
@@ -63,7 +63,7 @@ const FullMapCanvas: React.FC<FullMapCanvasProps> = ({
     let animationFrameId = 0;
     let displaySize = FULL_MAP_SIZE;
     let lastDrawAt = 0;
-    const staticRenderer = new GameRenderer(ctx);
+    const staticRenderer = new StaticSceneBaker();
     let staticMap: CityMap | null = null;
     let staticScene: HTMLCanvasElement | null = null;
 

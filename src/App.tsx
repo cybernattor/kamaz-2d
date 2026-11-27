@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { addChatBubble, clearChatBubbles, setLocalChatPlayerId } from './game/chatBubbles';
 import confetti from 'canvas-confetti';
 import {
   ChatMessage,
@@ -219,7 +220,10 @@ export default function App() {
   const [unreadChat, setUnreadChat] = useState(0);
   const myPlayerIdRef = useRef<string | null>(null);
   const chatOpenRef = useRef(false);
-  useEffect(() => { myPlayerIdRef.current = myPlayerId; }, [myPlayerId]);
+  useEffect(() => {
+    myPlayerIdRef.current = myPlayerId;
+    setLocalChatPlayerId(myPlayerId ?? '');
+  }, [myPlayerId]);
   useEffect(() => {
     chatOpenRef.current = showChat || showMultiplayer;
     if (showChat || showMultiplayer) setUnreadChat(0);
@@ -307,6 +311,7 @@ export default function App() {
           return prev.filter((p) => p.id !== playerId);
         });
         sound.clearRemotePlayerSounds(playerId);
+        clearChatBubbles(playerId);
       },
       onObjectDestroyed: (objectId) => {
         const obj = cityMapRef.current.destructibles.find((d) => d.id === objectId);
@@ -322,6 +327,7 @@ export default function App() {
         }
       },
       onChatMessage: (msg) => {
+        addChatBubble(msg.playerId, msg.text);
         setChatMessages((prev) => [...prev.slice(-40), msg]);
         const fromOthers = msg.playerId !== myPlayerIdRef.current;
         if (fromOthers && !chatOpenRef.current) setUnreadChat((count) => count + 1);

@@ -4,7 +4,6 @@ import {
   Graphics,
   RenderTexture,
   Sprite,
-  Text,
   Texture,
 } from 'pixi.js';
 import {
@@ -18,10 +17,9 @@ import {
   TrafficLight,
   VehicleInstance,
 } from '../types';
-import { GameRenderer } from './renderer';
+import { StaticSceneBaker } from './staticScene';
 import { CityMap, WORLD_SIZE } from './cityMap';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
-import { nameColorForId } from './nameGenerator';
 import type { Building } from './cityMap';
 import {
   BAR_TEXTURE_HEIGHT,
@@ -41,6 +39,9 @@ import {
   lightStrength,
   signalColor,
 } from './nightLighting';
+import { LabelOverlay } from './pixiLabels';
+import { Bounds, colorNumber, isVisible, lineVisible } from './pixiUtils';
+import { drawProp, drawTrafficLight, drawVehicle, drawVehicleIndicators } from './pixiShapes';
 
 type EntityView = {
   container: Container;
@@ -59,12 +60,6 @@ export type RendererPerformanceStats = {
   p95RenderMs: number;
   activeParticles: number;
   activeSkids: number;
-};
-
-const colorNumber = (value: string | undefined, fallback = 0xffffff) => {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value.replace('#', ''), 16);
-  return Number.isFinite(parsed) ? parsed : fallback;
 };
 
 const createEntityView = (layer: Container, texture?: Texture): EntityView => {
@@ -102,6 +97,7 @@ export class PixiGameRenderer {
 
   private readonly app = new Application();
   private readonly world = new Container();
+  private readonly labels = new LabelOverlay();
   private readonly staticLayer = new Container();
   private readonly staticBackground = new Graphics();
   private readonly skidLayer = new Container();
@@ -116,8 +112,6 @@ export class PixiGameRenderer {
   private readonly glowLayer = new Container();
   /** Off-stage container rendered into the light map texture each frame. */
   private readonly lightRoot = new Container();
-  private readonly nameLabelLayer = new Container();
-  private readonly speechLayer = new Container();
 
   private readonly vehicleViews = new Map<string, EntityView>();
   private readonly pedestrianViews = new Map<string, EntityView>();
@@ -131,9 +125,6 @@ export class PixiGameRenderer {
   private readonly indicatorTextures = new Map<string, Texture>();
   private readonly effectTextures = new Map<string, Texture>();
   private readonly skidSprites = new Map<string, Sprite>();
-  private readonly nameLabels = new Map<string, Text>();
-  private readonly nameHealthBars = new Map<string, Graphics>();
-  private readonly speechBubbles = new Map<string, { bg: Graphics; text: Text }>();
   private readonly particleSprites = new Map<string, Sprite>();
   private readonly lightShapeTextures = new Map<LightShape, Texture>();
   private readonly lightPool: Sprite[] = [];
@@ -151,10 +142,9 @@ export class PixiGameRenderer {
   private beaconDot: Sprite | null = null;
   private playerCharacterTexture: Texture | null = null;
   private playerCharacterView: EntityView | null = null;
-  private static readonly PLAYER_CHARACTER_LABEL_ID = 'player-character';
   private static readonly SURFACE_BOOST = 0.2;
 
-  private staticCanvasRenderer: GameRenderer | null = null;
+  private staticBaker: StaticSceneBaker | null = null;
   private staticTexture: Texture | null = null;
   private staticSprite: Sprite | null = null;
   private currentMap: CityMap | null = null;
@@ -185,6 +175,7 @@ export class PixiGameRenderer {
     // Sprite templates are rasterised above screen density so they stay sharp
     // when the camera zooms in; they are small, so the memory cost is tiny.
     this.spriteResolution = Math.min(3, Math.max(2, this.pixelRatio * 2));
+    this.labels.spriteResolution = this.spriteResolution;
     this.viewportWidth = canvasWidth(this.canvas);
     this.viewportHeight = canvasHeight(this.canvas);
 
@@ -227,8 +218,8 @@ export class PixiGameRenderer {
     );
     this.overlayWorld.addChild(
       this.glowLayer,
-      this.nameLabelLayer,
-      this.speechLayer,
+      this.labels.nameLabelLayer,
+      this.labels.speechLayer,
       this.beaconLayer
     );
     this.staticBackground.rect(0, 0, WORLD_SIZE, WORLD_SIZE).fill(0x0f3822);
@@ -370,6 +361,7 @@ export class PixiGameRenderer {
     } else {
       this.hidePlayerCharacter();
     }
+    this.labels.renderChatBubbles(playerVehicle, playerChar, inVehicle, remotePlayers, bounds);
     this.renderParticles(particles, bounds);
     this.renderBeacon(targetPoi, bounds);
     this.renderLighting(
@@ -448,12 +440,7 @@ export class PixiGameRenderer {
 
   private rebuildStaticScene(cityMap: CityMap) {
     this.currentMap = cityMap;
-    if (!this.staticCanvasRenderer) {
-      const snapshotCanvas = document.createElement('canvas');
-      const snapshotContext = snapshotCanvas.getContext('2d');
-      if (!snapshotContext) return;
-      this.staticCanvasRenderer = new GameRenderer(snapshotContext);
-    }
+    if (!this.staticBaker) this.staticBaker = new StaticSceneBaker();
 
     // Render the city snapshot at screen density instead of one texel per world
     // unit. Anything less is upscaled by the camera and reads as a blurred map.
@@ -461,9 +448,9 @@ export class PixiGameRenderer {
     const budget = window.innerWidth < 768 ? 2560 : 4096;
     const maxScale = Math.min(this.maxTextureSize(), budget) / WORLD_SIZE;
     const scale = Math.max(0.5, Math.min(this.pixelRatio, maxScale));
-    this.staticCanvasRenderer.setStaticSceneScale(scale);
+    this.staticBaker.setScale(scale);
 
-    const snapshot = this.staticCanvasRenderer.getStaticScene(cityMap);
+    const snapshot = this.staticBaker.getStaticScene(cityMap);
     if (!snapshot) return;
 
     try {
@@ -509,7 +496,7 @@ export class PixiGameRenderer {
     const active = new Set<string>();
     for (const prop of props) {
       const view = this.getView(this.propViews, prop.id, this.propLayer, this.getPropTexture(prop));
-      view.container.visible = !prop.isDestroyed && this.isVisible(prop.x, prop.y, prop.width + 24, prop.height + 24, bounds);
+      view.container.visible = !prop.isDestroyed && isVisible(prop.x, prop.y, prop.width + 24, prop.height + 24, bounds);
       if (!view.container.visible) continue;
       active.add(prop.id);
       view.container.position.set(prop.x, prop.y);
@@ -523,7 +510,7 @@ export class PixiGameRenderer {
     const active = new Set<string>();
     for (const light of lights) {
       const view = this.getView(this.trafficLightViews, light.id, this.propLayer, this.getTrafficLightTexture(light));
-      view.container.visible = this.isVisible(light.x, light.y, 30, 30, bounds);
+      view.container.visible = isVisible(light.x, light.y, 30, 30, bounds);
       if (!view.container.visible) continue;
       active.add(light.id);
       view.container.position.set(light.x, light.y);
@@ -559,12 +546,12 @@ export class PixiGameRenderer {
           this.pedestrianLayer,
           this.getPlayerCharacterTexture()
         );
-        view.container.visible = this.isVisible(remote.x, remote.y, 40, 40, bounds);
+        view.container.visible = isVisible(remote.x, remote.y, 40, 40, bounds);
         if (view.container.visible) {
           view.container.position.set(remote.x, remote.y);
           view.container.rotation = remote.angle;
         }
-        this.updateNameLabel(remote, bounds, 20);
+        this.labels.updateNameLabel(remote, bounds, 20);
         continue;
       }
       const dummy: VehicleInstance = {
@@ -597,77 +584,17 @@ export class PixiGameRenderer {
         bounds
       );
       const vehicleConfig = VEHICLE_CONFIGS[remote.vehicleType] || VEHICLE_CONFIGS.sedan;
-      this.updateNameLabel(remote, bounds, vehicleConfig.width / 2 + 14);
+      this.labels.updateNameLabel(remote, bounds, vehicleConfig.width / 2 + 14);
     }
     this.hideInactive(this.vehicleViews, active);
     this.hideInactive(this.remoteCharacterViews, activeCharacters);
-    this.releaseNameLabels(activeLabels);
+    this.labels.releaseNameLabels(activeLabels);
   }
 
-  private updateNameLabel(remote: RemotePlayer, bounds: Bounds, labelOffsetY: number) {
-    if (!this.isVisible(remote.x, remote.y, 140, 140, bounds)) {
-      const existing = this.nameLabels.get(remote.id);
-      if (existing) existing.visible = false;
-      const existingBar = this.nameHealthBars.get(remote.id);
-      if (existingBar) existingBar.visible = false;
-      return;
-    }
-    let label = this.nameLabels.get(remote.id);
-    if (!label) {
-      label = new Text({
-        text: remote.name,
-        style: {
-          fontFamily: '"JetBrains Mono", monospace',
-          fontSize: 13,
-          fontWeight: 'bold',
-          fill: nameColorForId(remote.id),
-          stroke: { color: 0x0f172a, width: 3 },
-        },
-        resolution: this.spriteResolution,
-      });
-      label.anchor.set(0.5, 1);
-      this.nameLabelLayer.addChild(label);
-      this.nameLabels.set(remote.id, label);
-    } else if (label.text !== remote.name) {
-      label.text = remote.name;
-    }
-    label.visible = true;
-    label.position.set(remote.x, remote.y - labelOffsetY);
 
-    // The Canvas renderer draws a health bar above every remote player's
-    // name tag; this GPU path only ever drew the name.
-    let bar = this.nameHealthBars.get(remote.id);
-    if (!bar) {
-      bar = new Graphics();
-      this.nameLabelLayer.addChild(bar);
-      this.nameHealthBars.set(remote.id, bar);
-    }
-    bar.visible = true;
-    bar.position.set(remote.x - 20, remote.y - labelOffsetY + 4);
-    bar.clear();
-    bar.rect(0, 0, 40, 4).fill(0x334155);
-    const health = Math.max(0, remote.condition);
-    const healthColor = health > 50 ? 0x22c55e : health > 25 ? 0xeab308 : 0xef4444;
-    bar.rect(0, 0, (40 * health) / 100, 4).fill(healthColor);
-  }
-
-  private releaseNameLabels(active: Set<string>) {
-    for (const [id, label] of this.nameLabels) {
-      if (active.has(id)) continue;
-      this.nameLabels.delete(id);
-      this.nameLabelLayer.removeChild(label);
-      label.destroy();
-    }
-    for (const [id, bar] of this.nameHealthBars) {
-      if (active.has(id)) continue;
-      this.nameHealthBars.delete(id);
-      this.nameLabelLayer.removeChild(bar);
-      bar.destroy();
-    }
-  }
 
   private updateVehicleView(view: EntityView, vehicle: VehicleInstance, bounds: Bounds) {
-    view.container.visible = this.isVisible(vehicle.x, vehicle.y, 110, 110, bounds);
+    view.container.visible = isVisible(vehicle.x, vehicle.y, 110, 110, bounds);
     if (!view.container.visible) return;
     view.container.position.set(vehicle.x, vehicle.y);
     view.container.rotation = vehicle.angle;
@@ -706,7 +633,7 @@ export class PixiGameRenderer {
    * pooled-sprite pattern above instead of the Canvas immediate-mode draw.
    */
   private renderPlayerCharacter(playerChar: PlayerCharacter, bounds: Bounds) {
-    if (!this.isVisible(playerChar.x, playerChar.y, 40, 40, bounds)) {
+    if (!isVisible(playerChar.x, playerChar.y, 40, 40, bounds)) {
       this.hidePlayerCharacter();
       return;
     }
@@ -718,33 +645,12 @@ export class PixiGameRenderer {
     view.container.position.set(playerChar.x, playerChar.y);
     view.container.rotation = playerChar.angle;
 
-    let label = this.nameLabels.get(PixiGameRenderer.PLAYER_CHARACTER_LABEL_ID);
-    if (!label) {
-      label = new Text({
-        text: playerChar.name,
-        style: {
-          fontFamily: '"JetBrains Mono", monospace',
-          fontSize: 12,
-          fontWeight: 'bold',
-          fill: 0x38bdf8,
-          stroke: { color: 0x0f172a, width: 3 },
-        },
-        resolution: this.spriteResolution,
-      });
-      label.anchor.set(0.5, 1);
-      this.nameLabelLayer.addChild(label);
-      this.nameLabels.set(PixiGameRenderer.PLAYER_CHARACTER_LABEL_ID, label);
-    } else if (label.text !== playerChar.name) {
-      label.text = playerChar.name;
-    }
-    label.visible = true;
-    label.position.set(playerChar.x, playerChar.y - 20);
+    this.labels.updatePlayerCharacterLabel(playerChar);
   }
 
   private hidePlayerCharacter() {
     if (this.playerCharacterView) this.playerCharacterView.container.visible = false;
-    const label = this.nameLabels.get(PixiGameRenderer.PLAYER_CHARACTER_LABEL_ID);
-    if (label) label.visible = false;
+    this.labels.hidePlayerCharacterLabel();
   }
 
   private getPlayerCharacterTexture() {
@@ -766,7 +672,7 @@ export class PixiGameRenderer {
     const activeSpeech = new Set<string>();
     for (const ped of pedestrians) {
       const view = this.getView(this.pedestrianViews, ped.id, this.pedestrianLayer, this.getPedestrianTexture(ped));
-      view.container.visible = ped.state !== 'indoors' && this.isVisible(ped.x, ped.y, 50, 50, bounds);
+      view.container.visible = ped.state !== 'indoors' && isVisible(ped.x, ped.y, 50, 50, bounds);
       if (!view.container.visible) continue;
       active.add(ped.id);
       view.container.position.set(ped.x, ped.y);
@@ -777,59 +683,16 @@ export class PixiGameRenderer {
       if (view.sprite) view.sprite.texture = this.getPedestrianTexture(ped);
       if (ped.speechText) {
         activeSpeech.add(ped.id);
-        this.updateSpeechBubble(ped.id, ped.x, ped.y, ped.speechText);
+        this.labels.updateSpeechBubble(ped.id, ped.x, ped.y, ped.speechText);
       }
     }
     this.hideInactive(this.pedestrianViews, active);
-    this.releaseSpeechBubbles(activeSpeech);
+    this.labels.releaseSpeechBubbles(activeSpeech);
   }
 
-  /**
-   * The Canvas renderer shows a speech bubble whenever a pedestrian has
-   * reactive dialogue (ped.speechText) — this GPU path never read that
-   * field at all, so pedestrian reactions were silently invisible.
-   */
-  private updateSpeechBubble(id: string, x: number, y: number, text: string) {
-    let bubble = this.speechBubbles.get(id);
-    if (!bubble) {
-      const bg = new Graphics();
-      const label = new Text({
-        text,
-        style: {
-          fontFamily: '"Plus Jakarta Sans", sans-serif',
-          fontSize: 11,
-          fontWeight: 'bold',
-          fill: 0xf8fafc,
-        },
-        resolution: this.spriteResolution,
-      });
-      label.anchor.set(0.5, 1);
-      this.speechLayer.addChild(bg, label);
-      bubble = { bg, text: label };
-      this.speechBubbles.set(id, bubble);
-    } else if (bubble.text.text !== text) {
-      bubble.text.text = text;
-    }
-    bubble.bg.visible = true;
-    bubble.text.visible = true;
-    const padX = 6;
-    const boxH = 18;
-    const boxW = bubble.text.width + padX * 2;
-    bubble.text.position.set(x, y - 23);
-    bubble.bg.clear();
-    bubble.bg
-      .roundRect(x - boxW / 2, y - 18 - boxH, boxW, boxH, 6)
-      .fill({ color: 0x0f172a, alpha: 0.92 })
-      .stroke({ color: 0x64748b, width: 1.5 });
-  }
 
-  private releaseSpeechBubbles(active: Set<string>) {
-    for (const [id, bubble] of this.speechBubbles) {
-      if (active.has(id)) continue;
-      bubble.bg.visible = false;
-      bubble.text.visible = false;
-    }
-  }
+
+
 
   /**
    * Night lighting via a light map. The map is cleared to the ambient sky
@@ -913,7 +776,7 @@ export class PixiGameRenderer {
           bounds
         );
       }
-      if (poi && this.isVisible(poi.x, poi.y, 260, 260, bounds)) {
+      if (poi && isVisible(poi.x, poi.y, 260, 260, bounds)) {
         this.pushRadial(false, poi.x, poi.y, 120, 0xfde047, 0.5 * strength);
       }
     }
@@ -934,7 +797,7 @@ export class PixiGameRenderer {
 
   private addStreetLamps(props: DestructibleObject[], strength: number, bounds: Bounds) {
     for (const prop of props) {
-      if (prop.type !== 'lamp_pole' || prop.isDestroyed || !this.isVisible(prop.x, prop.y, 360, 360, bounds)) continue;
+      if (prop.type !== 'lamp_pole' || prop.isDestroyed || !isVisible(prop.x, prop.y, 360, 360, bounds)) continue;
       // Wide sodium pool plus a tighter hot spot right under the head.
       this.pushRadial(false, prop.x, prop.y, 165, SODIUM, 0.8 * strength);
       this.pushRadial(false, prop.x, prop.y, 55, 0xffe2b8, 0.3 * strength);
@@ -945,7 +808,7 @@ export class PixiGameRenderer {
 
   private addTrafficSignals(lights: TrafficLight[], strength: number, bounds: Bounds) {
     for (const light of lights) {
-      if (!this.isVisible(light.x, light.y, 90, 90, bounds)) continue;
+      if (!isVisible(light.x, light.y, 90, 90, bounds)) continue;
       const lampY = light.state === 'red' ? -9 : light.state === 'yellow' ? 0 : 9;
       const color = signalColor(light.state);
       this.pushRadial(false, light.x, light.y + lampY, 40, color, 0.45 * strength);
@@ -958,7 +821,7 @@ export class PixiGameRenderer {
   private addNeon(buildings: Building[], strength: number, bounds: Bounds) {
     for (const building of buildings) {
       if (!building.neonBorderColor) continue;
-      if (!this.isVisible(building.x, building.y, building.width + 120, building.height + 120, bounds)) continue;
+      if (!isVisible(building.x, building.y, building.width + 120, building.height + 120, bounds)) continue;
       const color = colorFromCss(building.neonBorderColor, 0x38bdf8);
       const halfW = building.width / 2;
       const halfH = building.height / 2;
@@ -990,7 +853,7 @@ export class PixiGameRenderer {
     now: number,
     bounds: Bounds
   ) {
-    if (!this.isVisible(x, y, HIGH_BEAM_LENGTH * 2, HIGH_BEAM_LENGTH * 2, bounds)) return;
+    if (!isVisible(x, y, HIGH_BEAM_LENGTH * 2, HIGH_BEAM_LENGTH * 2, bounds)) return;
     const config = VEHICLE_CONFIGS[type] || VEHICLE_CONFIGS.sedan;
     const halfLength = config.length / 2;
     const lampY = config.width / 2 - 4.5;
@@ -1125,7 +988,7 @@ export class PixiGameRenderer {
     let rendered = 0;
     for (const particle of particles) {
       if (rendered >= this.effectLimit('particles')) break;
-      if (!this.isVisible(particle.x, particle.y, particle.size * 2 + 8, particle.size * 2 + 8, bounds)) continue;
+      if (!isVisible(particle.x, particle.y, particle.size * 2 + 8, particle.size * 2 + 8, bounds)) continue;
       const sprite = this.acquireEffectSprite(this.particleSprites, particle.id, this.particleLayer, this.getEffectTexture(particle.type === 'splinter' ? 'splinter' : 'particle'));
       active.add(particle.id);
       sprite.visible = true;
@@ -1141,7 +1004,7 @@ export class PixiGameRenderer {
   }
 
   private renderBeacon(poi: PointOfInterest | null, bounds: Bounds) {
-    if (!poi || !this.isVisible(poi.x, poi.y, poi.width, poi.height, bounds)) {
+    if (!poi || !isVisible(poi.x, poi.y, poi.width, poi.height, bounds)) {
       if (this.beaconRing) this.beaconRing.visible = false;
       if (this.beaconDot) this.beaconDot.visible = false;
       return;
@@ -1162,167 +1025,9 @@ export class PixiGameRenderer {
     this.beaconDot!.position.set(poi.x, poi.y);
   }
 
-  private drawProp(graphics: Graphics, prop: DestructibleObject) {
-    graphics.clear();
-    if (prop.type === 'crate') {
-      graphics.rect(-prop.width / 2, -prop.height / 2, prop.width, prop.height).fill(0xb45309).stroke({ color: 0x78350f, width: 2 });
-      graphics.moveTo(-prop.width / 2, -prop.height / 2).lineTo(prop.width / 2, prop.height / 2).stroke({ color: 0x78350f, width: 2 });
-      graphics.moveTo(prop.width / 2, -prop.height / 2).lineTo(-prop.width / 2, prop.height / 2).stroke({ color: 0x78350f, width: 2 });
-    } else if (prop.type === 'fence') {
-      graphics.rect(-prop.width / 2, -3, prop.width, 6).fill(0xe2e8f0);
-      graphics.rect(-prop.width / 2, -5, 6, 10).fill(0x475569);
-      graphics.rect(prop.width / 2 - 6, -5, 6, 10).fill(0x475569);
-    } else if (prop.type === 'lamp_pole') {
-      graphics.circle(0, 0, 6).fill(0x475569);
-      graphics.circle(0, 0, 3).fill(0xfef08a);
-    } else {
-      const color = prop.type === 'cone' ? 0xea580c : prop.type === 'hydrant' ? 0xdc2626 : prop.type === 'barrel' ? 0x0284c7 : 0x1e293b;
-      graphics.circle(0, 0, prop.type === 'trash_can' ? 6 : 7).fill(color);
-    }
-  }
 
-  private drawTrafficLight(graphics: Graphics, light: TrafficLight) {
-    graphics.clear();
-    graphics.rect(-5, -14, 10, 28).fill(0x0f172a).stroke({ color: 0x334155, width: 1.5 });
-    graphics.circle(0, -9, 3.5).fill(light.state === 'red' ? 0xef4444 : 0x450a0a);
-    graphics.circle(0, 0, 3.5).fill(light.state === 'yellow' ? 0xeab308 : 0x422006);
-    graphics.circle(0, 9, 3.5).fill(light.state === 'green' ? 0x22c55e : 0x052e16);
-    graphics.rect(6, -4, 5, 8).fill(light.pedestrianState === 'walk' ? 0x22c55e : 0xef4444);
-  }
 
-  private drawVehicle(graphics: Graphics, vehicle: VehicleInstance) {
-    const config = VEHICLE_CONFIGS[vehicle.type] || VEHICLE_CONFIGS.sedan;
-    const halfLength = config.length / 2;
-    const halfWidth = config.width / 2;
-    const body = colorNumber(vehicle.color, 0x64748b);
-    graphics.clear();
 
-    const wheelColor = 0x111827;
-    graphics.rect(-halfLength * 0.58, -halfWidth - 3, 12, 6).fill(wheelColor);
-    graphics.rect(-halfLength * 0.58, halfWidth - 3, 12, 6).fill(wheelColor);
-
-    // Each class gets one strong top-down cue that survives the normal game
-    // zoom. The scene is too dense for fussy detail: silhouette and livery
-    // must identify a vehicle before its colour does.
-    if (vehicle.type === 'ambulance') {
-      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(0xffffff).stroke({ color: 0xe2e8f0, width: 1.5 });
-      graphics.rect(-halfLength, -halfWidth + 4, config.length, 3).fill(0xdc2626);
-      graphics.rect(-halfLength, halfWidth - 7, config.length, 3).fill(0xdc2626);
-      graphics.rect(-6, -2, 12, 4).fill(0xdc2626);
-      graphics.rect(-2, -6, 4, 12).fill(0xdc2626);
-      graphics.rect(halfLength * 0.45, -halfWidth + 3, 5, config.width - 6).fill(0x0284c7);
-    } else if (vehicle.type === 'police') {
-      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(0x0f172a);
-      graphics.rect(-halfLength * 0.2, -halfWidth + 2, halfLength * 0.8, config.width - 4).fill(0xffffff);
-      graphics.rect(halfLength * 0.35, -halfWidth + 3, 5, config.width - 6).fill(0x0284c7);
-      graphics.rect(-halfLength * 0.55, -halfWidth + 3, 4, config.width - 6).fill(0x0284c7);
-    } else if (vehicle.type === 'kamaz_dump') {
-      // Raised ribbed tipper body and a separate cab make the KAMAZ readable
-      // as working machinery rather than a long orange sedan.
-      graphics.rect(-halfLength, -halfWidth + 3, halfLength * 1.15, config.width - 6).fill(0xd97706).stroke({ color: 0x78350f, width: 2 });
-      graphics.rect(-halfLength * 0.85, -halfWidth + 6, halfLength * 0.78, config.width - 12).fill(0x92400e);
-      for (let rib = 0; rib < 3; rib += 1) {
-        graphics.rect(-halfLength * 0.7 + rib * halfLength * 0.24, -halfWidth + 5, 3, config.width - 10).fill(0xfbbf24);
-      }
-      graphics.rect(halfLength * 0.2, -halfWidth, halfLength * 0.8, config.width).fill(body).stroke({ color: 0x0f172a, width: 2 });
-      graphics.rect(halfLength * 0.5, -halfWidth + 4, halfLength * 0.22, config.width - 8).fill(0x7dd3fc);
-    } else if (vehicle.type === 'kamaz_flatbed') {
-      // Open rails and boxed cargo distinguish the flatbed from a dump body.
-      graphics.rect(-halfLength, -halfWidth + 4, halfLength * 1.16, config.width - 8).fill(0x075985).stroke({ color: 0x0c4a6e, width: 2 });
-      graphics.rect(-halfLength * 0.92, -halfWidth + 6, halfLength * 0.85, 3).fill(0xe2e8f0);
-      graphics.rect(-halfLength * 0.92, halfWidth - 9, halfLength * 0.85, 3).fill(0xe2e8f0);
-      graphics.rect(-halfLength * 0.7, -halfWidth + 9, 15, config.width - 18).fill(0x94a3b8);
-      graphics.rect(-halfLength * 0.3, -halfWidth + 9, 15, config.width - 18).fill(0xf59e0b);
-      graphics.rect(halfLength * 0.2, -halfWidth, halfLength * 0.8, config.width).fill(body).stroke({ color: 0x0f172a, width: 2 });
-      graphics.rect(halfLength * 0.5, -halfWidth + 4, halfLength * 0.22, config.width - 8).fill(0x7dd3fc);
-    } else if (vehicle.type === 'bus') {
-      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(body).stroke({ color: 0x0f172a, width: 2 });
-      graphics.rect(-halfLength * 0.78, -halfWidth + 4, halfLength * 1.45, 4).fill(0xbfe9ff);
-      graphics.rect(-halfLength * 0.78, halfWidth - 8, halfLength * 1.45, 4).fill(0xbfe9ff);
-      graphics.rect(-5, -halfWidth + 3, 7, config.width - 6).fill(0xf8fafc);
-      graphics.rect(-halfLength * 0.45, -5, 11, 10).fill(0x0f172a);
-    } else if (vehicle.type === 'taxi') {
-      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(body).stroke({ color: 0x0f172a, width: 2 });
-      for (let mark = 0; mark < 4; mark += 1) {
-        graphics.rect(-halfLength * 0.48 + mark * 6, -halfWidth + 2, 4, 4).fill(mark % 2 === 0 ? 0x111827 : 0xf8fafc);
-        graphics.rect(-halfLength * 0.48 + mark * 6, halfWidth - 6, 4, 4).fill(mark % 2 === 0 ? 0x111827 : 0xf8fafc);
-      }
-      graphics.rect(-2, -5, 9, 10).fill(0xf8fafc).stroke({ color: 0x111827, width: 1.5 });
-      graphics.rect(halfLength * 0.22, -halfWidth + 3, halfLength * 0.3, config.width - 6).fill(0x7dd3fc);
-    } else if (vehicle.type === 'sports') {
-      graphics.poly([-halfLength, -halfWidth * 0.58, -halfLength * 0.62, -halfWidth, halfLength * 0.76, -halfWidth, halfLength, 0, halfLength * 0.76, halfWidth, -halfLength * 0.62, halfWidth, -halfLength, halfWidth * 0.58]).fill(body).stroke({ color: 0x0f172a, width: 2 });
-      graphics.poly([-halfLength * 0.22, -halfWidth + 3, halfLength * 0.48, -halfWidth + 3, halfLength * 0.62, 0, halfLength * 0.48, halfWidth - 3, -halfLength * 0.22, halfWidth - 3]).fill(0x7dd3fc);
-      graphics.rect(-halfLength * 0.9, -halfWidth - 3, 8, 2).fill(0x111827);
-      graphics.rect(-halfLength * 0.9, halfWidth + 1, 8, 2).fill(0x111827);
-    } else if (vehicle.type === 'hatchback') {
-      graphics.poly([-halfLength * 0.8, -halfWidth, halfLength, -halfWidth, halfLength, halfWidth, -halfLength * 0.8, halfWidth, -halfLength, halfWidth * 0.48, -halfLength, -halfWidth * 0.48]).fill(body).stroke({ color: 0x0f172a, width: 2 });
-      graphics.rect(-halfLength * 0.16, -halfWidth + 3, halfLength * 0.45, config.width - 6).fill(0x7dd3fc);
-      graphics.rect(-halfLength * 0.82, -halfWidth + 4, 5, config.width - 8).fill(0x475569);
-    } else if (vehicle.type === 'heavy_4x4') {
-      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(body).stroke({ color: 0x0f172a, width: 2 });
-      graphics.rect(-halfLength * 0.82, -halfWidth - 2, 16, 4).fill(0x111827);
-      graphics.rect(-halfLength * 0.82, halfWidth - 2, 16, 4).fill(0x111827);
-      graphics.rect(-halfLength * 0.72, -halfWidth + 5, halfLength * 0.54, config.width - 10).fill(0x334155);
-      graphics.rect(halfLength * 0.08, -halfWidth + 3, halfLength * 0.42, config.width - 6).fill(0x7dd3fc);
-    } else {
-      graphics.rect(-halfLength, -halfWidth, config.length, config.width).fill(body).stroke({ color: 0x0f172a, width: 2, alpha: 0.75 });
-      graphics.rect(-halfLength * 0.1, -halfWidth + 3, halfLength * 0.42, config.width - 6).fill(0x7dd3fc);
-      graphics.rect(-halfLength * 0.62, -halfWidth + 5, halfLength * 0.28, config.width - 10).fill(0x94a3b8);
-    }
-    // The flashing lightbar is dynamic (it alternates color on a timer) so it
-    // belongs on the indicator overlay in drawVehicleIndicators, not on this
-    // cached-per-type-and-color body texture.
-    graphics.rect(halfLength - 4, -halfWidth + 2, 4, 5).fill(vehicle.headlights > 0 ? 0xfef08a : 0x94a3b8);
-    graphics.rect(halfLength - 4, halfWidth - 7, 4, 5).fill(vehicle.headlights > 0 ? 0xfef08a : 0x94a3b8);
-    graphics.rect(-halfLength - 1, -halfWidth + 2, 3, 5).fill(vehicle.isBraking ? 0xef4444 : 0x7f1d1d);
-    graphics.rect(-halfLength - 1, halfWidth - 7, 3, 5).fill(vehicle.isBraking ? 0xef4444 : 0x7f1d1d);
-
-    if (vehicle.isCrashed) graphics.rect(-halfLength - 4, -halfWidth - 4, config.length + 8, config.width + 8).stroke({ color: 0xf97316, width: 3 });
-  }
-
-  private drawVehicleIndicators(graphics: Graphics, vehicle: VehicleInstance) {
-    const config = VEHICLE_CONFIGS[vehicle.type] || VEHICLE_CONFIGS.sedan;
-    const halfLength = config.length / 2;
-    const halfWidth = config.width / 2;
-    graphics.clear();
-    graphics.rect(halfLength - 4, -halfWidth + 2, 4, 5).fill(vehicle.headlights > 0 ? 0xfef08a : 0x94a3b8);
-    graphics.rect(halfLength - 4, halfWidth - 7, 4, 5).fill(vehicle.headlights > 0 ? 0xfef08a : 0x94a3b8);
-    graphics.rect(-halfLength - 1, -halfWidth + 2, 3, 5).fill(vehicle.isBraking ? 0xef4444 : 0x7f1d1d);
-    graphics.rect(-halfLength - 1, halfWidth - 7, 3, 5).fill(vehicle.isBraking ? 0xef4444 : 0x7f1d1d);
-    if (vehicle.turnSignal !== 'none' && Math.floor(Date.now() / 350) % 2 === 0) {
-      const left = vehicle.turnSignal === 'left' || vehicle.turnSignal === 'hazard';
-      const right = vehicle.turnSignal === 'right' || vehicle.turnSignal === 'hazard';
-      const signalPoints = [
-        ...(left ? [[halfLength - 2, -halfWidth + 2], [-halfLength + 2, -halfWidth + 2]] : []),
-        ...(right ? [[halfLength - 2, halfWidth - 2], [-halfLength + 2, halfWidth - 2]] : []),
-      ];
-      for (const [x, y] of signalPoints) {
-        graphics.circle(x, y, 6).fill({ color: 0xf59e0b, alpha: 0.2 });
-        graphics.circle(x, y, 4).fill(0xf59e0b);
-      }
-    }
-    // Emergency lightbar. Ambulance/police used to render as a plain sedan
-    // with no siren livery at all — this is what actually identifies them
-    // as emergency vehicles at a glance, flashing on the same 150ms cadence
-    // as the Canvas renderer.
-    const flash = Math.floor(Date.now() / 150) % 2 === 0;
-    if (vehicle.type === 'ambulance') {
-      graphics.rect(halfLength * 0.1, -8, 8, 16).fill(flash ? 0xef4444 : 0x3b82f6);
-    } else if (vehicle.type === 'police') {
-      graphics.rect(-2, -7, 6, 7).fill(flash ? 0xef4444 : 0x3b82f6);
-      graphics.rect(-2, 0, 6, 7).fill(flash ? 0x3b82f6 : 0xef4444);
-    }
-    if (vehicle.isCrashed) {
-      graphics.rect(-halfLength - 4, -halfWidth - 4, config.length + 8, config.width + 8).stroke({ color: 0xf97316, width: 3 });
-      // "!" warning marker above the vehicle, approximated without a Text
-      // object (this graphic is cached/regenerated as a texture, so a glyph
-      // would need to be baked in some other way): a triangle plus a stem
-      // and dot standing in for the exclamation mark.
-      graphics.poly([0, -halfWidth - 19, 10, -halfWidth - 4, -10, -halfWidth - 4]).fill(0xfacc15);
-      graphics.rect(-1.5, -halfWidth - 17, 3, 8).fill(0x111827);
-      graphics.circle(0, -halfWidth - 6, 1.6).fill(0x111827);
-    }
-  }
 
   /** Indicators are regenerated only when their state changes, then rendered as a Sprite. */
   /**
@@ -1345,7 +1050,7 @@ export class PixiGameRenderer {
     const existing = this.indicatorTextures.get(key);
     if (existing) return existing;
     const template = new Graphics();
-    this.drawVehicleIndicators(template, vehicle);
+    drawVehicleIndicators(template, vehicle);
     const texture = this.generateSpriteTexture(template);
     template.destroy();
     this.indicatorTextures.set(key, texture);
@@ -1406,7 +1111,7 @@ export class PixiGameRenderer {
     const existing = this.vehicleTextures.get(key);
     if (existing) return existing;
     const template = new Graphics();
-    this.drawVehicle(template, { ...vehicle, headlights: 0, turnSignal: 'none', isBraking: false, isCrashed: false });
+    drawVehicle(template, { ...vehicle, headlights: 0, turnSignal: 'none', isBraking: false, isCrashed: false });
     const texture = this.generateSpriteTexture(template);
     template.destroy();
     this.vehicleTextures.set(key, texture);
@@ -1439,7 +1144,7 @@ export class PixiGameRenderer {
     const existing = this.propTextures.get(key);
     if (existing) return existing;
     const template = new Graphics();
-    this.drawProp(template, prop);
+    drawProp(template, prop);
     const texture = this.generateSpriteTexture(template);
     template.destroy();
     this.propTextures.set(key, texture);
@@ -1451,7 +1156,7 @@ export class PixiGameRenderer {
     const existing = this.trafficLightTextures.get(key);
     if (existing) return existing;
     const template = new Graphics();
-    this.drawTrafficLight(template, light);
+    drawTrafficLight(template, light);
     const texture = this.generateSpriteTexture(template);
     template.destroy();
     this.trafficLightTextures.set(key, texture);
@@ -1473,12 +1178,6 @@ export class PixiGameRenderer {
     }
   }
 
-  private isVisible(x: number, y: number, width: number, height: number, bounds: Bounds) {
-    return x + width / 2 >= bounds.left
-      && x - width / 2 <= bounds.right
-      && y + height / 2 >= bounds.top
-      && y - height / 2 <= bounds.bottom;
-  }
 
   public destroy() {
     if (this.destroyed) return;
@@ -1501,8 +1200,7 @@ export class PixiGameRenderer {
     for (const texture of this.effectTextures.values()) texture.destroy(true);
     this.effectTextures.clear();
     this.skidSprites.clear();
-    for (const label of this.nameLabels.values()) label.destroy();
-    this.nameLabels.clear();
+    this.labels.destroy();
     this.particleSprites.clear();
     this.lightPool.length = 0;
     this.glowPool.length = 0;
@@ -1522,13 +1220,6 @@ export class PixiGameRenderer {
   }
 }
 
-type Bounds = { left: number; top: number; right: number; bottom: number };
-
 const canvasWidth = (canvas: HTMLCanvasElement) => canvas.clientWidth || canvas.width || window.innerWidth;
 const canvasHeight = (canvas: HTMLCanvasElement) => canvas.clientHeight || canvas.height || window.innerHeight;
 
-const lineVisible = (x1: number, y1: number, x2: number, y2: number, bounds: Bounds) =>
-  Math.max(x1, x2) >= bounds.left
-  && Math.min(x1, x2) <= bounds.right
-  && Math.max(y1, y2) >= bounds.top
-  && Math.min(y1, y2) <= bounds.bottom;
