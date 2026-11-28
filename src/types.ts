@@ -38,6 +38,15 @@ export interface VehicleConfig {
   description: string;
 }
 
+/**
+ * Which level of a grade-separated crossing something is on. Everything is on
+ * the ground except while it drives up a bridge ramp (or down into a tunnel)
+ * and across the covered stretch. Entities on different levels never touch.
+ */
+export type GradeLevel = 'ground' | 'bridge' | 'tunnel';
+/** Where on a bridge/tunnel structure an entity is: off it, on a ramp, or on the covered stretch. */
+export type GradeZone = 'none' | 'ramp' | 'covered';
+
 export interface VehicleInstance {
   id: string;
   type: VehicleCategory;
@@ -81,6 +90,9 @@ export interface VehicleInstance {
   dazedTimer?: number;
   /** NPC lifecycle: a car may be parked while its driver is on foot. */
   npcParked?: boolean;
+  /** Bridge/tunnel level; absent means on the ground. */
+  gradeLevel?: GradeLevel;
+  gradeZone?: GradeZone;
 }
 
 export interface Pedestrian {
@@ -268,6 +280,9 @@ export interface PlayerCharacter {
   maxHealth: number;
   inVehicleId: string | null;
   isRunning: boolean;
+  /** Bridge/tunnel level; absent means on the ground. */
+  gradeLevel?: GradeLevel;
+  gradeZone?: GradeZone;
   name: string;
   money: number;
   xp: number;

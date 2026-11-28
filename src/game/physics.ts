@@ -12,6 +12,7 @@ import { effectiveWheelbase, integrateVehicleSpeed, maxGripYawRate, steerRate, s
 import { Building, CityMap, WORLD_SIZE } from './cityMap';
 import { sound } from '../audio/soundEngine';
 import { SpatialHash } from './spatialHash';
+import { sameGradeLevel } from './gradeSeparation';
 
 export interface CollisionEvent {
   type: 'vehicle_vehicle' | 'vehicle_prop' | 'vehicle_ped' | 'vehicle_building';
@@ -419,6 +420,9 @@ export class PhysicsEngine {
 
       for (let j = i + 1; j < vehicles.length; j++) {
         const v2 = vehicles[j];
+        // One on a bridge deck (or in a tunnel) and one on the road it
+        // crosses share x/y but never touch.
+        if (!sameGradeLevel(v1, v2)) continue;
         const cfg2 = VEHICLE_CONFIGS[v2.type] || VEHICLE_CONFIGS.sedan;
 
         // NPC traffic is coordinated by TrafficAI (lights, following distance
@@ -607,6 +611,10 @@ export class PhysicsEngine {
           if (v2.isCrashed) v2.speed = 0;
         }
       }
+
+      // Buildings, street props and pedestrians are all at ground level: a
+      // vehicle up on a deck or down in a tunnel passes over/under them.
+      if ((v1.gradeLevel ?? 'ground') !== 'ground') continue;
 
       // 2. Vehicle vs Buildings (Solid bounding walls)
       // Buildings are static and the city is bounded; a conservative radius

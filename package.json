@@ -21,6 +21,7 @@
     "test:map:network": "tsx repros/map-network.repro.ts",
     "test:map:geometry": "tsx repros/map-geometry-integrity.repro.ts",
     "test:map:placement": "tsx repros/map-static-placement.repro.ts",
+    "test:map:grade-separation": "tsx repros/grade-separation.repro.ts",
     "test:traffic:route-planning": "tsx repros/traffic-route-planning.repro.ts",
     "test:mp:protocol": "tsx repros/multiplayer-protocol.repro.ts",
     "test:mp:interpolation": "tsx repros/multiplayer-interpolation.repro.ts",
