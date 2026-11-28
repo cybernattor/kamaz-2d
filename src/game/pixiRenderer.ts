@@ -18,7 +18,7 @@ import {
   VehicleInstance,
 } from '../types';
 import { StaticSceneBaker } from './staticScene';
-import { GradeEntity, GradeStructure, locateOnGradeStructure, updateGradeLevel } from './gradeSeparation';
+import { atBridgeRampFoot, GradeEntity, GradeStructure, locateOnGradeStructure, updateGradeLevel } from './gradeSeparation';
 
 /** Opacity of a bridge deck / tunnel roof while the local player is under it. */
 const GRADE_OVERLAY_SEE_THROUGH_ALPHA = 0.35;
@@ -486,7 +486,10 @@ export class PixiGameRenderer {
 
   private rebuildStaticScene(cityMap: CityMap) {
     this.currentMap = cityMap;
-    if (!this.staticBaker) this.staticBaker = new StaticSceneBaker();
+    if (!this.staticBaker) {
+      this.staticBaker = new StaticSceneBaker();
+      this.staticBaker.bakeBridges = false;
+    }
 
     // Render the city snapshot at screen density instead of one texel per world
     // unit. Anything less is upscaled by the camera and reads as a blurred map.
@@ -565,9 +568,21 @@ export class PixiGameRenderer {
     return locateOnGradeStructure(cityMap.gradeStructures, entity.x, entity.y)?.structure.kind === 'bridge';
   }
 
-  /** Puts an entity's view on the layer for its bridge/tunnel level. */
-  private placeOnGradeLayer(view: EntityView, level: VehicleInstance['gradeLevel'], ground: Container, onBridge: Container) {
-    const target = level === 'bridge' ? onBridge : level === 'tunnel' ? this.tunnelVehicleLayer : ground;
+  /**
+   * Puts an entity's view on the layer for its bridge/tunnel level. On the
+   * ground at the foot of a ramp it is drawn over the deck too: there it is
+   * half on the ramp, and the deck would hide it while it goes up or down.
+   */
+  private placeOnGradeLayer(
+    view: EntityView,
+    level: VehicleInstance['gradeLevel'],
+    ground: Container,
+    onBridge: Container,
+    at?: { x: number; y: number }
+  ) {
+    const atRampFoot = (level ?? 'ground') === 'ground' && at && this.currentMap
+      && atBridgeRampFoot(this.currentMap.gradeStructures, at.x, at.y);
+    const target = level === 'bridge' || atRampFoot ? onBridge : level === 'tunnel' ? this.tunnelVehicleLayer : ground;
     if (view.container.parent !== target) target.addChild(view.container);
   }
 
@@ -632,7 +647,7 @@ export class PixiGameRenderer {
     for (const vehicle of [...npcVehicles, ...playerVehicles]) {
       active.add(vehicle.id);
       const view = this.getView(this.vehicleViews, vehicle.id, this.vehicleLayer, this.getVehicleTexture(vehicle));
-      this.placeOnGradeLayer(view, vehicle.gradeLevel, this.vehicleLayer, this.bridgeVehicleLayer);
+      this.placeOnGradeLayer(view, vehicle.gradeLevel, this.vehicleLayer, this.bridgeVehicleLayer, vehicle);
       this.updateVehicleView(view, vehicle, bounds);
     }
     const remoteIds = new Set(remotePlayers.map((remote) => remote.id));
@@ -652,7 +667,7 @@ export class PixiGameRenderer {
           this.pedestrianLayer,
           this.getPlayerCharacterTexture()
         );
-        this.placeOnGradeLayer(view, grade.gradeLevel, this.pedestrianLayer, this.bridgeWalkerLayer);
+        this.placeOnGradeLayer(view, grade.gradeLevel, this.pedestrianLayer, this.bridgeWalkerLayer, grade);
         view.container.visible = isVisible(remote.x, remote.y, 40, 40, bounds);
         if (view.container.visible) {
           view.container.position.set(remote.x, remote.y);
@@ -686,7 +701,7 @@ export class PixiGameRenderer {
       };
       active.add(dummy.id);
       const dummyView = this.getView(this.vehicleViews, dummy.id, this.vehicleLayer, this.getVehicleTexture(dummy));
-      this.placeOnGradeLayer(dummyView, grade.gradeLevel, this.vehicleLayer, this.bridgeVehicleLayer);
+      this.placeOnGradeLayer(dummyView, grade.gradeLevel, this.vehicleLayer, this.bridgeVehicleLayer, grade);
       this.updateVehicleView(dummyView, dummy, bounds);
       const vehicleConfig = VEHICLE_CONFIGS[remote.vehicleType] || VEHICLE_CONFIGS.sedan;
       this.labels.updateNameLabel(remote, bounds, vehicleConfig.width / 2 + 14);
@@ -746,7 +761,7 @@ export class PixiGameRenderer {
       this.playerCharacterView = createEntityView(this.pedestrianLayer, this.getPlayerCharacterTexture());
     }
     const view = this.playerCharacterView;
-    this.placeOnGradeLayer(view, playerChar.gradeLevel, this.pedestrianLayer, this.bridgeWalkerLayer);
+    this.placeOnGradeLayer(view, playerChar.gradeLevel, this.pedestrianLayer, this.bridgeWalkerLayer, playerChar);
     view.container.visible = true;
     view.container.position.set(playerChar.x, playerChar.y);
     view.container.rotation = playerChar.angle;
