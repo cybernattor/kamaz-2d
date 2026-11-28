@@ -2,6 +2,22 @@ import { PointOfInterest, MapDecoration, MapTrail } from '../types';
 import { Building, CityDistrict, CityMap, CROSSWALK_DEPTH, RoadSegment, WORLD_SIZE } from './cityMap';
 import { GRADE_HEIGHT, GRADE_RAIL_OFFSET, GRADE_RAMP, gradeLift, GradeSample, GradeStructure } from './gradeSeparation';
 
+type Point = { x: number; y: number };
+
+const distanceToPolyline = (point: Point, line: Point[]) => {
+  let best = Infinity;
+  for (let i = 1; i < line.length; i++) {
+    const a = line[i - 1];
+    const b = line[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lengthSquared = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared));
+    best = Math.min(best, Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t)));
+  }
+  return best;
+};
+
 export interface GradeOverlay {
   kind: 'bridge' | 'tunnel';
   structure: GradeStructure;
@@ -25,13 +41,20 @@ export class StaticSceneBaker {
   private sceneMap: CityMap | null = null;
   private sceneOverview = false;
   private scale = 1;
+  /** Mouths cut out of each road's edge lines, by road id (see findRoadMouths). */
+  private mouths = new Map<string, Point[][]>();
+  /** Driveways drawn on to their POI yard (see findDrivewayExtensions). */
+  private drivewayPoints = new WeakMap<RoadSegment, Point[]>();
+  /** Tunnel roofs cut from the scene before the interiors were painted into it. */
+  private tunnelRoofs: GradeOverlay[] | null = null;
 
-  /** Supersample the snapshot; the GPU renderer asks for screen density. */
   /**
-   * Whether bridge decks are painted into the baked scene. The game renderer
-   * turns this off and draws each deck only in its own overlay, so the ground
-   * under a deck is real road: when the deck fades to see-through, what shows
-   * is the road below and its traffic, not a second copy of the deck.
+   * Whether bridge decks and tunnel roofs are part of the baked scene. The
+   * game renderer turns this off: each deck is drawn only in its own overlay,
+   * and each covered tunnel stretch is baked as the inside of the tunnel with
+   * its roof cut out into an overlay first. So when a deck or roof fades to
+   * see-through over the player, what shows is the level below and its
+   * traffic, not a second copy of what was on top.
    */
   public bakeBridges = true;
 
@@ -72,6 +95,15 @@ export class StaticSceneBaker {
     if (this.bakeBridges) this.renderBridges(ctx, cityMap, overview);
     this.renderPOIs(ctx, cityMap.pois, null);
     this.renderBuildings(ctx, cityMap.buildings);
+
+    this.tunnelRoofs = null;
+    if (!this.bakeBridges) {
+      this.tunnelRoofs = cityMap.gradeStructures
+        .filter((structure) => structure.kind === 'tunnel')
+        .map((structure) => this.cropTunnelRoof(scene, structure))
+        .filter((overlay): overlay is GradeOverlay => overlay !== null);
+      this.renderTunnelInteriors(ctx, cityMap, overview);
+    }
 
     this.scene = scene;
     this.sceneMap = cityMap;
@@ -338,7 +370,65 @@ export class StaticSceneBaker {
     ctx.stroke();
   }
 
+  /**
+   * A driveway's map endpoint stops a verge short of its POI yard (left over
+   * from when narrow roads had round caps that would have bulged into it),
+   * so drawn as-is every driveway ended on a strip of grass. The pavement is
+   * carried on to the yard's edge; the yard is drawn later, over the seam.
+   */
+  private findDrivewayExtensions(cityMap: CityMap) {
+    const extended = new WeakMap<RoadSegment, Point[]>();
+    /** Where the pavement leaving `end` (heading away from `from`) meets a yard within reach. */
+    const reachYard = (end: Point, from: Point) => {
+      const length = Math.hypot(end.x - from.x, end.y - from.y);
+      if (length < 1) return null;
+      const dx = (end.x - from.x) / length;
+      const dy = (end.y - from.y) / length;
+      let best: number | null = null;
+      for (const poi of cityMap.pois) {
+        // Distance along (dx, dy) from the end to where it enters the yard.
+        let enter = 0;
+        let leave = Infinity;
+        let misses = false;
+        for (const [p, d, lo, hi] of [
+          [end.x, dx, poi.x - poi.width / 2, poi.x + poi.width / 2],
+          [end.y, dy, poi.y - poi.height / 2, poi.y + poi.height / 2],
+        ]) {
+          if (Math.abs(d) < 1e-6) {
+            misses ||= p < lo || p > hi;
+            continue;
+          }
+          const a = (lo - p) / d;
+          const b = (hi - p) / d;
+          enter = Math.max(enter, Math.min(a, b));
+          leave = Math.min(leave, Math.max(a, b));
+        }
+        if (!misses && enter > 0 && enter <= leave && enter < 90 && (best === null || enter < best)) best = enter;
+      }
+      return best === null ? null : { x: end.x + dx * (best + 2), y: end.y + dy * (best + 2) };
+    };
+    // An end on another road's carriageway is a junction, not a POI end: the
+    // gas station's driveway runs across the boulevard to its far curb, right
+    // below the construction site's yard, and must stop there.
+    const onAnotherRoad = (point: Point, road: RoadSegment) => cityMap.roads.some((other) =>
+      other !== road && distanceToPolyline(point, other.points) <= other.width / 2 + 6);
+    cityMap.roads.forEach((road) => {
+      if (road.width >= 200 || road.points.length < 2) return;
+      const points = [...road.points];
+      const last = points.length - 1;
+      const start = onAnotherRoad(points[0], road) ? null : reachYard(points[0], points[1]);
+      const end = onAnotherRoad(points[last], road) ? null : reachYard(points[last], points[last - 1]);
+      if (!start && !end) return;
+      if (start) points[0] = start;
+      if (end) points[last] = end;
+      extended.set(road, points);
+    });
+    return extended;
+  }
+
   private roadPoints(road: RoadSegment) {
+    const drawn = this.drivewayPoints.get(road);
+    if (drawn) return drawn;
     const points = road.points.length > 1 ? road.points : [{ x: road.x1, y: road.y1 }, { x: road.x2, y: road.y2 }];
     // A road that ends close to the map edge is drawn running off the map
     // rather than ending in a turnaround bulb cut in half by the edge.
@@ -408,11 +498,16 @@ export class StaticSceneBaker {
     const half = road.width / 2;
     const oneWay = road.directionMode === 'one-way';
 
-    // Solid edge lines sit just inside the carriageway, on the asphalt.
+    // Solid edge lines sit just inside the carriageway, on the asphalt, and
+    // break where another road joins: a line running straight across the
+    // mouth of a side road or slip road walled it off.
     ctx.setLineDash([]);
     ctx.strokeStyle = 'rgba(203, 213, 225, 0.55)';
+    ctx.save();
+    this.clipOutMouths(ctx, road);
     this.strokeRoadLine(ctx, road, 2, half - 5);
     this.strokeRoadLine(ctx, road, 2, -(half - 5));
+    ctx.restore();
 
     if (oneWay) {
       // A one-way road has no opposing flow, so no yellow divider: a white
@@ -490,9 +585,105 @@ export class StaticSceneBaker {
     }
   }
 
+  /**
+   * For every road, the carriageways of the roads that end on it: a side
+   * road, a driveway, a slip road or the ring at its T-junction. Each is the
+   * last stretch of the joining road up to its end, pulled back a little so
+   * a driveway that runs across to the far curb leaves that curb's line.
+   */
+  private findRoadMouths(roads: RoadSegment[]) {
+    const mouths = new Map<string, Point[][]>();
+    /** Distance along `line` to each point where it crosses `road`'s centerline. */
+    const crossingsAlong = (line: Point[], road: Point[]) => {
+      const found: { s: number; at: Point }[] = [];
+      let travelled = 0;
+      for (let i = 1; i < line.length; i++) {
+        const a = line[i - 1];
+        const b = line[i];
+        const length = Math.hypot(b.x - a.x, b.y - a.y);
+        for (let j = 1; j < road.length; j++) {
+          const c = road[j - 1];
+          const d = road[j];
+          const denom = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+          if (Math.abs(denom) < 1e-9) continue;
+          const t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / denom;
+          const u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / denom;
+          if (t > 0 && t < 1 && u >= 0 && u <= 1) {
+            found.push({ s: travelled + t * length, at: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t } });
+          }
+        }
+        travelled += length;
+      }
+      return found;
+    };
+    const graded = (road: RoadSegment, other: RoadSegment, at: Point) => [road, other].some((candidate) =>
+      candidate.gradeCrossings?.some((point) => Math.hypot(point.x - at.x, point.y - at.y) < 8));
+    roads.forEach((road) => {
+      const polygons: Point[][] = [];
+      roads.forEach((other) => {
+        if (other === road || other.points.length < 2) return;
+        // Ends on this road: a T-junction or a slip road.
+        [other.points, [...other.points].reverse()].forEach((line) => {
+          if (distanceToPolyline(line[0], road.points) > road.width / 2 + 6) return;
+          const polygon = this.carriagewayBetween(line, other.width / 2, 8, road.width + 60);
+          if (polygon) polygons.push(polygon);
+        });
+        // Crosses it at grade (not over a bridge or through a tunnel).
+        const reach = road.width / 2 + 40;
+        crossingsAlong(other.points, road.points).forEach(({ s, at }) => {
+          if (graded(road, other, at)) return;
+          // Kept 8px short of the road's own ends, like the T-junction case: a
+          // driveway that runs across to the far curb leaves that curb's line.
+          const total = other.points.reduce((sum, point, index) =>
+            (index === 0 ? 0 : sum + Math.hypot(point.x - other.points[index - 1].x, point.y - other.points[index - 1].y)), 0);
+          const polygon = this.carriagewayBetween(other.points, other.width / 2, Math.max(8, s - reach), Math.min(total - 8, s + reach));
+          if (polygon) polygons.push(polygon);
+        });
+      });
+      if (polygons.length) mouths.set(road.id, polygons);
+    });
+    return mouths;
+  }
+
+  /** Outline of a road's carriageway between distances `from` and `to` along its centerline. */
+  private carriagewayBetween(line: Point[], half: number, from: number, to: number) {
+    const part: Point[] = [];
+    let travelled = 0;
+    for (let i = 1; i < line.length && travelled < to; i++) {
+      const a = line[i - 1];
+      const b = line[i];
+      const segment = Math.hypot(b.x - a.x, b.y - a.y);
+      if (segment < 0.5) continue;
+      const at = (d: number) => ({ x: a.x + ((b.x - a.x) * d) / segment, y: a.y + ((b.y - a.y) * d) / segment });
+      if (travelled + segment > from) {
+        if (!part.length) part.push(at(Math.max(0, from - travelled)));
+        part.push(at(Math.min(segment, to - travelled)));
+      }
+      travelled += segment;
+    }
+    if (part.length < 2) return null;
+    const left = part.map((_, index) => this.offsetVertex(part, index, half + 1));
+    const right = part.map((_, index) => this.offsetVertex(part, index, -half - 1));
+    return [...left, ...right.reverse()];
+  }
+
+  /** Restricts drawing to outside every mouth that opens onto this road. */
+  private clipOutMouths(ctx: CanvasRenderingContext2D, road: RoadSegment) {
+    const polygons = this.mouths.get(road.id);
+    if (!polygons) return;
+    for (const polygon of polygons) {
+      ctx.beginPath();
+      ctx.rect(-WORLD_SIZE, -WORLD_SIZE, WORLD_SIZE * 3, WORLD_SIZE * 3);
+      this.tracePolygon(ctx, polygon);
+      ctx.clip('evenodd');
+    }
+  }
+
   /** Every road at ground level. Bridge decks come after intersections. */
   private renderRoads(ctx: CanvasRenderingContext2D, cityMap: CityMap, overview = false) {
     const groundRoads = [...cityMap.roads].sort((a, b) => this.roadLayer(a) - this.roadLayer(b));
+    this.mouths = this.findRoadMouths(cityMap.roads);
+    this.drivewayPoints = this.findDrivewayExtensions(cityMap);
 
     ctx.save();
     ctx.lineJoin = 'round';
@@ -517,21 +708,11 @@ export class StaticSceneBaker {
       });
       ctx.lineCap = 'butt';
       layerRoads.forEach((road) => this.renderRoadMarkings(ctx, road, cityMap, overview));
-      if (layer === 0) {
-        // Tunnel walls, drawn before the roads above so those cover them.
-        layerRoads.forEach((road) => {
-          ctx.strokeStyle = 'rgba(100, 116, 139, 0.8)';
-          ctx.setLineDash([28, 20]);
-          this.strokeRoadLine(ctx, road, 5, road.width / 2 + 11);
-          this.strokeRoadLine(ctx, road, 5, -road.width / 2 - 11);
-          ctx.setLineDash([]);
-        });
-      }
+      // Cuttings, portals and roof slabs go under the roads that pass over
+      // the tunnels, which are laid next.
+      if (layer === 0) this.renderTunnelStructures(ctx, cityMap, groundRoads);
     });
     ctx.restore();
-
-    // Mouths go over the road that passes above the tunnel.
-    this.renderTunnelMouths(ctx, cityMap);
   }
 
   /**
@@ -597,25 +778,175 @@ export class StaticSceneBaker {
   }
 
   /**
-   * Tunnel mouths at both ends of each covered stretch. Between the mouths
-   * the tunnel is roofed over (see getGradeOverlays), so cars inside it
-   * disappear under the road above.
+   * The open cutting down to each tunnel, its portals, and the slab over the
+   * covered stretch. Down a ramp the road sinks between retaining walls that
+   * show more of their face the deeper it goes, and the light fades toward
+   * the portal; the portal is a concrete headwall across the mouth. Between
+   * the portals the roof is a slab at ground level under the crossing road
+   * and its sidewalks, so the tunnel no longer shows as open road beside
+   * them. Only the structures get walls: the dashed "walls" used to run the
+   * whole length of the tunnel road, curbs included.
    */
-  private renderTunnelMouths(ctx: CanvasRenderingContext2D, cityMap: CityMap) {
+  private renderTunnelStructures(ctx: CanvasRenderingContext2D, cityMap: CityMap, groundRoads: RoadSegment[]) {
     cityMap.gradeStructures.filter((structure) => structure.kind === 'tunnel').forEach((structure) => {
-      const reach = structure.width / 2 + GRADE_RAIL_OFFSET + 6;
+      const span = structure.samples;
+      const wall = structure.width / 2 + GRADE_RAIL_OFFSET;
+      const portals = [structure.start + GRADE_RAMP, structure.end - GRADE_RAMP];
       ctx.save();
+      ctx.setLineDash([]);
+
+      // The deeper the road, the darker.
+      for (let i = 1; i < span.length; i++) {
+        const lift = gradeLift(structure, (span[i - 1].s + span[i].s) / 2);
+        if (lift <= 0 || lift >= 1) continue;
+        ctx.fillStyle = `rgba(2, 6, 23, ${(0.55 * lift * lift).toFixed(3)})`;
+        this.fillAcross(ctx, span[i - 1], span[i], wall);
+      }
+
+      // Retaining walls: the face inside, the coping on top.
+      ctx.lineCap = 'round';
+      for (let i = 1; i < span.length; i++) {
+        const a = span[i - 1];
+        const b = span[i];
+        const lift = gradeLift(structure, (a.s + b.s) / 2);
+        if (lift <= 0 || lift >= 1) continue;
+        const face = 2 + lift * 9;
+        ([1, -1] as const).forEach((side) => {
+          ctx.strokeStyle = 'rgba(15, 23, 42, 0.85)';
+          ctx.lineWidth = face;
+          this.strokeAlong(ctx, a, b, side * (wall - face / 2));
+          ctx.strokeStyle = '#7b8aa0';
+          ctx.lineWidth = 4;
+          this.strokeAlong(ctx, a, b, side * (wall + 2));
+        });
+      }
+
+      // Roof slab between the portals. Whatever road crosses it gets its
+      // sidewalks laid again on top; its asphalt comes with the next layers.
+      const roof = this.outlineBetween(span, portals[0], portals[1], wall + 8);
+      if (roof) {
+        ctx.fillStyle = '#2a3443';
+        this.fillPolygon(ctx, roof);
+        ctx.save();
+        ctx.beginPath();
+        this.tracePolygon(ctx, roof);
+        ctx.clip();
+        ctx.strokeStyle = '#334155';
+        ctx.lineCap = 'butt';
+        ctx.lineJoin = 'round';
+        groundRoads.filter((road) => road.feature !== 'tunnel').forEach((road) => this.strokeRoadLine(ctx, road, road.width + 48));
+        ctx.restore();
+      }
+
+      // Portals: the dark mouth, then the headwall across it.
       ctx.lineCap = 'butt';
-      [structure.start + GRADE_RAMP, structure.end - GRADE_RAMP].forEach((s) => {
+      portals.forEach((s, index) => {
+        const out = index === 0 ? -1 : 1; // toward the open cutting
+        const mouth = this.outlineBetween(span, Math.min(s, s + out * 24), Math.max(s, s + out * 24), wall);
+        if (mouth) {
+          ctx.fillStyle = 'rgba(2, 6, 23, 0.6)';
+          this.fillPolygon(ctx, mouth);
+        }
         ctx.strokeStyle = '#0b1120';
         ctx.lineWidth = 16;
-        this.strokeAcross(ctx, structure.samples, s, reach);
-        ctx.strokeStyle = '#64748b';
-        ctx.lineWidth = 4;
-        this.strokeAcross(ctx, structure.samples, s, reach);
+        this.strokeAcross(ctx, span, s, wall + 10);
+        ctx.strokeStyle = '#8391a7';
+        ctx.lineWidth = 10;
+        this.strokeAcross(ctx, span, s, wall + 8);
+        ctx.strokeStyle = '#c3cddb';
+        ctx.lineWidth = 2;
+        this.strokeAcross(ctx, span, s + out * 4, wall + 8);
       });
       ctx.restore();
     });
+  }
+
+  /**
+   * Inside of each covered tunnel stretch, baked where the roof was (the roof
+   * itself was cut out into an overlay first). Seen only while the roof fades
+   * over a player in the tunnel: lit lanes between the walls.
+   */
+  private renderTunnelInteriors(ctx: CanvasRenderingContext2D, cityMap: CityMap, overview: boolean) {
+    cityMap.gradeStructures.filter((structure) => structure.kind === 'tunnel').forEach((structure) => {
+      const road = cityMap.roads.find((candidate) => candidate.id === structure.roadId);
+      if (!road) return;
+      const from = structure.start + GRADE_RAMP;
+      const to = structure.end - GRADE_RAMP;
+      const wall = structure.width / 2 + GRADE_RAIL_OFFSET;
+      const inside = this.outlineBetween(structure.samples, from, to, wall + 14);
+      if (!inside) return;
+      const centerline = structure.samples.filter((sample) => sample.s >= from && sample.s <= to);
+      const bore: RoadSegment = { ...road, points: centerline.map(({ x, y }) => ({ x, y })) };
+
+      ctx.save();
+      ctx.beginPath();
+      this.tracePolygon(ctx, inside);
+      ctx.clip();
+      ctx.fillStyle = '#0b1120';
+      this.fillPolygon(ctx, inside);
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'butt';
+      this.renderRoadSurface(ctx, bore);
+      this.renderRoadMarkings(ctx, bore, cityMap, overview);
+      ctx.fillStyle = 'rgba(2, 6, 23, 0.3)';
+      this.fillPolygon(ctx, inside);
+      ctx.strokeStyle = '#475569';
+      this.strokeRoadLine(ctx, bore, 6, wall);
+      this.strokeRoadLine(ctx, bore, 6, -wall);
+      // Lamp strips along both walls (down the middle they read as gaps in
+      // the double centerline).
+      ctx.fillStyle = 'rgba(253, 230, 138, 0.8)';
+      for (let i = 2; i < centerline.length; i += 4) {
+        const sample = centerline[i];
+        ctx.save();
+        ctx.translate(sample.x, sample.y);
+        ctx.rotate(Math.atan2(sample.ty, sample.tx));
+        ctx.fillRect(-12, wall - 9, 24, 3);
+        ctx.fillRect(-12, -wall + 6, 24, 3);
+        ctx.restore();
+      }
+      ctx.restore();
+    });
+  }
+
+  /** Outline of the band `half` wide either side of the samples between `from` and `to`. */
+  private outlineBetween(samples: GradeSample[], from: number, to: number, half: number) {
+    const inside = samples.filter((sample) => sample.s >= from - 0.5 && sample.s <= to + 0.5);
+    if (inside.length < 2) return null;
+    const edge = (side: 1 | -1) => inside.map((sample) => ({
+      x: sample.x - sample.ty * half * side,
+      y: sample.y + sample.tx * half * side,
+    }));
+    return [...edge(1), ...edge(-1).reverse()];
+  }
+
+  private tracePolygon(ctx: CanvasRenderingContext2D, polygon: Point[]) {
+    polygon.forEach((point, index) => (index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)));
+    ctx.closePath();
+  }
+
+  private fillPolygon(ctx: CanvasRenderingContext2D, polygon: Point[]) {
+    ctx.beginPath();
+    this.tracePolygon(ctx, polygon);
+    ctx.fill();
+  }
+
+  /** Fills the band `half` wide either side of the stretch from a to b. */
+  private fillAcross(ctx: CanvasRenderingContext2D, a: GradeSample, b: GradeSample, half: number) {
+    this.fillPolygon(ctx, [
+      { x: a.x - a.ty * half, y: a.y + a.tx * half },
+      { x: b.x - b.ty * half, y: b.y + b.tx * half },
+      { x: b.x + b.ty * half, y: b.y - b.tx * half },
+      { x: a.x + a.ty * half, y: a.y - a.tx * half },
+    ]);
+  }
+
+  /** Strokes the stretch from a to b shifted sideways by `offset`. */
+  private strokeAlong(ctx: CanvasRenderingContext2D, a: GradeSample, b: GradeSample, offset: number) {
+    ctx.beginPath();
+    ctx.moveTo(a.x - a.ty * offset, a.y + a.tx * offset);
+    ctx.lineTo(b.x - b.ty * offset, b.y + b.tx * offset);
+    ctx.stroke();
   }
 
   /** A straight line across the road at distance `s` along the samples. */
@@ -665,6 +996,12 @@ export class StaticSceneBaker {
         // has them drawn over everything else.
         this.clipToStructure(ctx, structure, structure.start, structure.end, structure.width / 2 + GRADE_RAIL_OFFSET + 6, GRADE_HEIGHT);
       } else {
+        // In game mode the roof was cut out before the interior went in.
+        const roof = this.tunnelRoofs?.find((overlay) => overlay.structure === structure);
+        if (roof) {
+          overlays.push(roof);
+          return;
+        }
         // The roof: whatever the baked scene shows over the covered stretch
         // (the crossing road, its sidewalks and the tunnel mouths).
         this.clipToStructure(ctx, structure, structure.start + GRADE_RAMP, structure.end - GRADE_RAMP, structure.width / 2 + GRADE_RAIL_OFFSET + 14, 0);
@@ -673,6 +1010,28 @@ export class StaticSceneBaker {
       overlays.push({ kind: structure.kind, structure, canvas, x, y, width, height });
     });
     return overlays;
+  }
+
+  /**
+   * The roof over a covered tunnel stretch, cut from the scene as it stands:
+   * the slab, the crossing road and its sidewalks.
+   */
+  private cropTunnelRoof(scene: HTMLCanvasElement, structure: GradeStructure): GradeOverlay | null {
+    const scale = this.scale;
+    const x = Math.max(0, Math.floor(structure.bounds.minX));
+    const y = Math.max(0, Math.floor(structure.bounds.minY));
+    const width = Math.min(WORLD_SIZE, Math.ceil(structure.bounds.maxX)) - x;
+    const height = Math.min(WORLD_SIZE, Math.ceil(structure.bounds.maxY)) - y;
+    if (width <= 0 || height <= 0) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.ceil(width * scale));
+    canvas.height = Math.max(1, Math.ceil(height * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.setTransform(scale, 0, 0, scale, -x * scale, -y * scale);
+    this.clipToStructure(ctx, structure, structure.start + GRADE_RAMP, structure.end - GRADE_RAMP, structure.width / 2 + GRADE_RAIL_OFFSET + 14, 0);
+    ctx.drawImage(scene, 0, 0, scene.width, scene.height, 0, 0, WORLD_SIZE, WORLD_SIZE);
+    return { kind: 'tunnel', structure, canvas, x, y, width, height };
   }
 
   /** Clips to the structure's outline between `from` and `to`, plus its shadow. */

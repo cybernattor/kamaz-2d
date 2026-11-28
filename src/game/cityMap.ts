@@ -94,6 +94,12 @@ export interface Building {
 
 export const WORLD_SIZE = 3600;
 export const CROSSWALK_DEPTH = 34;
+/** Where the Южное кольцо meets the outer avenues, at grade. */
+const SOUTH_RING_WEST = { x: 520, y: 2640 };
+const SOUTH_RING_EAST = { x: 3040, y: 2600 };
+/** Where the airport slip road meets Grand Boulevard and the East Way. */
+const AIRPORT_SLIP_SOUTH = { x: 2470, y: 1450 };
+const AIRPORT_SLIP_EAST = { x: 3040, y: 1185 };
 
 /** Axis-aligned box used by every placement check in this module. */
 export interface MapRect {
@@ -148,13 +154,13 @@ const segmentIntersectionPoint = (a: RoadPoint, b: RoadPoint, c: RoadPoint, d: R
 
 /**
  * Parallel copy of a polyline, offset perpendicular to its local direction,
- * tapering from 0 at both ends up to `maxDistance` at the midpoint. Used
+ * tapering from `minDistance` at both ends up to `maxDistance` at the midpoint. Used
  * for a divided-carriageway pair that
  * has to rejoin a single node at each end (an interchange ramp and its
  * exit share the same junction nodes) while still separating in the middle
  * so the two ribbons of asphalt don't overlap.
  */
-const taperedOffsetPolyline = (points: RoadPoint[], maxDistance: number): RoadPoint[] => {
+const taperedOffsetPolyline = (points: RoadPoint[], maxDistance: number, minDistance = 0): RoadPoint[] => {
   const cumulative: number[] = [0];
   for (let i = 1; i < points.length; i++) {
     cumulative.push(cumulative[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y));
@@ -167,7 +173,7 @@ const taperedOffsetPolyline = (points: RoadPoint[], maxDistance: number): RoadPo
     const tangentY = next.y - previous.y;
     const length = Math.hypot(tangentX, tangentY) || 1;
     const t = cumulative[index] / total;
-    const distance = maxDistance * Math.sin(Math.PI * t);
+    const distance = minDistance + (maxDistance - minDistance) * Math.sin(Math.PI * t);
     return {
       x: point.x - (tangentY / length) * distance,
       y: point.y + (tangentX / length) * distance,
@@ -336,8 +342,11 @@ export class CityMap {
       // The two inner avenues run on north under the Северное кольцо bridge
       // to the map edge. Ending at y=300 like the outer two, the bridge only
       // passed over their dead-end turnaround bulbs: a bridge over nothing.
-      const northEnd = idx === 1 || idx === 2 ? 90 : 300;
-      const points: RoadPoint[] = [{ x: gx, y: northEnd }];
+      // The outer two start at their corner junction: the ring leaves those
+      // junctions through their north arms, and a 220px stub underneath it
+      // doubled the markings there and poked a turnaround bulb out past the
+      // ring's bend.
+      const points: RoadPoint[] = idx === 1 || idx === 2 ? [{ x: gx, y: 90 }] : [];
       gridY.forEach((gy, crossingIndex) => {
         points.push({ x: gx, y: gy });
       });
@@ -372,28 +381,35 @@ export class CityMap {
         { x: 520, y: 620 }, { x: 520, y: 330 }, { x: 650, y: 190 },
         { x: 2910, y: 190 }, { x: 3040, y: 330 }, { x: 3040, y: 620 },
       ], 'highway', 2, 80, 'district-downtown', { isVertical: false, directionMode: 'two-way', feature: 'bridge' }),
+      // Branches off the two outer avenues at right-angled T-junctions
+      // mid-block. It used to start at the corner junctions themselves and
+      // leave them diagonally through the box's corner, splitting half of the
+      // avenue's south arm off like a fork with no junction of its own.
       road('road-ring-south', 'Южное кольцо', [
-        { x: 520, y: 2320 }, { x: 760, y: 2670 }, { x: 1440, y: 2810 },
-        { x: 2260, y: 2740 }, { x: 3040, y: 2320 },
+        { x: SOUTH_RING_WEST.x, y: SOUTH_RING_WEST.y }, { x: 760, y: SOUTH_RING_WEST.y }, { x: 1440, y: 2810 },
+        { x: 2260, y: 2740 }, { x: 2780, y: SOUTH_RING_EAST.y }, { x: SOUTH_RING_EAST.x, y: SOUTH_RING_EAST.y },
       ], 'highway', 2, 80, 'district-desert', { isVertical: false, directionMode: 'two-way', feature: 'tunnel' }),
-      // The ramp and the exit used to be two independently hand-drawn curves
-      // that both had to start/end at the same two junctions; their waypoints
-      // wandered within 74-134px of each other while each carriageway's
-      // painted halo reaches ~70px from its own centerline, so the two
-      // ribbons of asphalt overlapped along most of the interchange.
-      // Deriving both from one shared centerline, offset apart only in the
-      // middle and tapering back to 0 at the shared junction nodes, keeps
-      // them a guaranteed-parallel 180px apart mid-span while still meeting
-      // the graph nodes exactly at both ends. The east end lands exactly on
-      // road_v_3's centerline (x=3040) instead of 60px past it — the old
-      // endpoint left the ramp/exit crossing that arterial with no junction
-      // at all, the same "roads just overlap" look this rewrite exists to fix.
+      // A divided slip road: the ramp and the exit are the two carriageways
+      // of one shared centerline, 52px either side of it (each keeps right),
+      // so they run parallel with a narrow island between and never overlap.
+      // It leaves Grand Boulevard at a right-angled T-junction clear of the
+      // Ленинградский junction, runs along the airport gate and meets the
+      // East Way at a second T. It used to leave from the middle of that
+      // junction diagonally, and its centerline ran along the boulevard's
+      // curb, so the ramp lay half under the boulevard and the two
+      // carriageways tapered into one another, edge lines crossing in an X.
       ...(() => {
         const interchangeCenterline: RoadPoint[] = [
-          { x: 2200, y: 1450 }, { x: 2500, y: 1340 }, { x: 2820, y: 1260 }, { x: 3040, y: 1180 },
+          { x: AIRPORT_SLIP_SOUTH.x, y: AIRPORT_SLIP_SOUTH.y }, { x: AIRPORT_SLIP_SOUTH.x, y: 1310 },
+          { x: 2510, y: 1230 }, { x: 2580, y: AIRPORT_SLIP_EAST.y }, { x: AIRPORT_SLIP_EAST.x, y: AIRPORT_SLIP_EAST.y },
         ];
-        const rampPoints = taperedOffsetPolyline(interchangeCenterline, 90);
-        const exitPoints = taperedOffsetPolyline([...interchangeCenterline].reverse(), 90);
+        // Each carriageway ends on the avenue's centerline 52px off the shared
+        // junction node; one last step along that centerline, hidden under
+        // the avenue's asphalt, brings it onto the node the graph routes by.
+        const south = interchangeCenterline[0];
+        const east = interchangeCenterline[interchangeCenterline.length - 1];
+        const rampPoints = [south, ...taperedOffsetPolyline(interchangeCenterline, 52, 52), east];
+        const exitPoints = [east, ...taperedOffsetPolyline([...interchangeCenterline].reverse(), 52, 52), south];
         return [
           road('road-airport-ramp', 'Развязка к аэропорту', rampPoints, 'highway', 1, 70, 'district-industrial', { isVertical: false, directionMode: 'one-way', feature: 'ramp' }),
           road('road-airport-exit', 'Съезд из аэропорта', exitPoints, 'highway', 1, 70, 'district-industrial', { isVertical: false, directionMode: 'one-way', feature: 'ramp' }),
@@ -413,7 +429,7 @@ export class CityMap {
         { x: 1320, y: 800 }, { x: 1560, y: 790 }, { x: 1800, y: 800 }, { x: 2200, y: 820 },
       ], 'street', 1, 35, 'district-downtown', { isVertical: false, directionMode: 'one-way', feature: 'roundabout' }),
       road('road-quarry-service', 'Карьерная объездная', [
-        { x: 2500, y: 3000 }, { x: 2800, y: 2860 }, { x: 3240, y: 2920 },
+        { x: 2500, y: 3000 }, { x: 2800, y: 2860 }, { x: 2960, y: 2884 }, { x: 3300, y: 2884 },
       ], 'service', 1, 40, 'district-desert', { isVertical: false, directionMode: 'two-way' }),
 
       // Driveways for POIs that generateCityBlocks() otherwise buries in the
@@ -436,7 +452,7 @@ export class CityMap {
         { x: 1224, y: 1000 }, { x: 1320, y: 1000 }, { x: 1430, y: 1000 },
       ], 'service', 1, 25, 'district-residential', { isVertical: false, directionMode: 'two-way' }),
       road('road-construction-access', 'Подъезд к стройплощадке', [
-        { x: 1835, y: 1347 }, { x: 1835, y: 1450 }, { x: 1835, y: 1560 },
+        { x: 1835, y: 1330 }, { x: 1835, y: 1450 }, { x: 1835, y: 1560 },
       ], 'service', 1, 25, 'district-downtown', { isVertical: true, directionMode: 'two-way' }),
       road('road-hospital-access', 'Подъезд к больнице', [
         { x: 1204, y: 1800 }, { x: 1320, y: 1800 }, { x: 1430, y: 1800 },
@@ -806,7 +822,14 @@ export class CityMap {
     // Sits exactly on road_v_3 (x=3040) now, so it doubles as the junction
     // where the interchange actually meets that arterial instead of
     // crossing it 60px further east with no node at all.
-    this.roadNodes.push({ id: 'node-airport', x: 3040, y: 1180, kind: 'junction' });
+    this.roadNodes.push(
+      { id: 'node-airport', x: AIRPORT_SLIP_EAST.x, y: AIRPORT_SLIP_EAST.y, kind: 'junction' },
+      { id: 'node-airport-junction', x: AIRPORT_SLIP_SOUTH.x, y: AIRPORT_SLIP_SOUTH.y, kind: 'junction' },
+    );
+    this.roadNodes.push(
+      { id: 'node-ring-south-west', x: SOUTH_RING_WEST.x, y: SOUTH_RING_WEST.y, kind: 'junction' },
+      { id: 'node-ring-south-east', x: SOUTH_RING_EAST.x, y: SOUTH_RING_EAST.y, kind: 'junction' },
+    );
 
     // Junctions where the secondary roads meet the arterials. Without these the
     // port access, the market street, the country route and the quarry bypass
@@ -822,7 +845,7 @@ export class CityMap {
       // POI already sits directly on Южная Магистраль (road_h_3) instead.
       { id: 'node-country-quarry-link', x: 790, y: 3280, kind: 'terminal' },
       { id: 'node-quarry-west', x: 2500, y: 3000, kind: 'junction' },
-      { id: 'node-quarry-east', x: 3240, y: 2920, kind: 'terminal' },
+      { id: 'node-quarry-east', x: 3240, y: 2884, kind: 'terminal' },
     );
 
     // Driveways that otherwise dead-end mid-block, linked the same way the
@@ -868,9 +891,15 @@ export class CityMap {
       for (let iy = 0; iy < gridY.length - 1; iy++) link(`node-grid-${ix}-${iy}`, `node-grid-${ix}-${iy + 1}`, `road_v_${ix}`);
     });
     link('node-grid-0-0', 'node-grid-3-0', 'road-ring-north');
-    link('node-grid-0-2', 'node-grid-3-2', 'road-ring-south');
-    link('node-grid-2-1', 'node-airport', 'road-airport-ramp');
-    link('node-airport', 'node-grid-2-1', 'road-airport-exit');
+    link('node-ring-south-west', 'node-ring-south-east', 'road-ring-south');
+    link('node-grid-0-2', 'node-ring-south-west', 'road_v_0');
+    link('node-ring-south-west', 'node-grid-0-3', 'road_v_0');
+    link('node-grid-3-2', 'node-ring-south-east', 'road_v_3');
+    link('node-ring-south-east', 'node-grid-3-3', 'road_v_3');
+    link('node-airport-junction', 'node-airport', 'road-airport-ramp');
+    link('node-airport', 'node-airport-junction', 'road-airport-exit');
+    link('node-grid-2-1', 'node-airport-junction', 'road_h_1');
+    link('node-airport-junction', 'node-grid-3-1', 'road_h_1');
     link('node-grid-3-0', 'node-airport', 'road_v_3');
     link('node-airport', 'node-grid-3-1', 'road_v_3');
 
