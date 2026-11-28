@@ -4,6 +4,7 @@ import { GRADE_HEIGHT, GRADE_RAIL_OFFSET, GRADE_RAMP, gradeLift, GradeSample, Gr
 
 export interface GradeOverlay {
   kind: 'bridge' | 'tunnel';
+  structure: GradeStructure;
   canvas: HTMLCanvasElement;
   /** World-space rect the canvas covers. */
   x: number;
@@ -654,7 +655,7 @@ export class StaticSceneBaker {
         this.clipToStructure(ctx, structure, structure.start + GRADE_RAMP, structure.end - GRADE_RAMP, structure.width / 2 + GRADE_RAIL_OFFSET + 14, 0);
       }
       ctx.drawImage(scene, 0, 0, scene.width, scene.height, 0, 0, WORLD_SIZE, WORLD_SIZE);
-      overlays.push({ kind: structure.kind, canvas, x, y, width, height });
+      overlays.push({ kind: structure.kind, structure, canvas, x, y, width, height });
     });
     return overlays;
   }
