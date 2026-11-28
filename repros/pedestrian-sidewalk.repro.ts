@@ -1,4 +1,5 @@
 import { CityMap, CROSSWALK_DEPTH } from '../src/game/cityMap';
+import { locateOnGradeStructure } from '../src/game/gradeSeparation';
 import { TrafficAI } from '../src/game/trafficAI';
 
 const DELTA = 1 / 60;
@@ -28,7 +29,14 @@ function main() {
   let crossing = 0;
   for (const ped of traffic.pedestrians) {
     // Clearance to the real road polylines (negative = on the drivable surface).
-    const clearance = cityMap.clearanceToRoads({ x: ped.x, y: ped.y, width: 0, height: 0 });
+    // Walkers are at ground level: under the covered part of a bridge (or
+    // over a tunnel) that road is on another level, not under their feet.
+    const point = { x: ped.x, y: ped.y, width: 0, height: 0 };
+    const covered = locateOnGradeStructure(cityMap.gradeStructures, ped.x, ped.y);
+    const otherLevel = covered && covered.lift >= 1 ? covered.structure.roadId : null;
+    const clearance = cityMap.roads
+      .filter((road) => road.id !== otherLevel)
+      .reduce((best, road) => Math.min(best, cityMap.clearanceToRoad(point, road)), Infinity);
     if (clearance < -KERB_TOLERANCE && onCrosswalk(ped.x, ped.y)) {
       crossing += 1;
       continue;

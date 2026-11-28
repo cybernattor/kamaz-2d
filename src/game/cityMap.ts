@@ -1,4 +1,5 @@
-import { DestructibleObject, MapDecoration, MapTrail, PointOfInterest, TrafficLight } from '../types';
+import { DestructibleObject, GradeLevel, MapDecoration, MapTrail, PointOfInterest, TrafficLight } from '../types';
+import { buildGradeStructures, GradeStructure, locateOnGradeStructure } from './gradeSeparation';
 
 export type RoadClass = 'arterial' | 'street' | 'highway' | 'service' | 'dirt';
 export type RoadFeature = 'bridge' | 'tunnel' | 'roundabout' | 'rail_crossing' | 'ramp' | 'winding';
@@ -231,6 +232,8 @@ export class CityMap {
   public districts: CityDistrict[] = [];
   public roadNodes: RoadNetworkNode[] = [];
   public roadEdges: RoadNetworkEdge[] = [];
+  /** Bridge decks and covered tunnel stretches, shared by renderer and physics. */
+  public gradeStructures: GradeStructure[] = [];
 
   private rng = createRng(0x5eed1);
 
@@ -330,7 +333,11 @@ export class CityMap {
     // secondary roads; bending these four roads made the car lanes visibly
     // drift away from the geometry that drives them.
     gridX.forEach((gx, idx) => {
-      const points: RoadPoint[] = [{ x: gx, y: 300 }];
+      // The two inner avenues run on north under the Северное кольцо bridge
+      // to the map edge. Ending at y=300 like the outer two, the bridge only
+      // passed over their dead-end turnaround bulbs: a bridge over nothing.
+      const northEnd = idx === 1 || idx === 2 ? 90 : 300;
+      const points: RoadPoint[] = [{ x: gx, y: northEnd }];
       gridY.forEach((gy, crossingIndex) => {
         points.push({ x: gx, y: gy });
       });
@@ -358,9 +365,12 @@ export class CityMap {
     });
 
     this.roads.push(
+      // Leaves the corner junctions through their north arms (it used to cut
+      // diagonally across the junction box and its crosswalks), runs along
+      // the top of the city and bridges the two inner avenues.
       road('road-ring-north', 'Северное кольцо', [
-        { x: 520, y: 620 }, { x: 760, y: 360 }, { x: 1420, y: 250 },
-        { x: 2290, y: 340 }, { x: 3040, y: 620 },
+        { x: 520, y: 620 }, { x: 520, y: 330 }, { x: 650, y: 190 },
+        { x: 2910, y: 190 }, { x: 3040, y: 330 }, { x: 3040, y: 620 },
       ], 'highway', 2, 80, 'district-downtown', { isVertical: false, directionMode: 'two-way', feature: 'bridge' }),
       road('road-ring-south', 'Южное кольцо', [
         { x: 520, y: 2320 }, { x: 760, y: 2670 }, { x: 1440, y: 2810 },
@@ -726,6 +736,7 @@ export class CityMap {
     this.assignRoadDistricts();
     this.buildRoadNetwork();
     this.computeGradeCrossings();
+    this.gradeStructures = buildGradeStructures(this.roads);
 
     // 5. Destructibles (Crates, cones, lamps, hydrants, fences, trash cans)
     this.generateDestructibles();
@@ -747,7 +758,16 @@ export class CityMap {
         for (let i = 1; i < road.points.length; i++) {
           for (let j = 1; j < other.points.length; j++) {
             const point = segmentIntersectionPoint(road.points[i - 1], road.points[i], other.points[j - 1], other.points[j]);
-            if (point) crossings.push(point);
+            // A hit on one of this road's own vertices is where it ends on a
+            // junction or bends off a road it was running along: it meets
+            // the other road at grade there, so there is nothing to bridge or
+            // tunnel under. Those hits used to put grade cues inside the
+            // corner junctions.
+            const atOwnVertex = point && road.points
+              .some((vertex) => Math.hypot(vertex.x - point.x, vertex.y - point.y) < 1);
+            if (point && !atOwnVertex && crossings.every((known) => Math.hypot(known.x - point.x, known.y - point.y) > 1)) {
+              crossings.push(point);
+            }
           }
         }
       });
@@ -1432,7 +1452,14 @@ export class CityMap {
   // Find the nearest street by the actual centerline, including bends and
   // ramps. Comparing only x/y to the first point made the HUD name disagree
   // with the road shown under the vehicle.
-  public getStreetNameAt(x: number, y: number): string {
+  public getStreetNameAt(x: number, y: number, gradeLevel: GradeLevel = 'ground'): string {
+    // Up on a bridge or down in a tunnel you are on that road, even right
+    // over the avenue it crosses, whose centerline is nearer.
+    if (gradeLevel !== 'ground') {
+      const structure = locateOnGradeStructure(this.gradeStructures, x, y, 40)?.structure;
+      const road = structure && this.roads.find((candidate) => candidate.id === structure.roadId);
+      if (road) return road.name;
+    }
     let nearestDist = Infinity;
     let nearestName = 'Grand Boulevard';
 

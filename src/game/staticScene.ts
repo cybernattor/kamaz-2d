@@ -1,5 +1,16 @@
 import { PointOfInterest, MapDecoration, MapTrail } from '../types';
 import { Building, CityDistrict, CityMap, CROSSWALK_DEPTH, RoadSegment, WORLD_SIZE } from './cityMap';
+import { GRADE_HEIGHT, GRADE_RAIL_OFFSET, GRADE_RAMP, gradeLift, GradeSample, GradeStructure } from './gradeSeparation';
+
+export interface GradeOverlay {
+  kind: 'bridge' | 'tunnel';
+  canvas: HTMLCanvasElement;
+  /** World-space rect the canvas covers. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 /**
  * Bakes the static city (ground, districts, roads, intersections, POIs,
@@ -47,8 +58,9 @@ export class StaticSceneBaker {
     this.renderDistricts(ctx, cityMap.districts);
     this.renderMapDecorations(ctx, cityMap.decorations);
     this.renderScenicRoutes(ctx, cityMap.scenicRoutes);
-    this.renderRoads(ctx, cityMap.roads, overview);
+    this.renderRoads(ctx, cityMap, overview);
     this.renderIntersections(ctx, cityMap, overview);
+    this.renderBridges(ctx, cityMap, overview);
     this.renderPOIs(ctx, cityMap.pois, null);
     this.renderBuildings(ctx, cityMap.buildings);
 
@@ -287,182 +299,384 @@ export class StaticSceneBaker {
   }
 
   /**
-   * Bridge/tunnel roads share on-screen space with whatever they cross at
-   * grade, so paint order decides which one reads as "above". Sorting only
-   * the draw pass (never CityMap.roads itself, which other systems iterate
-   * order-independently) keeps tunnels underneath the road that crosses them
-   * and bridges on top of it, regardless of which was generated first.
+   * Paint layer of a road. Each layer lays its asphalt and then its markings
+   * before the next layer starts, so a wider road's carriageway wipes the
+   * centerlines of every narrower road that ends on it or crosses it. Before,
+   * all asphalt went down first and all markings after, which painted the
+   * yellow centerline of every access road straight across the arterials.
    */
-  private roadZOrder(road: RoadSegment) {
-    return road.feature === 'tunnel' ? -1 : road.feature === 'bridge' ? 1 : 0;
-  }
-
-  /** Local tangent direction of a road's polyline nearest to `at`. */
-  private tangentNear(road: RoadSegment, at: { x: number; y: number }) {
-    let best = Infinity;
-    let tangent = { x: 1, y: 0 };
-    for (let i = 1; i < road.points.length; i++) {
-      const a = road.points[i - 1];
-      const b = road.points[i];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const lengthSquared = dx * dx + dy * dy || 1;
-      const t = Math.max(0, Math.min(1, ((at.x - a.x) * dx + (at.y - a.y) * dy) / lengthSquared));
-      const px = a.x + t * dx;
-      const py = a.y + t * dy;
-      const distance = Math.hypot(at.x - px, at.y - py);
-      if (distance < best) {
-        best = distance;
-        tangent = { x: dx, y: dy };
-      }
-    }
-    const length = Math.hypot(tangent.x, tangent.y) || 1;
-    return { x: tangent.x / length, y: tangent.y / length };
+  private roadLayer(road: RoadSegment) {
+    if (road.feature === 'tunnel') return 0;
+    // A bridge road is laid at ground level like any arterial (its ends meet
+    // junctions at grade); only the elevated deck is redrawn on top later.
+    return road.width >= 200 ? 2 : 1;
   }
 
   /**
-   * Grade-separation cues at a bridge/tunnel road's crossing points. Without
-   * these, a bridge and the road it passes over just look like two flat
-   * carriageways painted on top of each other; with them, the bridge reads
-   * as elevated (drop shadow + pier stubs) and the tunnel reads as sunken
-   * (dark portal mouths either side of the crossing).
+   * Strokes a road's centerline shifted sideways by `offset`. Vertices are
+   * pushed out along the miter so parallel lines keep their spacing through
+   * a bend; offsetting along the averaged tangent alone pinched every lane
+   * line together at sharp corners.
    */
-  private renderGradeCrossings(ctx: CanvasRenderingContext2D, road: RoadSegment) {
-    if (!road.gradeCrossings?.length) return;
-    // Every bridge/tunnel on this map only ever crosses a full arterial
-    // (110 half-width + 24 sidewalk halo = 134px reach), so a fixed
-    // clearance keeps these cues outside that halo without needing to look
-    // up which road is actually being crossed.
-    const arterialHaloReach = 134;
+  private strokeRoadLine(ctx: CanvasRenderingContext2D, road: RoadSegment, width: number, offset = 0) {
+    const points = this.roadPoints(road);
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      const shifted = this.offsetVertex(points, index, offset);
+      if (index === 0) ctx.moveTo(shifted.x, shifted.y); else ctx.lineTo(shifted.x, shifted.y);
+    });
+    ctx.stroke();
+  }
 
-    road.gradeCrossings.forEach((point) => {
-      const tangent = this.tangentNear(road, point);
-      ctx.save();
-      ctx.translate(point.x, point.y);
-      ctx.rotate(Math.atan2(tangent.y, tangent.x));
+  private roadPoints(road: RoadSegment) {
+    const points = road.points.length > 1 ? road.points : [{ x: road.x1, y: road.y1 }, { x: road.x2, y: road.y2 }];
+    // A road that ends close to the map edge is drawn running off the map
+    // rather than ending in a turnaround bulb cut in half by the edge.
+    const extend = (end: { x: number; y: number }, from: { x: number; y: number }) => {
+      const edgeGap = Math.min(end.x, end.y, WORLD_SIZE - end.x, WORLD_SIZE - end.y);
+      if (edgeGap > 150) return end;
+      const length = Math.hypot(end.x - from.x, end.y - from.y) || 1;
+      return { x: end.x + ((end.x - from.x) / length) * 400, y: end.y + ((end.y - from.y) / length) * 400 };
+    };
+    if (road.width < 200) return points;
+    const last = points.length - 1;
+    return [extend(points[0], points[1]), ...points.slice(1, last), extend(points[last], points[last - 1])];
+  }
 
-      if (road.feature === 'bridge') {
-        // Shade the lower road beyond the deck edges and place supports
-        // outside the bridge's drivable surface.
-        ctx.fillStyle = 'rgba(2, 6, 23, 0.4)';
-        ctx.beginPath();
-        ctx.ellipse(0, 0, arterialHaloReach + 18, road.width / 2 + 34, 0, 0, Math.PI * 2);
-        ctx.fill();
-        [-1, 1].forEach((along) => [-1, 1].forEach((across) => {
-          ctx.fillStyle = '#1e293b';
-          ctx.strokeStyle = '#0f172a';
-          ctx.lineWidth = 2;
+  private offsetVertex(points: { x: number; y: number }[], index: number, offset: number) {
+    const point = points[index];
+    if (offset === 0) return point;
+    const normalOf = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+      const length = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      return { x: -(b.y - a.y) / length, y: (b.x - a.x) / length };
+    };
+    // A zero-length neighbour has no direction; ignore it rather than let
+    // it pull the offset vertex back toward the centerline.
+    const apart = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(b.x - a.x, b.y - a.y) > 0.5;
+    const before = index > 0 && apart(points[index - 1], point) ? normalOf(points[index - 1], point) : null;
+    const after = index < points.length - 1 && apart(point, points[index + 1]) ? normalOf(point, points[index + 1]) : null;
+    if (!before && !after) return point;
+    const a = before ?? after!;
+    const b = after ?? before!;
+    let mx = a.x + b.x;
+    let my = a.y + b.y;
+    const length = Math.hypot(mx, my) || 1;
+    mx /= length;
+    my /= length;
+    // 1 / cos(half the turn), capped so a near-U-turn cannot spike outward.
+    const scale = 1 / Math.max(0.35, mx * a.x + my * a.y);
+    return { x: point.x + mx * offset * scale, y: point.y + my * offset * scale };
+  }
+
+  private asphaltColor(road: RoadSegment) {
+    return road.roadClass === 'dirt' ? '#8a6232' : road.roadClass === 'highway' ? '#222a37' : '#1e2530';
+  }
+
+  private renderRoadSurface(ctx: CanvasRenderingContext2D, road: RoadSegment) {
+    ctx.setLineDash([]);
+    ctx.strokeStyle = this.asphaltColor(road);
+    this.strokeRoadLine(ctx, road, road.width);
+    if (road.roadClass === 'dirt') {
+      // Wheel ruts: two darker tracks make a dirt road read as dirt rather
+      // than as an orange paved road.
+      ctx.strokeStyle = 'rgba(66, 42, 17, 0.45)';
+      this.strokeRoadLine(ctx, road, 7, road.width * 0.22);
+      this.strokeRoadLine(ctx, road, 7, -road.width * 0.22);
+    }
+  }
+
+  private renderRoadMarkings(ctx: CanvasRenderingContext2D, road: RoadSegment, cityMap: CityMap, overview: boolean) {
+    // Line dash state leaks between strokes; every marking sets its own.
+    if (road.roadClass === 'dirt') {
+      ctx.strokeStyle = 'rgba(241, 211, 155, 0.55)';
+      ctx.setLineDash([14, 12]);
+      this.strokeRoadLine(ctx, road, 2);
+      ctx.setLineDash([]);
+      return;
+    }
+
+    const half = road.width / 2;
+    const oneWay = road.directionMode === 'one-way';
+
+    // Solid edge lines sit just inside the carriageway, on the asphalt.
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(203, 213, 225, 0.55)';
+    this.strokeRoadLine(ctx, road, 2, half - 5);
+    this.strokeRoadLine(ctx, road, 2, -(half - 5));
+
+    if (oneWay) {
+      // A one-way road has no opposing flow, so no yellow divider: a white
+      // dashed line plus arrows tells the driver which way the road runs.
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.setLineDash([16, 18]);
+      this.strokeRoadLine(ctx, road, 2.2, 0);
+    } else {
+      ctx.strokeStyle = '#eab308';
+      ctx.setLineDash([]);
+      this.strokeRoadLine(ctx, road, 2.6, 3.5);
+      this.strokeRoadLine(ctx, road, 2.6, -3.5);
+    }
+    if (overview) {
+      ctx.setLineDash([]);
+      return;
+    }
+
+    // Lane dividers sit midway between the lane centers traffic actually
+    // drives on (34 and 88 from the centerline), not at width / 4.
+    if (road.lanesPerDirection === 2) {
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.setLineDash([16, 18]);
+      this.strokeRoadLine(ctx, road, 2.2, 61);
+      this.strokeRoadLine(ctx, road, 2.2, -61);
+    }
+    ctx.setLineDash([]);
+
+    if (oneWay) this.renderOneWayArrows(ctx, road, cityMap);
+  }
+
+  /** Painted lane arrows along a one-way road, pointing with the traffic. */
+  private renderOneWayArrows(ctx: CanvasRenderingContext2D, road: RoadSegment, cityMap: CityMap) {
+    const points = this.roadPoints(road);
+    const laneOffsets = road.lanesPerDirection === 2 ? [34, 88, -34, -88] : [26, -26];
+    const spacing = 360;
+    const clearOfJunction = (x: number, y: number) => cityMap.intersections.every((inter) => {
+      const reach = inter.size / 2 + CROSSWALK_DEPTH + 40;
+      return Math.abs(x - inter.x) > reach || Math.abs(y - inter.y) > reach;
+    });
+
+    ctx.fillStyle = 'rgba(241, 245, 249, 0.82)';
+    let nextArrow = spacing / 2; // distance from the road start
+    let segmentStart = 0;
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
+      const length = Math.hypot(b.x - a.x, b.y - a.y);
+      if (length < 1) continue;
+      const tx = (b.x - a.x) / length;
+      const ty = (b.y - a.y) / length;
+      for (; nextArrow < segmentStart + length; nextArrow += spacing) {
+        const along = nextArrow - segmentStart;
+        const cx = a.x + tx * along;
+        const cy = a.y + ty * along;
+        if (!clearOfJunction(cx, cy)) continue;
+        laneOffsets.forEach((offset) => {
+          ctx.save();
+          ctx.translate(cx - ty * offset, cy + tx * offset);
+          ctx.rotate(Math.atan2(ty, tx));
           ctx.beginPath();
-          ctx.roundRect(
-            along * (arterialHaloReach - 8) - 9,
-            across * (road.width / 2 + 12) - 9,
-            18,
-            18,
-            4
-          );
+          ctx.moveTo(18, 0);
+          ctx.lineTo(4, -9);
+          ctx.lineTo(4, -3.5);
+          ctx.lineTo(-18, -3.5);
+          ctx.lineTo(-18, 3.5);
+          ctx.lineTo(4, 3.5);
+          ctx.lineTo(4, 9);
+          ctx.closePath();
           ctx.fill();
-          ctx.stroke();
-        }));
-      } else {
-        // Small portal marks show where the road dips under without hiding
-        // the full-width carriageway on the overview map.
-        [-1, 1].forEach((direction) => {
-          const offset = direction * (arterialHaloReach + 10);
-          ctx.fillStyle = '#0f172a';
-          ctx.strokeStyle = '#334155';
-          ctx.lineWidth = 3;
-          ctx.beginPath();
-          ctx.roundRect(offset - 10, -28, 20, 56, 5);
-          ctx.fill();
-          ctx.stroke();
+          ctx.restore();
         });
       }
+      segmentStart += length;
+    }
+  }
+
+  /** Every road at ground level. Bridge decks come after intersections. */
+  private renderRoads(ctx: CanvasRenderingContext2D, cityMap: CityMap, overview = false) {
+    const groundRoads = [...cityMap.roads].sort((a, b) => this.roadLayer(a) - this.roadLayer(b));
+
+    ctx.save();
+    ctx.lineJoin = 'round';
+    // Narrow roads end square: their endpoints sit on an arterial's edge or
+    // centerline, and a round cap left a bulge of asphalt and sidewalk poking
+    // out of the far side of the arterial.
+    const capFor = (road: RoadSegment): CanvasLineCap => (road.width >= 200 ? 'round' : 'butt');
+
+    // Sidewalks first, all together, so no road's sidewalk covers another
+    // road's asphalt.
+    ctx.strokeStyle = '#334155';
+    groundRoads.forEach((road) => {
+      ctx.lineCap = capFor(road);
+      this.strokeRoadLine(ctx, road, road.width + 48);
+    });
+
+    [0, 1, 2].forEach((layer) => {
+      const layerRoads = groundRoads.filter((road) => this.roadLayer(road) === layer);
+      layerRoads.forEach((road) => {
+        ctx.lineCap = capFor(road);
+        this.renderRoadSurface(ctx, road);
+      });
+      ctx.lineCap = 'butt';
+      layerRoads.forEach((road) => this.renderRoadMarkings(ctx, road, cityMap, overview));
+      if (layer === 0) {
+        // Tunnel walls, drawn before the roads above so those cover them.
+        layerRoads.forEach((road) => {
+          ctx.strokeStyle = 'rgba(100, 116, 139, 0.8)';
+          ctx.setLineDash([28, 20]);
+          this.strokeRoadLine(ctx, road, 5, road.width / 2 + 11);
+          this.strokeRoadLine(ctx, road, 5, -road.width / 2 - 11);
+          ctx.setLineDash([]);
+        });
+      }
+    });
+    ctx.restore();
+
+    // Mouths go over the road that passes above the tunnel.
+    this.renderTunnelMouths(ctx, cityMap);
+  }
+
+  /**
+   * Elevated decks, painted after intersections so the road underneath (its
+   * zebras, stop lines and markings) stays below the bridge. The spans come
+   * from CityMap.gradeStructures, the same ones physics uses: ramps climb
+   * over GRADE_RAMP px, the deck stays level across the crossed road, and the
+   * rest of the road was already laid at ground level.
+   */
+  private renderBridges(ctx: CanvasRenderingContext2D, cityMap: CityMap, overview = false) {
+    const shadowDirection = { x: 0.6, y: 0.8 };
+
+    cityMap.gradeStructures.filter((structure) => structure.kind === 'bridge').forEach((structure) => {
+      const road = cityMap.roads.find((candidate) => candidate.id === structure.roadId);
+      if (!road) return;
+      const span = structure.samples;
+      const deck: RoadSegment = { ...road, points: span.map(({ x, y }) => ({ x, y })) };
+
+      ctx.save();
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'butt';
+
+      // Shadow on the ground, sliding away from the deck as it rises, so the
+      // ramps read as climbing and the middle as standing clear. A filled
+      // outline, not a stroke: at lift 0 its ends coincide with the deck's,
+      // where a stroked line's tilted butt cap poked out.
+      const shadowHalf = road.width / 2 + 15;
+      const shadowEdge = (side: 1 | -1) => span.map((sample) => {
+        const lift = gradeLift(structure, sample.s) * GRADE_HEIGHT;
+        return {
+          x: sample.x - sample.ty * shadowHalf * side + shadowDirection.x * lift,
+          y: sample.y + sample.tx * shadowHalf * side + shadowDirection.y * lift,
+        };
+      });
+      const outline = [...shadowEdge(1), ...shadowEdge(-1).reverse()];
+      ctx.fillStyle = 'rgba(2, 6, 23, 0.42)';
+      ctx.beginPath();
+      outline.forEach((point, index) => (index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)));
+      ctx.closePath();
+      ctx.fill();
+
+      // Deck edge (parapet base), asphalt and markings.
+      ctx.strokeStyle = '#3b4a5f';
+      this.strokeRoadLine(ctx, deck, road.width + 30);
+      this.renderRoadSurface(ctx, deck);
+      this.renderRoadMarkings(ctx, deck, cityMap, overview);
+
+      // Railings (physics keeps cars inside them at the same offset), and
+      // expansion joints where the deck meets the ramps.
+      ctx.setLineDash([]);
+      ctx.strokeStyle = '#0f172a';
+      this.strokeRoadLine(ctx, deck, 3, road.width / 2 + GRADE_RAIL_OFFSET + 4);
+      this.strokeRoadLine(ctx, deck, 3, -road.width / 2 - GRADE_RAIL_OFFSET - 4);
+      ctx.strokeStyle = '#cbd5e1';
+      this.strokeRoadLine(ctx, deck, 5, road.width / 2 + GRADE_RAIL_OFFSET);
+      this.strokeRoadLine(ctx, deck, 5, -road.width / 2 - GRADE_RAIL_OFFSET);
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.55)';
+      ctx.lineWidth = 3;
+      [structure.start + GRADE_RAMP, structure.end - GRADE_RAMP]
+        .forEach((s) => this.strokeAcross(ctx, span, s, road.width / 2 + 11));
       ctx.restore();
     });
   }
 
-  private renderRoads(ctx: CanvasRenderingContext2D, roads: RoadSegment[], overview = false) {
-    const drawOrder = [...roads].sort((a, b) => this.roadZOrder(a) - this.roadZOrder(b));
-    const bridges = drawOrder.filter((road) => road.feature === 'bridge');
-    const groundRoads = drawOrder.filter((road) => road.feature !== 'bridge');
-    const drawRoadLine = (road: RoadSegment, width: number, offset = 0) => {
-      const points = road.points.length > 1 ? road.points : [{ x: road.x1, y: road.y1 }, { x: road.x2, y: road.y2 }];
-      ctx.lineWidth = width;
-      ctx.beginPath();
-      points.forEach((point, index) => {
-        const previous = points[Math.max(0, index - 1)];
-        const next = points[Math.min(points.length - 1, index + 1)];
-        const tangentX = next.x - previous.x;
-        const tangentY = next.y - previous.y;
-        const length = Math.hypot(tangentX, tangentY) || 1;
-        const x = point.x - (tangentY / length) * offset;
-        const y = point.y + (tangentX / length) * offset;
-        if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  /**
+   * Tunnel mouths at both ends of each covered stretch. Between the mouths
+   * the tunnel is roofed over (see getGradeOverlays), so cars inside it
+   * disappear under the road above.
+   */
+  private renderTunnelMouths(ctx: CanvasRenderingContext2D, cityMap: CityMap) {
+    cityMap.gradeStructures.filter((structure) => structure.kind === 'tunnel').forEach((structure) => {
+      const reach = structure.width / 2 + GRADE_RAIL_OFFSET + 6;
+      ctx.save();
+      ctx.lineCap = 'butt';
+      [structure.start + GRADE_RAMP, structure.end - GRADE_RAMP].forEach((s) => {
+        ctx.strokeStyle = '#0b1120';
+        ctx.lineWidth = 16;
+        this.strokeAcross(ctx, structure.samples, s, reach);
+        ctx.strokeStyle = '#64748b';
+        ctx.lineWidth = 4;
+        this.strokeAcross(ctx, structure.samples, s, reach);
       });
-      ctx.stroke();
-    };
-
-    // Paint every shoulder before any asphalt. Drawing each road completely
-    // in sequence let a later road's wide shoulder cover an earlier road.
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    drawOrder.forEach((road) => {
-      ctx.strokeStyle = '#334155';
-      drawRoadLine(road, road.width + 48);
+      ctx.restore();
     });
+  }
 
-    groundRoads.forEach((road) => {
-      ctx.strokeStyle = road.roadClass === 'dirt' ? '#9a6b30' : road.roadClass === 'highway' ? '#202938' : '#1e2530';
-      drawRoadLine(road, road.width);
-    });
+  /** A straight line across the road at distance `s` along the samples. */
+  private strokeAcross(ctx: CanvasRenderingContext2D, samples: GradeSample[], s: number, reach: number) {
+    const at = samples.reduce((best, sample) => (Math.abs(sample.s - s) < Math.abs(best.s - s) ? sample : best));
+    ctx.beginPath();
+    ctx.moveTo(at.x + at.ty * reach, at.y - at.tx * reach);
+    ctx.lineTo(at.x - at.ty * reach, at.y + at.tx * reach);
+    ctx.stroke();
+  }
 
-    // Bridges get their shadow between the lower road and the deck, so their
-    // centerlines and lane markings cannot bleed through the overpass.
-    bridges.forEach((road) => this.renderGradeCrossings(ctx, road));
-    bridges.forEach((road) => {
-      ctx.strokeStyle = road.roadClass === 'dirt' ? '#9a6b30' : road.roadClass === 'highway' ? '#202938' : '#1e2530';
-      drawRoadLine(road, road.width);
-    });
+  /**
+   * Pieces of the static scene that must be drawn over vehicles on a lower
+   * level: bridge decks (over ground traffic) and the roof of each covered
+   * tunnel stretch (over tunnel traffic). Each is cropped to its own bounds
+   * so it costs a small texture instead of a second world-size one. Rects are
+   * in world units; canvases are at the baker's scale.
+   */
+  public getGradeOverlays(cityMap: CityMap): GradeOverlay[] {
+    const scene = this.getStaticScene(cityMap);
+    if (!scene) return [];
+    const scale = this.scale;
+    const overlays: GradeOverlay[] = [];
 
-    [...groundRoads, ...bridges].forEach((road) => {
-      ctx.strokeStyle = '#64748b';
-      drawRoadLine(road, 2, road.width / 2);
-      drawRoadLine(road, 2, -road.width / 2);
+    cityMap.gradeStructures.forEach((structure) => {
+      const x = Math.max(0, Math.floor(structure.bounds.minX));
+      const y = Math.max(0, Math.floor(structure.bounds.minY));
+      const width = Math.min(WORLD_SIZE, Math.ceil(structure.bounds.maxX)) - x;
+      const height = Math.min(WORLD_SIZE, Math.ceil(structure.bounds.maxY)) - y;
+      if (width <= 0 || height <= 0) return;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.ceil(width * scale));
+      canvas.height = Math.max(1, Math.ceil(height * scale));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(scale, 0, 0, scale, -x * scale, -y * scale);
 
-      if (road.roadClass !== 'dirt') {
-        ctx.strokeStyle = '#eab308';
-        ctx.setLineDash([]);
-        drawRoadLine(road, road.directionMode === 'one-way' ? 2 : 3, road.directionMode === 'one-way' ? 0 : 3);
-        if (road.directionMode !== 'one-way') drawRoadLine(road, 3, -3);
-
-        if (overview) return;
-        const laneWidth = road.width / (road.lanesPerDirection * 2);
-        ctx.strokeStyle = '#f8fafc';
-        ctx.setLineDash([16, 18]);
-        for (let lane = 1; lane < road.lanesPerDirection * 2; lane += 1) {
-          if (road.directionMode === 'one-way' && lane === road.lanesPerDirection) continue;
-          const offset = -road.width / 2 + laneWidth * lane;
-          drawRoadLine(road, 2.2, offset);
-        }
+      if (structure.kind === 'bridge') {
+        // The deck and its shadow, copied from the baked scene, which already
+        // has them drawn over everything else.
+        this.clipToStructure(ctx, structure, structure.start, structure.end, structure.width / 2 + GRADE_RAIL_OFFSET + 6, GRADE_HEIGHT);
       } else {
-        ctx.strokeStyle = '#f1d39b';
-        ctx.setLineDash([14, 12]);
-        drawRoadLine(road, 2);
+        // The roof: whatever the baked scene shows over the covered stretch
+        // (the crossing road, its sidewalks and the tunnel mouths).
+        this.clipToStructure(ctx, structure, structure.start + GRADE_RAMP, structure.end - GRADE_RAMP, structure.width / 2 + GRADE_RAIL_OFFSET + 14, 0);
       }
-      if (road.feature === 'bridge' || road.feature === 'tunnel') {
-        ctx.strokeStyle = road.feature === 'bridge' ? '#93c5fd' : '#64748b';
-        ctx.setLineDash(road.feature === 'bridge' ? [] : [28, 20]);
-        drawRoadLine(road, 5, road.width / 2 + 11);
-        drawRoadLine(road, 5, -road.width / 2 - 11);
-      }
+      ctx.drawImage(scene, 0, 0, scene.width, scene.height, 0, 0, WORLD_SIZE, WORLD_SIZE);
+      overlays.push({ kind: structure.kind, canvas, x, y, width, height });
     });
-    ctx.setLineDash([]);
-    ctx.restore();
+    return overlays;
+  }
 
-    // Portals cover the road that passes above the tunnel.
-    groundRoads.filter((road) => road.feature === 'tunnel')
-      .forEach((road) => this.renderGradeCrossings(ctx, road));
+  /** Clips to the structure's outline between `from` and `to`, plus its shadow. */
+  private clipToStructure(ctx: CanvasRenderingContext2D, structure: GradeStructure, from: number, to: number, half: number, shadow: number) {
+    const samples = structure.samples.filter((sample) => sample.s >= from - 0.5 && sample.s <= to + 0.5);
+    if (samples.length < 2) return;
+    const edge = (side: 1 | -1, withShadow: boolean) => samples.map((sample) => {
+      const lift = withShadow ? gradeLift(structure, sample.s) * shadow : 0;
+      return {
+        x: sample.x - sample.ty * half * side + 0.6 * lift,
+        y: sample.y + sample.tx * half * side + 0.8 * lift,
+      };
+    });
+    ctx.beginPath();
+    [false, true].forEach((withShadow) => {
+      const outline = [...edge(1, withShadow), ...edge(-1, withShadow).reverse()];
+      outline.forEach((point, index) => (index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)));
+      ctx.closePath();
+    });
+    ctx.clip('nonzero');
   }
 
   private renderIntersections(ctx: CanvasRenderingContext2D, cityMap: CityMap, overview = false) {
@@ -499,14 +713,21 @@ export class StaticSceneBaker {
         return;
       }
 
-      // Center intersection asphalt
-      ctx.fillStyle = '#1e2530';
-      ctx.fillRect(inter.x - half, inter.y - half, inter.size, inter.size);
-
-      // Render 4 Zebra Crosswalks (Crisp White Bars Matching Screenshots!)
       const stripeWidth = 10;
       const stripeGap = 8;
       const zebraLen = CROSSWALK_DEPTH;
+      const stopOffset = half + zebraLen + 8;
+
+      // Junction box plus every approach up to its stop line is bare asphalt:
+      // centerlines and lane dashes end at the stop line instead of running
+      // through the zebra (they showed between its stripes) and into the box.
+      ctx.fillStyle = '#1e2530';
+      ctx.fillRect(inter.x - half, inter.y - half, inter.size, inter.size);
+      const mouth = inter.size - 10;
+      ctx.fillRect(inter.x - mouth / 2, inter.y - stopOffset, mouth, stopOffset - half);
+      ctx.fillRect(inter.x - mouth / 2, inter.y + half, mouth, stopOffset - half);
+      ctx.fillRect(inter.x - stopOffset, inter.y - mouth / 2, stopOffset - half, mouth);
+      ctx.fillRect(inter.x + half, inter.y - mouth / 2, stopOffset - half, mouth);
 
       ctx.fillStyle = '#ffffff';
 
@@ -534,13 +755,24 @@ export class StaticSceneBaker {
       ctx.fillRect(inter.x - half - 22, inter.y + half + 4, 18, 18);
       ctx.fillRect(inter.x + half + 4, inter.y + half + 4, 18, 18);
 
-      // Keep stop lines upstream of the full crosswalk, with a small buffer.
+      // Stop lines sit upstream of the crosswalk and span only the inbound
+      // half, on the side TrafficAI drives (south-bound east of center,
+      // east-bound south of it). A one-way road gets none on its exit side.
+      const through = (vertical: boolean) => cityMap.roads.find((road) => road.width >= 200
+        && road.isVertical === vertical
+        && Math.abs((vertical ? road.x1 : road.y1) - (vertical ? inter.x : inter.y)) < 4);
+      const allows = (vertical: boolean, positiveTravel: boolean) => {
+        const road = through(vertical);
+        if (!road || road.directionMode !== 'one-way') return true;
+        const forward = vertical ? road.y2 >= road.y1 : road.x2 >= road.x1;
+        return forward === positiveTravel;
+      };
+      const inbound = mouth / 2;
       ctx.fillStyle = '#f8fafc';
-      const stopOffset = half + zebraLen + 8;
-      ctx.fillRect(inter.x - half, inter.y - stopOffset - 2, inter.size, 4);
-      ctx.fillRect(inter.x - half, inter.y + stopOffset - 2, inter.size, 4);
-      ctx.fillRect(inter.x - stopOffset - 2, inter.y - half, 4, inter.size);
-      ctx.fillRect(inter.x + stopOffset - 2, inter.y - half, 4, inter.size);
+      if (allows(true, true)) ctx.fillRect(inter.x, inter.y - stopOffset - 2, inbound, 5); // from north
+      if (allows(true, false)) ctx.fillRect(inter.x - inbound, inter.y + stopOffset - 3, inbound, 5); // from south
+      if (allows(false, true)) ctx.fillRect(inter.x - stopOffset - 2, inter.y, 5, inbound); // from west
+      if (allows(false, false)) ctx.fillRect(inter.x + stopOffset - 3, inter.y - inbound, 5, inbound); // from east
 
       ctx.restore();
     });

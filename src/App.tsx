@@ -13,6 +13,7 @@ import {
   VehicleInstance,
 } from './types';
 import { CityMap } from './game/cityMap';
+import { constrainVehicleToGradeStructure, constrainWalkerToGradeStructure, updateGradeLevel } from './game/gradeSeparation';
 import { PhysicsEngine } from './game/physics';
 import { TrafficAI } from './game/trafficAI';
 import { MissionManager } from './game/missions';
@@ -531,6 +532,9 @@ export default function App() {
       char.x = v.x - Math.sin(v.angle) * 35;
       char.y = v.y + Math.cos(v.angle) * 35;
       char.angle = v.angle;
+      // Stepping out on a bridge deck leaves the driver on the deck.
+      char.gradeLevel = v.gradeLevel;
+      char.gradeZone = v.gradeZone;
       char.inVehicleId = null;
       v.speed = 0;
       setInVehicle(false);
@@ -697,6 +701,17 @@ export default function App() {
           delta
         );
 
+        // Bridge decks and tunnels: track which level the truck is on and
+        // keep it between the railings while it is up there.
+        const gradeLocation = updateGradeLevel(cityMapRef.current.gradeStructures, v);
+        const vehicleConfig = VEHICLE_CONFIGS[v.type] || VEHICLE_CONFIGS.sedan;
+        const railContact = constrainVehicleToGradeStructure(gradeLocation, v, vehicleConfig.width / 2, vehicleConfig.length / 2);
+        if (railContact && railContact.impactSpeed > 2.5) {
+          physicsRef.current.emitSparks(railContact.x, railContact.y, Math.min(18, Math.round(railContact.impactSpeed * 2)));
+          sound.playCrash(Math.min(1, railContact.impactSpeed / 10));
+          v.health = Math.max(0, v.health - Math.round((railContact.impactSpeed - 2.5) * 1.5));
+        }
+
         // Synchronize engine sound pitch
         const isThrottle = pedals.throttle;
         const isKamaz = v.type.startsWith('kamaz');
@@ -718,6 +733,7 @@ export default function App() {
           delta,
           cityMapRef.current.buildings
         );
+        constrainWalkerToGradeStructure(updateGradeLevel(cityMapRef.current.gradeStructures, char), char);
         airBrakeWasPressedRef.current = false;
         sound.stopEngine();
       }
@@ -730,6 +746,11 @@ export default function App() {
         cityMapRef.current.updateTrafficLights(simulationStep);
         trafficRef.current.updateTraffic(simulationStep, isCar ? v : undefined);
         trafficRef.current.updatePedestrians(simulationStep, playerPos.x, playerPos.y, v.isHonking, isCar ? v : undefined);
+        // NPCs never use the ramps, so this only confirms they stay on the
+        // ground when they drive under a bridge or over a tunnel.
+        for (const npc of trafficRef.current.npcVehicles) {
+          updateGradeLevel(cityMapRef.current.gradeStructures, npc);
+        }
 
       // 4. Resolve Collisions (Vehicles vs Props vs Pedestrians vs Buildings)
         // The player's own vehicle stays a solid obstacle (and a valid crash
@@ -816,7 +837,7 @@ export default function App() {
       const simulationMs = performance.now() - simulationStarted;
 
       // 7. Update HUD Info (Street Name)
-      const currentStreet = cityMapRef.current.getStreetNameAt(playerPos.x, playerPos.y);
+      const currentStreet = cityMapRef.current.getStreetNameAt(playerPos.x, playerPos.y, (isCar ? v : char).gradeLevel);
       if (currentStreet !== lastStreetName) {
         lastStreetName = currentStreet;
         setStreetName(currentStreet);

@@ -947,6 +947,10 @@ export class TrafficAI {
         if (sideA * sideB >= 0) continue; // parallel to, or entirely on one side of, the sidewalk
         const t = sideA / (sideA - sideB);
         const at = axis === 'vertical' ? a.y + (b.y - a.y) * t : a.x + (b.x - a.x) * t;
+        // A bridge passes over the sidewalk and a tunnel under it: walkers
+        // carry on instead of waiting at a crossing that is not there.
+        const where = axis === 'vertical' ? { x: line, y: at } : { x: at, y: line };
+        if (road.gradeCrossings?.some((point) => Math.hypot(point.x - where.x, point.y - where.y) < 400)) continue;
         // The arterial that defines this crossing is already in the grid list.
         if (crossings.every((known) => Math.abs(known - at) > 60)) crossings.push(at);
       }
@@ -1757,6 +1761,10 @@ export class TrafficAI {
   // Update NPC Traffic Simulation
   public updateTraffic(delta: number, playerVehicle?: VehicleInstance | null) {
     const sirenActive = Boolean(playerVehicle && playerVehicle.isSiren);
+    // Street traffic only ever drives at ground level. A player up on a
+    // bridge deck or down in a tunnel is heard (siren) but is no obstacle:
+    // the cars on the avenue under the bridge must not brake for it.
+    if ((playerVehicle?.gradeLevel ?? 'ground') !== 'ground') playerVehicle = null;
     this.cleanupIntersectionReservations(delta);
     this.vehicleIndex.clear();
     this.vehicleIndex.insertAll(this.npcVehicles);
@@ -3073,7 +3081,9 @@ export class TrafficAI {
       // closing in fast enough to be a real near-miss. Silent traffic used
       // to be invisible to pedestrians even bearing straight down on them.
       if ((ped.panicCooldown || 0) <= 0) {
-        const danger = this.findApproachingDanger(ped, playerVehicle);
+        // Walkers are at ground level; a vehicle on a bridge is no danger.
+        const groundPlayer = (playerVehicle?.gradeLevel ?? 'ground') === 'ground' ? playerVehicle : null;
+        const danger = this.findApproachingDanger(ped, groundPlayer);
         if (danger) {
           if (ped.speechTimer <= 0) {
             ped.speechText = 'Куда прёшь?!';
