@@ -30,6 +30,13 @@ const COVERED_REACH = 174;
 /** Railings / tunnel walls sit this far outside the carriageway edge. */
 export const GRADE_RAIL_OFFSET = 10;
 const SAMPLE_STEP = 16;
+/**
+ * Up to this lift the outer end of a ramp is still low enough to roll onto
+ * from the side. Past it the ramp is a wall to anything on the ground: you
+ * neither hop onto the deck through its railing nor drive out from under the
+ * bridge up its road.
+ */
+export const GRADE_RAMP_ENTRY_LIFT = 0.3;
 
 export interface GradeSample {
   x: number;
@@ -216,13 +223,47 @@ export const updateGradeLevel = (structures: GradeStructure[], entity: GradeEnti
 
   let level: GradeLevel = previousLevel;
   if (zone === 'none') level = 'ground';
-  else if (zone === 'ramp' && previousZone === 'none') level = location!.structure.kind;
+  // Onto a ramp only over its low outer end, never through its side.
+  else if (zone === 'ramp' && previousZone === 'none' && location!.lift <= GRADE_RAMP_ENTRY_LIFT) level = location!.structure.kind;
   // A ground-level car at the side of a ramp is not on it either.
   if (level !== 'ground' && location && location.structure.kind !== level) level = 'ground';
 
   entity.gradeLevel = level;
   entity.gradeZone = zone;
   return location;
+};
+
+/** Above this incidence (rad off the wall) a hit is a crash, not a scrape. */
+const GRAZE_ANGLE = 0.35;
+/** Most a scrape turns the vehicle in one step, toward running along the wall. */
+const MAX_SCRAPE_TURN = 0.04;
+
+/**
+ * Speed loss from hitting a wall whose outward-from-the-vehicle direction is
+ * (wallX, wallY). The heading is kept: snapping the vehicle to run along the
+ * wall swung it sideways on every touch. A shallow scrape only eases the nose
+ * a little away from the wall; anything steeper just loses the speed that
+ * went into the wall, like a bump against a curb.
+ */
+const scrapeAlongWall = (vehicle: { angle: number; speed: number }, wallX: number, wallY: number, intoWall: number) => {
+  const total = Math.abs(vehicle.speed);
+  if (total < 0.001) return;
+  const direction = vehicle.speed >= 0 ? 1 : -1;
+  const vx = Math.cos(vehicle.angle) * vehicle.speed;
+  const vy = Math.sin(vehicle.angle) * vehicle.speed;
+  const alongX = vx - wallX * intoWall;
+  const alongY = vy - wallY * intoWall;
+  const alongSpeed = Math.hypot(alongX, alongY);
+  vehicle.speed = direction * alongSpeed * 0.9;
+
+  const incidence = Math.asin(Math.min(1, intoWall / total));
+  if (alongSpeed > 0.05 && incidence < GRAZE_ANGLE) {
+    const target = Math.atan2(alongY * direction, alongX * direction);
+    let diff = target - vehicle.angle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    vehicle.angle += Math.max(-MAX_SCRAPE_TURN, Math.min(MAX_SCRAPE_TURN, diff * 0.5));
+  }
 };
 
 export interface RailContact {
@@ -263,17 +304,7 @@ export const constrainVehicleToGradeStructure = (
   const intoRail = (vx * normal.x + vy * normal.y) * side;
   if (intoRail <= 0) return null;
 
-  // Keep only the speed along the rail, with a little scrape loss.
-  const alongX = vx - normal.x * side * intoRail;
-  const alongY = vy - normal.y * side * intoRail;
-  const alongSpeed = Math.hypot(alongX, alongY);
-  if (alongSpeed > 0.05) {
-    const direction = vehicle.speed >= 0 ? 1 : -1;
-    vehicle.angle = Math.atan2(alongY * direction, alongX * direction);
-    vehicle.speed = direction * alongSpeed * 0.9;
-  } else {
-    vehicle.speed = 0;
-  }
+  scrapeAlongWall(vehicle, normal.x * side, normal.y * side, intoRail);
   return {
     impactSpeed: intoRail,
     x: vehicle.x + normal.x * side * across,
@@ -295,3 +326,100 @@ export const constrainWalkerToGradeStructure = (location: GradeLocation | null, 
 /** Two entities touch only if they are on the same level. */
 export const sameGradeLevel = (a: { gradeLevel?: GradeLevel }, b: { gradeLevel?: GradeLevel }) =>
   (a.gradeLevel ?? 'ground') === (b.gradeLevel ?? 'ground');
+
+export interface GroundBody {
+  x: number;
+  y: number;
+  gradeLevel?: GradeLevel;
+  angle?: number;
+  speed?: number;
+}
+
+/**
+ * Keeps something on the ground off the raised part of a ramp: its railings
+ * (bridge) or walls (tunnel cutting) seen from outside, and the abutment where
+ * the covered stretch ends, seen from below. Pushed out the shortest way; a
+ * vehicle loses the part of its speed that went into the wall.
+ */
+export const constrainGroundToGradeStructures = (
+  structures: GradeStructure[],
+  body: GroundBody,
+  halfWidth: number,
+  halfLength: number
+): RailContact | null => {
+  if ((body.gradeLevel ?? 'ground') !== 'ground') return null;
+  const reach = Math.max(halfWidth, halfLength);
+  const location = locateOnGradeStructure(structures, body.x, body.y, reach);
+  if (!location) return null;
+  const { structure, s, lateral, normal } = location;
+  const tangent = { x: normal.y, y: -normal.x };
+  const forward = body.angle === undefined ? null : { x: Math.cos(body.angle), y: Math.sin(body.angle) };
+  const extent = (axis: { x: number; y: number }) => (forward
+    ? halfLength * Math.abs(forward.x * axis.x + forward.y * axis.y) + halfWidth * Math.abs(-forward.y * axis.x + forward.x * axis.y)
+    : halfWidth);
+  const across = extent(normal);
+  const along = extent(tangent);
+  const wallHalf = structure.width / 2 + GRADE_RAIL_OFFSET + 4;
+  const sideways = wallHalf + across - Math.abs(lateral);
+  if (sideways <= 0) return null;
+
+  const low = GRADE_RAMP_ENTRY_LIFT * GRADE_RAMP;
+  const ramps = [
+    { from: structure.start + low, to: structure.start + GRADE_RAMP },
+    { from: structure.end - GRADE_RAMP, to: structure.end - low },
+  ];
+  let best: { dx: number; dy: number; depth: number } | null = null;
+  for (const ramp of ramps) {
+    const intoBack = s + along - ramp.from;
+    const intoFront = ramp.to - (s - along);
+    if (intoBack <= 0 || intoFront <= 0) continue;
+    const side = lateral >= 0 ? 1 : -1;
+    const options = [
+      { dx: normal.x * side, dy: normal.y * side, depth: sideways },
+      { dx: -tangent.x, dy: -tangent.y, depth: intoBack },
+      { dx: tangent.x, dy: tangent.y, depth: intoFront },
+    ];
+    for (const option of options) if (!best || option.depth < best.depth) best = option;
+  }
+  if (!best) return null;
+
+  body.x += best.dx * best.depth;
+  body.y += best.dy * best.depth;
+  if (!forward || body.speed === undefined) return null;
+  const vx = forward.x * body.speed;
+  const vy = forward.y * body.speed;
+  const intoWall = -(vx * best.dx + vy * best.dy);
+  if (intoWall <= 0) return null;
+  scrapeAlongWall(body as { angle: number; speed: number }, -best.dx, -best.dy, intoWall);
+  return {
+    impactSpeed: intoWall,
+    x: body.x - best.dx * across,
+    y: body.y - best.dy * across,
+  };
+};
+
+/**
+ * Whether (x, y) is at the foot of a bridge ramp: on the road just before
+ * where the ramp starts, or on its lowest part. A vehicle there is still on
+ * the ground but already (or still) partly on the ramp, so it must be drawn
+ * over the deck or the deck hides it for a moment while going up or coming
+ * down.
+ */
+export const atBridgeRampFoot = (structures: GradeStructure[], x: number, y: number, outside = 80) => {
+  for (const structure of structures) {
+    if (structure.kind !== 'bridge') continue;
+    const half = structure.width / 2 + GRADE_RAIL_OFFSET + 4;
+    const ends = [
+      { at: structure.samples[0], out: -1 },
+      { at: structure.samples[structure.samples.length - 1], out: 1 },
+    ];
+    for (const { at, out } of ends) {
+      const dx = x - at.x;
+      const dy = y - at.y;
+      const along = (dx * at.tx + dy * at.ty) * out;
+      const lateral = Math.abs(-dx * at.ty + dy * at.tx);
+      if (lateral <= half && along <= outside && along >= -GRADE_RAMP * GRADE_RAMP_ENTRY_LIFT) return true;
+    }
+  }
+  return false;
+};

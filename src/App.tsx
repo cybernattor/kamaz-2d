@@ -13,7 +13,7 @@ import {
   VehicleInstance,
 } from './types';
 import { CityMap } from './game/cityMap';
-import { constrainVehicleToGradeStructure, constrainWalkerToGradeStructure, updateGradeLevel } from './game/gradeSeparation';
+import { constrainGroundToGradeStructures, constrainVehicleToGradeStructure, constrainWalkerToGradeStructure, updateGradeLevel } from './game/gradeSeparation';
 import { PhysicsEngine } from './game/physics';
 import { TrafficAI } from './game/trafficAI';
 import { MissionManager } from './game/missions';
@@ -705,7 +705,8 @@ export default function App() {
         // keep it between the railings while it is up there.
         const gradeLocation = updateGradeLevel(cityMapRef.current.gradeStructures, v);
         const vehicleConfig = VEHICLE_CONFIGS[v.type] || VEHICLE_CONFIGS.sedan;
-        const railContact = constrainVehicleToGradeStructure(gradeLocation, v, vehicleConfig.width / 2, vehicleConfig.length / 2);
+        const railContact = constrainVehicleToGradeStructure(gradeLocation, v, vehicleConfig.width / 2, vehicleConfig.length / 2)
+          ?? constrainGroundToGradeStructures(cityMapRef.current.gradeStructures, v, vehicleConfig.width / 2, vehicleConfig.length / 2);
         if (railContact && railContact.impactSpeed > 2.5) {
           physicsRef.current.emitSparks(railContact.x, railContact.y, Math.min(18, Math.round(railContact.impactSpeed * 2)));
           sound.playCrash(Math.min(1, railContact.impactSpeed / 10));
@@ -734,6 +735,10 @@ export default function App() {
           cityMapRef.current.buildings
         );
         constrainWalkerToGradeStructure(updateGradeLevel(cityMapRef.current.gradeStructures, char), char);
+        const walkerBody = { x: char.x, y: char.y, gradeLevel: char.gradeLevel };
+        constrainGroundToGradeStructures(cityMapRef.current.gradeStructures, walkerBody, 8, 8);
+        char.x = walkerBody.x;
+        char.y = walkerBody.y;
         airBrakeWasPressedRef.current = false;
         sound.stopEngine();
       }

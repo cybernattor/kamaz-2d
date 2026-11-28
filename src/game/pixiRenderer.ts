@@ -18,7 +18,10 @@ import {
   VehicleInstance,
 } from '../types';
 import { StaticSceneBaker } from './staticScene';
-import { GradeEntity, locateOnGradeStructure, updateGradeLevel } from './gradeSeparation';
+import { atBridgeRampFoot, GradeEntity, GradeStructure, locateOnGradeStructure, updateGradeLevel } from './gradeSeparation';
+
+/** Opacity of a bridge deck / tunnel roof while the local player is under it. */
+const GRADE_OVERLAY_SEE_THROUGH_ALPHA = 0.35;
 import { CityMap, WORLD_SIZE } from './cityMap';
 import { VEHICLE_CONFIGS } from './vehicleConfigs';
 import type { Building } from './cityMap';
@@ -116,6 +119,8 @@ export class PixiGameRenderer {
   private readonly bridgeVehicleLayer = new Container();
   private readonly bridgeWalkerLayer = new Container();
   private gradeOverlayTextures: Texture[] = [];
+  /** Deck / roof sprites with the structure each one covers, for see-through fading. */
+  private gradeOverlaySprites: { sprite: Sprite; structure: GradeStructure }[] = [];
   /** Remote players carry no level over the wire; track it from their path. */
   private readonly remoteGrade = new Map<string, GradeEntity>();
   private readonly beaconLayer = new Container();
@@ -402,6 +407,7 @@ export class PixiGameRenderer {
       this.hidePlayerCharacter();
     }
     this.labels.renderChatBubbles(playerVehicle, playerChar, inVehicle, remotePlayers, bounds);
+    this.fadeGradeOverlays(cityMap, inVehicle && playerVehicle ? playerVehicle : playerChar, frameDelta);
     this.renderParticles(particles, bounds);
     this.renderBeacon(targetPoi, bounds);
     this.renderLighting(
@@ -480,7 +486,10 @@ export class PixiGameRenderer {
 
   private rebuildStaticScene(cityMap: CityMap) {
     this.currentMap = cityMap;
-    if (!this.staticBaker) this.staticBaker = new StaticSceneBaker();
+    if (!this.staticBaker) {
+      this.staticBaker = new StaticSceneBaker();
+      this.staticBaker.bakeBridges = false;
+    }
 
     // Render the city snapshot at screen density instead of one texel per world
     // unit. Anything less is upscaled by the camera and reads as a blurred map.
@@ -517,6 +526,7 @@ export class PixiGameRenderer {
     this.tunnelRoofLayer.removeChildren().forEach((child) => child.destroy());
     this.gradeOverlayTextures.forEach((texture) => texture.destroy(true));
     this.gradeOverlayTextures = [];
+    this.gradeOverlaySprites = [];
     if (!this.staticBaker) return;
     for (const overlay of this.staticBaker.getGradeOverlays(cityMap)) {
       const texture = Texture.from(overlay.canvas);
@@ -525,6 +535,25 @@ export class PixiGameRenderer {
       sprite.scale.set(overlay.width / overlay.canvas.width, overlay.height / overlay.canvas.height);
       (overlay.kind === 'bridge' ? this.bridgeDeckLayer : this.tunnelRoofLayer).addChild(sprite);
       this.gradeOverlayTextures.push(texture);
+      this.gradeOverlaySprites.push({ sprite, structure: overlay.structure });
+    }
+  }
+
+  /**
+   * A deck or tunnel roof over the local player turns see-through, so they
+   * do not vanish while driving or walking underneath it. Eases both ways.
+   */
+  private fadeGradeOverlays(cityMap: CityMap, entity: GradeEntity, frameDelta: number) {
+    const location = locateOnGradeStructure(cityMap.gradeStructures, entity.x, entity.y);
+    const level = entity.gradeLevel ?? 'ground';
+    const covering = location && (location.structure.kind === 'bridge' ? level === 'ground' : level === 'tunnel')
+      ? location.structure
+      : null;
+    const ease = 1 - Math.exp(-8 * frameDelta);
+    for (const { sprite, structure } of this.gradeOverlaySprites) {
+      const target = structure === covering ? GRADE_OVERLAY_SEE_THROUGH_ALPHA : 1;
+      sprite.alpha += (target - sprite.alpha) * ease;
+      if (Math.abs(target - sprite.alpha) < 0.005) sprite.alpha = target;
     }
   }
 
@@ -539,9 +568,21 @@ export class PixiGameRenderer {
     return locateOnGradeStructure(cityMap.gradeStructures, entity.x, entity.y)?.structure.kind === 'bridge';
   }
 
-  /** Puts an entity's view on the layer for its bridge/tunnel level. */
-  private placeOnGradeLayer(view: EntityView, level: VehicleInstance['gradeLevel'], ground: Container, onBridge: Container) {
-    const target = level === 'bridge' ? onBridge : level === 'tunnel' ? this.tunnelVehicleLayer : ground;
+  /**
+   * Puts an entity's view on the layer for its bridge/tunnel level. On the
+   * ground at the foot of a ramp it is drawn over the deck too: there it is
+   * half on the ramp, and the deck would hide it while it goes up or down.
+   */
+  private placeOnGradeLayer(
+    view: EntityView,
+    level: VehicleInstance['gradeLevel'],
+    ground: Container,
+    onBridge: Container,
+    at?: { x: number; y: number }
+  ) {
+    const atRampFoot = (level ?? 'ground') === 'ground' && at && this.currentMap
+      && atBridgeRampFoot(this.currentMap.gradeStructures, at.x, at.y);
+    const target = level === 'bridge' || atRampFoot ? onBridge : level === 'tunnel' ? this.tunnelVehicleLayer : ground;
     if (view.container.parent !== target) target.addChild(view.container);
   }
 
@@ -606,7 +647,7 @@ export class PixiGameRenderer {
     for (const vehicle of [...npcVehicles, ...playerVehicles]) {
       active.add(vehicle.id);
       const view = this.getView(this.vehicleViews, vehicle.id, this.vehicleLayer, this.getVehicleTexture(vehicle));
-      this.placeOnGradeLayer(view, vehicle.gradeLevel, this.vehicleLayer, this.bridgeVehicleLayer);
+      this.placeOnGradeLayer(view, vehicle.gradeLevel, this.vehicleLayer, this.bridgeVehicleLayer, vehicle);
       this.updateVehicleView(view, vehicle, bounds);
     }
     const remoteIds = new Set(remotePlayers.map((remote) => remote.id));
@@ -626,7 +667,7 @@ export class PixiGameRenderer {
           this.pedestrianLayer,
           this.getPlayerCharacterTexture()
         );
-        this.placeOnGradeLayer(view, grade.gradeLevel, this.pedestrianLayer, this.bridgeWalkerLayer);
+        this.placeOnGradeLayer(view, grade.gradeLevel, this.pedestrianLayer, this.bridgeWalkerLayer, grade);
         view.container.visible = isVisible(remote.x, remote.y, 40, 40, bounds);
         if (view.container.visible) {
           view.container.position.set(remote.x, remote.y);
@@ -660,7 +701,7 @@ export class PixiGameRenderer {
       };
       active.add(dummy.id);
       const dummyView = this.getView(this.vehicleViews, dummy.id, this.vehicleLayer, this.getVehicleTexture(dummy));
-      this.placeOnGradeLayer(dummyView, grade.gradeLevel, this.vehicleLayer, this.bridgeVehicleLayer);
+      this.placeOnGradeLayer(dummyView, grade.gradeLevel, this.vehicleLayer, this.bridgeVehicleLayer, grade);
       this.updateVehicleView(dummyView, dummy, bounds);
       const vehicleConfig = VEHICLE_CONFIGS[remote.vehicleType] || VEHICLE_CONFIGS.sedan;
       this.labels.updateNameLabel(remote, bounds, vehicleConfig.width / 2 + 14);
@@ -720,7 +761,7 @@ export class PixiGameRenderer {
       this.playerCharacterView = createEntityView(this.pedestrianLayer, this.getPlayerCharacterTexture());
     }
     const view = this.playerCharacterView;
-    this.placeOnGradeLayer(view, playerChar.gradeLevel, this.pedestrianLayer, this.bridgeWalkerLayer);
+    this.placeOnGradeLayer(view, playerChar.gradeLevel, this.pedestrianLayer, this.bridgeWalkerLayer, playerChar);
     view.container.visible = true;
     view.container.position.set(playerChar.x, playerChar.y);
     view.container.rotation = playerChar.angle;
@@ -1268,6 +1309,7 @@ export class PixiGameRenderer {
     this.staticTexture?.destroy(true);
     this.gradeOverlayTextures.forEach((texture) => texture.destroy(true));
     this.gradeOverlayTextures = [];
+    this.gradeOverlaySprites = [];
     if (this.initialized) this.disposeApplication();
     this.vehicleViews.clear();
     this.pedestrianViews.clear();

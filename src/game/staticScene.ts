@@ -4,6 +4,7 @@ import { GRADE_HEIGHT, GRADE_RAIL_OFFSET, GRADE_RAMP, gradeLift, GradeSample, Gr
 
 export interface GradeOverlay {
   kind: 'bridge' | 'tunnel';
+  structure: GradeStructure;
   canvas: HTMLCanvasElement;
   /** World-space rect the canvas covers. */
   x: number;
@@ -26,6 +27,14 @@ export class StaticSceneBaker {
   private scale = 1;
 
   /** Supersample the snapshot; the GPU renderer asks for screen density. */
+  /**
+   * Whether bridge decks are painted into the baked scene. The game renderer
+   * turns this off and draws each deck only in its own overlay, so the ground
+   * under a deck is real road: when the deck fades to see-through, what shows
+   * is the road below and its traffic, not a second copy of the deck.
+   */
+  public bakeBridges = true;
+
   public setScale(scale: number) {
     const next = Math.max(0.25, scale);
     if (next === this.scale) return;
@@ -60,7 +69,7 @@ export class StaticSceneBaker {
     this.renderScenicRoutes(ctx, cityMap.scenicRoutes);
     this.renderRoads(ctx, cityMap, overview);
     this.renderIntersections(ctx, cityMap, overview);
-    this.renderBridges(ctx, cityMap, overview);
+    if (this.bakeBridges) this.renderBridges(ctx, cityMap, overview);
     this.renderPOIs(ctx, cityMap.pois, null);
     this.renderBuildings(ctx, cityMap.buildings);
 
@@ -532,10 +541,10 @@ export class StaticSceneBaker {
    * over GRADE_RAMP px, the deck stays level across the crossed road, and the
    * rest of the road was already laid at ground level.
    */
-  private renderBridges(ctx: CanvasRenderingContext2D, cityMap: CityMap, overview = false) {
+  private renderBridges(ctx: CanvasRenderingContext2D, cityMap: CityMap, overview = false, only?: GradeStructure) {
     const shadowDirection = { x: 0.6, y: 0.8 };
 
-    cityMap.gradeStructures.filter((structure) => structure.kind === 'bridge').forEach((structure) => {
+    cityMap.gradeStructures.filter((structure) => structure.kind === 'bridge' && (!only || structure === only)).forEach((structure) => {
       const road = cityMap.roads.find((candidate) => candidate.id === structure.roadId);
       if (!road) return;
       const span = structure.samples;
@@ -645,6 +654,13 @@ export class StaticSceneBaker {
       ctx.setTransform(scale, 0, 0, scale, -x * scale, -y * scale);
 
       if (structure.kind === 'bridge') {
+        if (!this.bakeBridges) {
+          // The deck and its shadow, drawn on their own: the baked scene has
+          // only the ground under them.
+          this.renderBridges(ctx, cityMap, false, structure);
+          overlays.push({ kind: structure.kind, structure, canvas, x, y, width, height });
+          return;
+        }
         // The deck and its shadow, copied from the baked scene, which already
         // has them drawn over everything else.
         this.clipToStructure(ctx, structure, structure.start, structure.end, structure.width / 2 + GRADE_RAIL_OFFSET + 6, GRADE_HEIGHT);
@@ -654,7 +670,7 @@ export class StaticSceneBaker {
         this.clipToStructure(ctx, structure, structure.start + GRADE_RAMP, structure.end - GRADE_RAMP, structure.width / 2 + GRADE_RAIL_OFFSET + 14, 0);
       }
       ctx.drawImage(scene, 0, 0, scene.width, scene.height, 0, 0, WORLD_SIZE, WORLD_SIZE);
-      overlays.push({ kind: structure.kind, canvas, x, y, width, height });
+      overlays.push({ kind: structure.kind, structure, canvas, x, y, width, height });
     });
     return overlays;
   }
